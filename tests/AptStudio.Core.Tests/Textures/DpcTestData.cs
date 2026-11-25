@@ -7,7 +7,7 @@ namespace AptStudio.Core.Tests.Textures;
 
 internal static class DpcTestData
 {
-    public const int FileLength = 10240;
+    private const int FileLength = 10240;
     public const int BodyOffset = 300 * 32;
 
     private const int BlockTable = 100 * 32;
@@ -28,7 +28,11 @@ internal static class DpcTestData
         int width = 4,
         int height = 4,
         int mips = 1,
-        int surfaces = 1)
+        int surfaces = 1,
+        BitmapKind kind = BitmapKind.Flat,
+        uint? decompressed = null,
+        ushort u2 = 0,
+        ushort u3 = 0)
     {
         uint payloadSize = storage == BitmapStorage.Raw ? stored + 4 : compSize;
         uint objectSize = (uint)BitmapHead.HeaderSize + payloadSize;
@@ -61,13 +65,13 @@ internal static class DpcTestData
         WriteU32(data, row + 24, 300);
         WriteU32(data, row + 28, actualRowSize);
         WriteU32(data, row + 32, 0);
-        WriteU32(data, row + 36, stored + 4);
-        WriteU16(data, row + 40, 0);
-        WriteU16(data, row + 42, 0);
+        WriteU32(data, row + 36, decompressed ?? stored + 4);
+        WriteU16(data, row + 40, u2);
+        WriteU16(data, row + 42, u3);
 
         byte[] bitmap = BitmapTestData.Header(
             width, height, mips, stored, key,
-            storage: storage, surfaces: surfaces, compressed: compSize, name: bodyName);
+            kind: kind, storage: storage, surfaces: surfaces, compressed: compSize, name: bodyName);
         Array.Copy(bitmap, 0, data, BodyOffset, bitmap.Length);
 
         int payloadLength = Math.Max(0, (int)(actualRowSize - BitmapHead.HeaderSize));

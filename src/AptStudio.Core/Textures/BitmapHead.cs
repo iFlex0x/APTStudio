@@ -34,6 +34,7 @@ public sealed record BitmapHead(
 {
     // Link header is 63 bytes on every measured row, so the fixed head read is 0x78.
     public const int HeaderSize = 0x78;
+    public const uint LinkHeaderSize = 63;
     public const ulong ClassHash = 0xE9659CD1C3F3326D;
 
     public static BitmapHead Parse(ReadOnlySpan<byte> header, string source)
@@ -77,9 +78,9 @@ public sealed record BitmapHead(
             throw new InvalidDataException($"{source}: kind {kindRaw}, expected 0, 1, or 2.");
         }
 
-        if (linkSize != 63)
+        if (linkSize != LinkHeaderSize)
         {
-            throw new InvalidDataException($"{source}: link header size {linkSize}, expected 63.");
+            throw new InvalidDataException($"{source}: link header size {linkSize}, expected {LinkHeaderSize}.");
         }
 
         if (stored == 0)

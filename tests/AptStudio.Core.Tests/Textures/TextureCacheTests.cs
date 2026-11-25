@@ -1,10 +1,19 @@
 using System.Buffers.Binary;
+using System.Text;
 using AptStudio.Core.Textures;
 
 namespace AptStudio.Core.Tests.Textures;
 
 public sealed class TextureCacheTests : IDisposable
 {
+    private const int MagicLength = 10;
+    private const int FormatVersionOffset = MagicLength;
+    private const int ParserVersionOffset = FormatVersionOffset + 4;
+    private const int ChecksumSize = 32;
+    private const int HeaderBeforePath = 20;
+    private const int HeaderAfterPath = 52;
+    private const int RecordSize = 74;
+    private const int EntryKindOffset = 44;
     private readonly string _root = Path.Combine(Path.GetTempPath(), "aptstudio-tests", Guid.NewGuid().ToString("N"));
 
     public TextureCacheTests() => Directory.CreateDirectory(_root);
@@ -66,7 +75,7 @@ public sealed class TextureCacheTests : IDisposable
         TextureCache.LoadOrScan(archive, false, out _, cacheRoot);
         string cacheFile = Assert.Single(Directory.GetFiles(cacheRoot));
         byte[] bytes = File.ReadAllBytes(cacheFile);
-        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan("APTEXCACHE".Length), 999);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(FormatVersionOffset), 999);
         File.WriteAllBytes(cacheFile, bytes);
 
         IReadOnlyList<TextureEntry> textures = TextureCache.LoadOrScan(
@@ -75,6 +84,169 @@ public sealed class TextureCacheTests : IDisposable
         Assert.False(fromCache);
         Assert.Single(textures);
     }
+
+    [Fact]
+    public void RebuildsOnParserVersionChange()
+    {
+        string archive = WriteFile(DpcTestData.Build());
+        string cacheRoot = Path.Combine(_root, "cache");
+        TextureCache.LoadOrScan(archive, false, out _, cacheRoot);
+        string cacheFile = Assert.Single(Directory.GetFiles(cacheRoot));
+        byte[] bytes = File.ReadAllBytes(cacheFile);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(ParserVersionOffset), 999);
+        File.WriteAllBytes(cacheFile, bytes);
+
+        IReadOnlyList<TextureEntry> textures = TextureCache.LoadOrScan(
+            archive, false, out bool fromCache, cacheRoot);
+
+        Assert.False(fromCache);
+        Assert.Single(textures);
+    }
+
+    [Fact]
+    public void RebuildsOnBadEntry()
+    {
+        string archive = WriteFile(DpcTestData.Build());
+        string cacheRoot = Path.Combine(_root, "cache");
+        TextureCache.LoadOrScan(archive, false, out _, cacheRoot);
+        string cacheFile = Assert.Single(Directory.GetFiles(cacheRoot));
+        byte[] bytes = File.ReadAllBytes(cacheFile);
+        bytes[EntryStart(archive) + EntryKindOffset] = 0xFF;
+        File.WriteAllBytes(cacheFile, bytes);
+
+        IReadOnlyList<TextureEntry> textures = TextureCache.LoadOrScan(
+            archive, false, out bool fromCache, cacheRoot);
+
+        Assert.False(fromCache);
+        Assert.Equal(BitmapKind.Flat, Assert.Single(textures).Head.Kind);
+    }
+
+    [Fact]
+    public void RebuildsOnTruncatedCache()
+    {
+        string archive = WriteFile(DpcTestData.Build());
+        string cacheRoot = Path.Combine(_root, "cache");
+        TextureCache.LoadOrScan(archive, false, out _, cacheRoot);
+        string cacheFile = Assert.Single(Directory.GetFiles(cacheRoot));
+        byte[] bytes = File.ReadAllBytes(cacheFile);
+        File.WriteAllBytes(cacheFile, bytes[..^10]);
+
+        IReadOnlyList<TextureEntry> textures = TextureCache.LoadOrScan(
+            archive, false, out bool fromCache, cacheRoot);
+
+        Assert.False(fromCache);
+        Assert.Single(textures);
+    }
+
+    [Fact]
+    public void RebuildsOnLyingCount()
+    {
+        string archive = WriteFile(DpcTestData.Build());
+        string cacheRoot = Path.Combine(_root, "cache");
+        TextureCache.LoadOrScan(archive, false, out _, cacheRoot);
+        string cacheFile = Assert.Single(Directory.GetFiles(cacheRoot));
+        byte[] bytes = File.ReadAllBytes(cacheFile);
+        int countOffset = EntryStart(archive) - ChecksumSize;
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(countOffset), 1_000_000);
+        File.WriteAllBytes(cacheFile, bytes);
+
+        IReadOnlyList<TextureEntry> textures = TextureCache.LoadOrScan(
+            archive, false, out bool fromCache, cacheRoot);
+
+        Assert.False(fromCache);
+        Assert.Single(textures);
+    }
+
+    [Fact]
+    public void RebuildsOnTrailingBytes()
+    {
+        string archive = WriteFile(DpcTestData.Build());
+        string cacheRoot = Path.Combine(_root, "cache");
+        TextureCache.LoadOrScan(archive, false, out _, cacheRoot);
+        string cacheFile = Assert.Single(Directory.GetFiles(cacheRoot));
+        File.AppendAllText(cacheFile, "x");
+
+        IReadOnlyList<TextureEntry> textures = TextureCache.LoadOrScan(
+            archive, false, out bool fromCache, cacheRoot);
+
+        Assert.False(fromCache);
+        Assert.Single(textures);
+    }
+
+    [Fact]
+    public void RebuildsOnTimestampChange()
+    {
+        string archive = WriteFile(DpcTestData.Build());
+        string cacheRoot = Path.Combine(_root, "cache");
+        TextureCache.LoadOrScan(archive, false, out _, cacheRoot);
+        DateTime cached = File.GetLastWriteTimeUtc(archive);
+        File.SetLastWriteTimeUtc(archive, cached.AddSeconds(-10));
+
+        IReadOnlyList<TextureEntry> textures = TextureCache.LoadOrScan(
+            archive, false, out bool fromCache, cacheRoot);
+
+        Assert.False(fromCache);
+        Assert.Single(textures);
+    }
+
+    [Fact]
+    public void RoundTripsDistinctFields()
+    {
+        string archive = WriteFile(DpcTestData.Build(
+            storage: BitmapStorage.Lz4,
+            stored: 16,
+            compSize: 20,
+            width: 8,
+            height: 4,
+            decompressed: 99,
+            u2: 7,
+            u3: 9));
+        string cacheRoot = Path.Combine(_root, "cache");
+
+        TextureCache.LoadOrScan(archive, false, out _, cacheRoot);
+        IReadOnlyList<TextureEntry> textures = TextureCache.LoadOrScan(
+            archive, false, out bool fromCache, cacheRoot);
+
+        Assert.True(fromCache);
+        string cacheFile = Assert.Single(Directory.GetFiles(cacheRoot));
+        Assert.Equal(EntryStart(archive) + RecordSize, new FileInfo(cacheFile).Length);
+        TextureEntry texture = Assert.Single(textures);
+        Assert.Equal(0x1111UL, texture.Row.NameHash);
+        Assert.Equal(0x3333UL, texture.Row.LinkHash);
+        Assert.Equal(0x2222UL, texture.Head.LinkHash);
+        Assert.Equal(300u, texture.Row.Offset);
+        Assert.Equal(99u, texture.Row.DecompressedSize);
+        Assert.Equal(7, texture.Row.U2);
+        Assert.Equal(9, texture.Row.U3);
+        Assert.Equal(BitmapStorage.Lz4, texture.Head.Storage);
+        Assert.Equal(8, texture.Head.Width);
+        Assert.Equal(4, texture.Head.Height);
+        Assert.Equal(16u, texture.Head.StoredSize);
+        Assert.Equal(20u, texture.Head.BodySize);
+        Assert.Equal(20u, texture.Head.CompressedSize);
+        Assert.Equal(BitmapHead.HeaderSize, texture.Head.PayloadOffset);
+    }
+
+    [Fact]
+    public void RoundTripsVolumeKind()
+    {
+        string archive = WriteFile(DpcTestData.Build(
+            key: 0x0013, kind: BitmapKind.Volume, width: 17, height: 0));
+        string cacheRoot = Path.Combine(_root, "cache");
+
+        TextureCache.LoadOrScan(archive, false, out _, cacheRoot);
+        IReadOnlyList<TextureEntry> textures = TextureCache.LoadOrScan(
+            archive, false, out bool fromCache, cacheRoot);
+
+        Assert.True(fromCache);
+        TextureEntry texture = Assert.Single(textures);
+        Assert.Equal(BitmapKind.Volume, texture.Head.Kind);
+        Assert.Equal(17, texture.Head.Width);
+        Assert.Equal(0, texture.Head.Height);
+    }
+
+    private static int EntryStart(string archivePath) =>
+        HeaderBeforePath + Encoding.UTF8.GetByteCount(Path.GetFullPath(archivePath)) + HeaderAfterPath;
 
     [Fact]
     public void ForcesRebuild()

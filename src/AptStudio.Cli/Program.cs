@@ -164,7 +164,12 @@ internal static class Program
                 }
 
                 IReadOnlyList<TextureEntry> textures = TextureCache.LoadOrScan(
-                    file, rebuildCache, out bool fromCache);
+                    archive, rebuildCache, out bool fromCache);
+                if (textures.Count == 0)
+                {
+                    continue;
+                }
+
                 if (fromCache)
                 {
                     cachedArchives++;
@@ -172,11 +177,6 @@ internal static class Program
                 else
                 {
                     scannedArchives++;
-                }
-
-                if (textures.Count == 0)
-                {
-                    continue;
                 }
 
                 byArchive[file] = (textures.Count, fromCache);
@@ -270,7 +270,7 @@ internal static class Program
                     continue;
                 }
 
-                matches.AddRange(TextureCache.LoadOrScan(file, false, out _)
+                matches.AddRange(TextureCache.LoadOrScan(archive, false, out _)
                     .Where(texture => texture.Head.NameHash == name));
             }
             catch (InvalidDataException ex)

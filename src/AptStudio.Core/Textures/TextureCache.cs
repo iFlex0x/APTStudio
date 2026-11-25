@@ -6,15 +6,27 @@ namespace AptStudio.Core.Textures;
 
 public static class TextureCache
 {
-    private const int Version = 2;
+    private const uint FormatVersion = 3;
     private const int RecordSize = 74;
+    private const int MaxPathBytes = 4096;
+    private const int ChecksumSize = 32;
     private const long MaxCacheBytes = 64 * 1024 * 1024;
+    private const uint MaxHeaderDimension = 65535 * 256 + 255;
     private static readonly byte[] Magic = "APTEXCACHE"u8.ToArray();
 
-    public static string DefaultRoot => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "APTStudio",
-        "cache");
+    public static string DefaultRoot
+    {
+        get
+        {
+            string local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            if (string.IsNullOrEmpty(local))
+            {
+                local = Path.GetTempPath();
+            }
+
+            return Path.Combine(local, "APTStudio", "cache");
+        }
+    }
 
     public static IReadOnlyList<TextureEntry> LoadOrScan(
         string archivePath,
@@ -22,19 +34,27 @@ public static class TextureCache
         out bool fromCache,
         string? cacheRoot = null)
     {
-        string fullPath = Path.GetFullPath(archivePath);
+        DpcArchive archive = DpcArchive.Open(archivePath);
+        return LoadOrScan(archive, rebuild, out fromCache, cacheRoot);
+    }
+
+    public static IReadOnlyList<TextureEntry> LoadOrScan(
+        DpcArchive archive,
+        bool rebuild,
+        out bool fromCache,
+        string? cacheRoot = null)
+    {
+        string fullPath = Path.GetFullPath(archive.Path);
         string cachePath = CachePath(cacheRoot ?? DefaultRoot, fullPath);
-        FileInfo archive = new(fullPath);
-        if (!rebuild && TryRead(cachePath, fullPath, archive, out IReadOnlyList<TextureEntry> cached))
+        FileInfo before = new(fullPath);
+        if (!rebuild && TryRead(cachePath, fullPath, before, out IReadOnlyList<TextureEntry> cached))
         {
             fromCache = true;
             return cached;
         }
 
         fromCache = false;
-        FileInfo before = new(fullPath);
-        DpcArchive dpc = DpcArchive.Open(fullPath);
-        IReadOnlyList<TextureEntry> textures = TextureScanner.Scan(dpc);
+        IReadOnlyList<TextureEntry> textures = TextureScanner.Scan(archive);
         FileInfo after = new(fullPath);
 
         // Do not cache a scan that raced a file change.
@@ -69,55 +89,61 @@ public static class TextureCache
         textures = Array.Empty<TextureEntry>();
         try
         {
-            if (!File.Exists(cachePath) || new FileInfo(cachePath).Length > MaxCacheBytes)
+            FileInfo file = new(cachePath);
+            if (!file.Exists || file.Length > MaxCacheBytes)
             {
                 return false;
             }
 
-            using FileStream stream = File.OpenRead(cachePath);
+            byte[] bytes = File.ReadAllBytes(cachePath);
+            using MemoryStream stream = new(bytes, writable: false);
             using BinaryReader reader = new(stream, Encoding.UTF8, leaveOpen: true);
-            if (!reader.ReadBytes(Magic.Length).AsSpan().SequenceEqual(Magic))
-            {
-                return false;
-            }
-
-            if (reader.ReadUInt32() != Version)
+            if (!reader.ReadBytes(Magic.Length).AsSpan().SequenceEqual(Magic)
+                || reader.ReadUInt32() != FormatVersion
+                || reader.ReadUInt32() != TextureScanner.ParserVersion)
             {
                 return false;
             }
 
             int pathLength = reader.ReadUInt16();
-            if (pathLength > 4096)
+            if (pathLength > MaxPathBytes)
             {
                 return false;
             }
 
             string path = Encoding.UTF8.GetString(reader.ReadBytes(pathLength));
-            if (!string.Equals(path, archivePath, StringComparison.OrdinalIgnoreCase))
-            {
-                return false;
-            }
-
-            if (reader.ReadInt64() != archive.Length
+            if (!string.Equals(path, archivePath, StringComparison.OrdinalIgnoreCase)
+                || reader.ReadInt64() != archive.Length
                 || reader.ReadInt64() != archive.LastWriteTimeUtc.Ticks)
             {
                 return false;
             }
 
             uint count = reader.ReadUInt32();
-            long remaining = stream.Length - stream.Position;
-            if (count > remaining / RecordSize)
+            long entryBytes = (long)count * RecordSize;
+            if (entryBytes != stream.Length - stream.Position - ChecksumSize)
             {
                 return false;
             }
 
+            byte[] checksum = reader.ReadBytes(ChecksumSize);
+            byte[] entries = reader.ReadBytes((int)entryBytes);
+            if (!SHA256.HashData(entries).AsSpan().SequenceEqual(checksum))
+            {
+                return false;
+            }
+
+            using MemoryStream entryStream = new(entries, writable: false);
+            using BinaryReader entryReader = new(entryStream, Encoding.UTF8, leaveOpen: true);
             List<TextureEntry> list = new((int)count);
             for (int i = 0; i < count; i++)
             {
-                list.Add(ReadEntry(reader, archivePath));
+                list.Add(ReadEntry(entryReader, archivePath, archive.Length, i));
             }
 
-            if (stream.Position != stream.Length)
+            // Re-stat so a file replaced during the read is not served from cache.
+            FileInfo current = new(archivePath);
+            if (current.Length != archive.Length || current.LastWriteTimeUtc != archive.LastWriteTimeUtc)
             {
                 return false;
             }
@@ -125,13 +151,17 @@ public static class TextureCache
             textures = list;
             return true;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidDataException)
         {
             return false;
         }
     }
 
-    private static TextureEntry ReadEntry(BinaryReader reader, string archivePath)
+    private static TextureEntry ReadEntry(
+        BinaryReader reader,
+        string archivePath,
+        long archiveLength,
+        int index)
     {
         ulong name = reader.ReadUInt64();
         ulong rowLink = reader.ReadUInt64();
@@ -153,18 +183,24 @@ public static class TextureCache
         uint headCompressed = reader.ReadUInt32();
         ushort formatKey = reader.ReadUInt16();
 
+        TextureFormat format = TextureFormats.FromKey(formatKey);
+        long payloadSize = storage == BitmapStorage.Raw ? body : headCompressed;
         if (kind > BitmapKind.Cube
             || storage is not (BitmapStorage.Raw or BitmapStorage.Lz4)
-            || widthRaw is 0 or > int.MaxValue
-            || (kind != BitmapKind.Volume && heightRaw is 0 or > int.MaxValue)
+            || widthRaw is 0 or > MaxHeaderDimension
+            || (kind != BitmapKind.Volume && (heightRaw is 0 or > MaxHeaderDimension))
             || surfacesRaw is 0 or > int.MaxValue
             || stored == 0
             || mips is < 1 or > 32
             || (ulong)stored + 4 != body
             || (storage == BitmapStorage.Raw && headCompressed != 0)
-            || (storage == BitmapStorage.Lz4 && headCompressed <= 8))
+            || (storage == BitmapStorage.Lz4 && headCompressed <= 8)
+            || (kind is BitmapKind.Flat or BitmapKind.Cube && format.Family == TextureFamily.Volume)
+            || (long)offset * DpcArchive.SectorSize + compressed > archiveLength
+            || BitmapHead.HeaderSize + payloadSize != compressed)
         {
-            throw new InvalidDataException("cache entry is invalid");
+            throw new InvalidDataException(
+                $"{Path.GetFileName(archivePath)}: cache entry {index} is invalid.");
         }
 
         int width = (int)widthRaw;
@@ -173,8 +209,8 @@ public static class TextureCache
         DpcEntry row = new(name, BitmapHead.ClassHash, rowLink, offset, compressed, flags, decompressed, u2, u3);
         BitmapHead head = new(
             name, headLink, kind, width, height, surfaces, mips, storage,
-            stored, body, headCompressed, 63, formatKey,
-            TextureFormats.FromKey(formatKey), BitmapHead.HeaderSize);
+            stored, body, headCompressed, BitmapHead.LinkHeaderSize, formatKey,
+            format, BitmapHead.HeaderSize);
         return new TextureEntry(archivePath, row, head);
     }
 
@@ -184,24 +220,42 @@ public static class TextureCache
         FileInfo archive,
         IReadOnlyList<TextureEntry> textures)
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(cachePath)!);
+        byte[] path = Encoding.UTF8.GetBytes(archivePath);
+        if (path.Length > MaxPathBytes)
+        {
+            return;
+        }
+
+        byte[] entries;
+        using (MemoryStream entryBuffer = new())
+        {
+            using (BinaryWriter entryWriter = new(entryBuffer, Encoding.UTF8, leaveOpen: true))
+            {
+                foreach (TextureEntry texture in textures)
+                {
+                    WriteEntry(entryWriter, texture);
+                }
+            }
+
+            entries = entryBuffer.ToArray();
+        }
+
         using MemoryStream buffer = new();
         using (BinaryWriter writer = new(buffer, Encoding.UTF8, leaveOpen: true))
         {
             writer.Write(Magic);
-            writer.Write(Version);
-            byte[] path = Encoding.UTF8.GetBytes(archivePath);
+            writer.Write(FormatVersion);
+            writer.Write(TextureScanner.ParserVersion);
             writer.Write((ushort)path.Length);
             writer.Write(path);
             writer.Write(archive.Length);
             writer.Write(archive.LastWriteTimeUtc.Ticks);
             writer.Write((uint)textures.Count);
-            foreach (TextureEntry texture in textures)
-            {
-                WriteEntry(writer, texture);
-            }
+            writer.Write(SHA256.HashData(entries));
+            writer.Write(entries);
         }
 
+        Directory.CreateDirectory(Path.GetDirectoryName(cachePath)!);
         string temp = cachePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
         try
         {

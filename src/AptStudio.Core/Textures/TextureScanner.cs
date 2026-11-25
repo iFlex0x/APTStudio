@@ -4,6 +4,9 @@ namespace AptStudio.Core.Textures;
 
 public static class TextureScanner
 {
+    // Bump when row selection or header extraction changes; the cache keys on it.
+    public const uint ParserVersion = 1;
+
     public static IReadOnlyList<TextureEntry> Scan(DpcArchive archive)
     {
         if (archive.BodyLocation != BodyLocation.Local)
