@@ -15,7 +15,6 @@ Thumbs.db
 Desktop.ini
 
 # build output
-loader/out/
 *.dll
 *.exe
 *.obj
