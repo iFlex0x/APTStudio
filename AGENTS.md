@@ -1,6 +1,6 @@
 # APTStudio
 
-Windows asset tool for the A Plague Tale games. V1 is a DPC browser with texture preview and export for Resonance. This is a clean-room rewrite. The old code and notes are leads, not truth.
+Windows asset tool for the A Plague Tale games. V1 is a DPC browser with texture preview and export for Resonance. It reads and extracts only; it never patches, injects, or installs mods. This is a clean-room rewrite. The old code and notes are leads, not truth.
 
 ## Read order
 
