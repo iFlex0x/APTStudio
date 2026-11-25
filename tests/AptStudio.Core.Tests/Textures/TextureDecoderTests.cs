@@ -71,6 +71,57 @@ public sealed class TextureDecoderTests
     }
 
     [Fact]
+    public void DecodesSelectedMip()
+    {
+        (TextureEntry texture, byte[] bytes) = Build(
+            [.. Bc1Red, .. Bc1Red, .. Bc1Red, .. Bc1Red, .. Bc1Green],
+            width: 8, height: 8, mips: 2);
+
+        DecodedTexture image = TextureDecoder.DecodeMip(new MemoryStream(bytes), texture, 1);
+
+        Assert.Equal(4, image.Width);
+        Assert.Equal(4, image.Height);
+        Assert.Equal(0, image.Rgba[0]);
+        Assert.Equal(255, image.Rgba[1]);
+    }
+
+    [Fact]
+    public void DecodesSelectedLz4Mip()
+    {
+        (TextureEntry texture, byte[] bytes) = Build(
+            [.. Bc1Red, .. Bc1Red, .. Bc1Red, .. Bc1Red, .. Bc1Green],
+            width: 8, height: 8, mips: 2, storage: BitmapStorage.Lz4);
+
+        DecodedTexture image = TextureDecoder.DecodeMip(new MemoryStream(bytes), texture, 1);
+
+        Assert.Equal(4, image.Width);
+        Assert.Equal(0, image.Rgba[0]);
+        Assert.Equal(255, image.Rgba[1]);
+    }
+
+    [Fact]
+    public void RejectsMipOutsideChain()
+    {
+        (TextureEntry texture, byte[] bytes) = Build([.. Bc1Red, .. Bc1Green], mips: 2);
+
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            TextureDecoder.DecodeMip(new MemoryStream(bytes), texture, 2));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            TextureDecoder.DecodeMip(new MemoryStream(bytes), texture, -1));
+    }
+
+    [Fact]
+    public void RejectsMipBeyondStoredSize()
+    {
+        TextureEntry texture = DirectEntry(4, 4, 8, 12, mips: 2);
+
+        InvalidDataException error = Assert.Throws<InvalidDataException>(() =>
+            TextureDecoder.DecodeMip(new MemoryStream(new byte[0x80]), texture, 1));
+
+        Assert.Contains("chain has 8", error.Message);
+    }
+
+    [Fact]
     public void RejectsUnknownCodec()
     {
         (TextureEntry texture, byte[] bytes) = Build(Bc1Red, key: 0x001E);
@@ -212,10 +263,10 @@ public sealed class TextureDecoderTests
         Assert.Contains("short read", error.Message);
     }
 
-    private static TextureEntry DirectEntry(int width, int height, uint stored, uint bodySize)
+    private static TextureEntry DirectEntry(int width, int height, uint stored, uint bodySize, int mips = 1)
     {
         BitmapHead head = new(
-            0x1111, 0x2222, BitmapKind.Flat, width, height, 1, 1,
+            0x1111, 0x2222, BitmapKind.Flat, width, height, 1, mips,
             BitmapStorage.Raw, stored, bodySize, 0, 63, 0x001B,
             TextureFormats.FromKey(0x001B), BitmapHead.HeaderSize);
         DpcEntry row = new(0x1111, BitmapHead.ClassHash, 0, 0, 0, 0, 0, 0, 0);
