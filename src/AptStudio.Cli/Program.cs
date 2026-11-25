@@ -125,97 +125,75 @@ internal static class Program
 
     private static int List(string gameRoot, bool rebuildCache)
     {
-        if (!TryFindDpcs(gameRoot, out string[] files))
+        if (!GameProfile.TryDetect(gameRoot, out GameProfile? profile, out string? error) || profile is null)
         {
+            Console.Error.WriteLine(error);
             return 1;
         }
 
         Stopwatch watch = Stopwatch.StartNew();
-        List<string> failures = new();
-        Dictionary<string, (int Count, bool Cached)> byArchive = new(StringComparer.OrdinalIgnoreCase);
+        TextureCatalog catalog;
+        try
+        {
+            catalog = TextureCatalog.Load(profile, rebuildCache);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Console.Error.WriteLine(ex.Message);
+            return 1;
+        }
+
         Dictionary<string, int> byFormat = new(StringComparer.Ordinal);
-        int total = 0;
         int volumes = 0;
         int unknownCodec = 0;
-        int skippedExternal = 0;
-        int externalBitmaps = 0;
-        int cachedArchives = 0;
-        int scannedArchives = 0;
-
-        foreach (string file in files)
+        int textureIndex = 0;
+        foreach (CatalogArchive archive in catalog.Archives)
         {
-            string name = Path.GetFileName(file);
-            try
+            string name = Path.GetFileName(archive.Path);
+            if (archive.IsExternal)
             {
-                DpcArchive archive = DpcArchive.Open(file);
-                if (archive.BodyLocation != BodyLocation.Local)
+                if (archive.ExternalBitmapRows > 0)
                 {
-                    int rows = archive.Entries.Count(
-                        entry => entry.ClassHash == BitmapHead.ClassHash);
-                    skippedExternal++;
-                    externalBitmaps += rows;
-                    if (rows > 0)
-                    {
-                        Console.WriteLine(
-                            $"{name,-28} {N(rows),7} bitmap rows in another archive (not listed)");
-                    }
-
-                    continue;
-                }
-
-                IReadOnlyList<TextureEntry> textures = TextureCache.LoadOrScan(
-                    archive, rebuildCache, out bool fromCache);
-                if (textures.Count == 0)
-                {
-                    continue;
-                }
-
-                if (fromCache)
-                {
-                    cachedArchives++;
-                }
-                else
-                {
-                    scannedArchives++;
-                }
-
-                byArchive[file] = (textures.Count, fromCache);
-                foreach (TextureEntry texture in textures)
-                {
-                    BitmapHead head = texture.Head;
-                    total++;
-                    string format = head.Format.DisplayName;
-                    byFormat[format] = byFormat.GetValueOrDefault(format) + 1;
-                    if (head.Kind == BitmapKind.Volume)
-                    {
-                        volumes++;
-                    }
-
-                    if (head.Format.Codec == TextureCodec.Unknown)
-                    {
-                        unknownCodec++;
-                    }
-
-                    string dimensions = head.Kind == BitmapKind.Volume
-                        ? $"volume w={head.Width}"
-                        : $"{head.Width}x{head.Height}";
                     Console.WriteLine(
-                        $"{name,-28} 0x{head.NameHash:X16} {format,-16} {dimensions,-14} {head.MipCount,2} mips {head.Surfaces} surfaces {(head.Storage == BitmapStorage.Raw ? "raw" : "lz4")}");
+                        $"{name,-28} {N(archive.ExternalBitmapRows),7} bitmap rows in another archive (not listed)");
                 }
+
+                continue;
             }
-            catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
+
+            // catalog appends textures archive by archive, in this same order.
+            for (int row = 0; row < archive.TextureCount; row++)
             {
-                failures.Add(ex.Message);
-                Console.WriteLine($"{name,-28} ERROR");
+                TextureEntry texture = catalog.Textures[textureIndex++];
+                BitmapHead head = texture.Head;
+                string format = head.Format.DisplayName;
+                byFormat[format] = byFormat.GetValueOrDefault(format) + 1;
+                if (head.Kind == BitmapKind.Volume)
+                {
+                    volumes++;
+                }
+
+                if (head.Format.Codec == TextureCodec.Unknown)
+                {
+                    unknownCodec++;
+                }
+
+                string dimensions = head.Kind == BitmapKind.Volume
+                    ? $"volume w={head.Width}"
+                    : $"{head.Width}x{head.Height}";
+                Console.WriteLine(
+                    $"{name,-28} 0x{head.NameHash:X16} {format,-16} {dimensions,-14} {head.MipCount,2} mips {head.Surfaces} surfaces {(head.Storage == BitmapStorage.Raw ? "raw" : "lz4")}");
             }
         }
 
         watch.Stop();
         Console.WriteLine();
-        foreach ((string path, (int count, bool cached)) in byArchive.OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase))
+        foreach (CatalogArchive archive in catalog.Archives
+            .Where(item => !item.IsExternal && item.TextureCount > 0)
+            .OrderBy(item => item.Path, StringComparer.OrdinalIgnoreCase))
         {
             Console.WriteLine(
-                $"{Path.GetFileName(path),-28} {N(count),7} textures {(cached ? "cached" : "scanned")}");
+                $"{Path.GetFileName(archive.Path),-28} {N(archive.TextureCount),7} textures {(archive.FromCache ? "cached" : "scanned")}");
         }
 
         Console.WriteLine("formats:");
@@ -224,14 +202,20 @@ internal static class Program
             Console.WriteLine($"  {format,-18} {N(count),7}");
         }
 
+        int cachedArchives = catalog.Archives.Count(
+            item => !item.IsExternal && item.TextureCount > 0 && item.FromCache);
+        int scannedArchives = catalog.Archives.Count(
+            item => !item.IsExternal && item.TextureCount > 0 && !item.FromCache);
+        int externalArchives = catalog.Archives.Count(item => item.IsExternal);
+        int externalBitmaps = catalog.Archives.Sum(item => item.ExternalBitmapRows);
         Console.WriteLine(
-            $"textures: {N(total)}, volumes: {N(volumes)}, unknown codec: {N(unknownCodec)}, external archives: {N(skippedExternal)}, external bitmap rows: {N(externalBitmaps)}, cached: {N(cachedArchives)}, scanned: {N(scannedArchives)}, files: {N(files.Length)}, failed: {N(failures.Count)}, {N(watch.ElapsedMilliseconds)} ms");
-        foreach (string failure in failures)
+            $"textures: {N(catalog.Textures.Count)}, previewable: {N(catalog.PreviewableCount)}, volumes: {N(volumes)}, unknown codec: {N(unknownCodec)}, external archives: {N(externalArchives)}, external bitmap rows: {N(externalBitmaps)}, cached: {N(cachedArchives)}, scanned: {N(scannedArchives)}, files: {N(catalog.FileCount)}, failed: {N(catalog.Failures.Count)}, {N(watch.ElapsedMilliseconds)} ms");
+        foreach (string failure in catalog.Failures)
         {
             Console.Error.WriteLine(failure);
         }
 
-        return failures.Count == 0 ? 0 : 2;
+        return catalog.Failures.Count == 0 ? 0 : 2;
     }
 
     private static int Export(string gameRoot, string hashText, string outputPath)
