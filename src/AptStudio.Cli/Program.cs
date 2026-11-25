@@ -54,7 +54,7 @@ internal static class Program
                 DpcArchive archive = DpcArchive.Open(file);
                 parsed.Add((file, archive));
                 Console.WriteLine(
-                    $"{Path.GetFileName(file),-28} {archive.Header.Kind,-7} {archive.Entries.Count.ToString("N0", CultureInfo.InvariantCulture),7} rows  {archive.BodyLocation,-8} {archive.Length.ToString("N0", CultureInfo.InvariantCulture),14} B");
+                    $"{Path.GetFileName(file),-28} {archive.Header.Kind,-7} {N(archive.Entries.Count),7} rows  {archive.BodyLocation,-8} {N(archive.Length),14} B");
             }
             catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
             {
@@ -91,7 +91,7 @@ internal static class Program
             }
 
             Console.WriteLine(
-                $"external extents checked against COMMON: {external.ToString("N0", CultureInfo.InvariantCulture)}, outside: {outside.ToString("N0", CultureInfo.InvariantCulture)}");
+                $"external extents checked against COMMON: {N(external)}, outside: {N(outside)}");
         }
         else if (parsed.Exists(item => item.Archive.BodyLocation == BodyLocation.External))
         {
@@ -100,7 +100,7 @@ internal static class Program
 
         watch.Stop();
         Console.WriteLine(
-            $"files: {files.Length.ToString("N0", CultureInfo.InvariantCulture)}, parsed: {parsed.Count.ToString("N0", CultureInfo.InvariantCulture)}, failed: {failures.Count.ToString("N0", CultureInfo.InvariantCulture)}, {watch.ElapsedMilliseconds.ToString("N0", CultureInfo.InvariantCulture)} ms");
+            $"files: {N(files.Length)}, parsed: {N(parsed.Count)}, failed: {N(failures.Count)}, {N(watch.ElapsedMilliseconds)} ms");
         foreach (string failure in failures)
         {
             Console.Error.WriteLine(failure);
@@ -124,6 +124,7 @@ internal static class Program
         int volumes = 0;
         int unknownCodec = 0;
         int skippedExternal = 0;
+        int externalBitmaps = 0;
 
         foreach (string file in files)
         {
@@ -133,17 +134,14 @@ internal static class Program
                 DpcArchive archive = DpcArchive.Open(file);
                 if (archive.BodyLocation != BodyLocation.Local)
                 {
-                    int externalBitmaps = archive.Entries.Count(
+                    int rows = archive.Entries.Count(
                         entry => entry.ClassHash == BitmapHead.ClassHash);
-                    if (externalBitmaps > 0)
+                    skippedExternal++;
+                    externalBitmaps += rows;
+                    if (rows > 0)
                     {
-                        failures.Add(
-                            $"{name}: {externalBitmaps} bitmap rows resolve into another archive.");
-                        Console.WriteLine($"{name,-28} ERROR");
-                    }
-                    else
-                    {
-                        skippedExternal++;
+                        Console.WriteLine(
+                            $"{name,-28} {N(rows),7} bitmap rows in another archive (not listed)");
                     }
 
                     continue;
@@ -155,7 +153,7 @@ internal static class Program
                     continue;
                 }
 
-                byArchive[name] = textures.Count;
+                byArchive[file] = textures.Count;
                 foreach (TextureEntry texture in textures)
                 {
                     BitmapHead head = texture.Head;
@@ -173,7 +171,7 @@ internal static class Program
                     }
 
                     string dimensions = head.Kind == BitmapKind.Volume
-                        ? "volume"
+                        ? $"volume w={head.Width}"
                         : $"{head.Width}x{head.Height}";
                     Console.WriteLine(
                         $"{name,-28} 0x{head.NameHash:X16} {format,-16} {dimensions,-14} {head.MipCount,2} mips {head.Surfaces} surfaces {(head.Storage == BitmapStorage.Raw ? "raw" : "lz4")}");
@@ -188,19 +186,19 @@ internal static class Program
 
         watch.Stop();
         Console.WriteLine();
-        foreach ((string name, int count) in byArchive.OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase))
+        foreach ((string path, int count) in byArchive.OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase))
         {
-            Console.WriteLine($"{name,-28} {count.ToString("N0", CultureInfo.InvariantCulture),7} textures");
+            Console.WriteLine($"{Path.GetFileName(path),-28} {N(count),7} textures");
         }
 
         Console.WriteLine("formats:");
         foreach ((string format, int count) in byFormat.OrderByDescending(pair => pair.Value).ThenBy(pair => pair.Key, StringComparer.Ordinal))
         {
-            Console.WriteLine($"  {format,-18} {count.ToString("N0", CultureInfo.InvariantCulture),7}");
+            Console.WriteLine($"  {format,-18} {N(count),7}");
         }
 
         Console.WriteLine(
-            $"textures: {total.ToString("N0", CultureInfo.InvariantCulture)}, volumes: {volumes.ToString("N0", CultureInfo.InvariantCulture)}, unknown codec: {unknownCodec.ToString("N0", CultureInfo.InvariantCulture)}, skipped external: {skippedExternal.ToString("N0", CultureInfo.InvariantCulture)}, failed: {failures.Count.ToString("N0", CultureInfo.InvariantCulture)}, {watch.ElapsedMilliseconds.ToString("N0", CultureInfo.InvariantCulture)} ms");
+            $"textures: {N(total)}, volumes: {N(volumes)}, unknown codec: {N(unknownCodec)}, external archives: {N(skippedExternal)}, external bitmap rows: {N(externalBitmaps)}, files: {N(files.Length)}, failed: {N(failures.Count)}, {N(watch.ElapsedMilliseconds)} ms");
         foreach (string failure in failures)
         {
             Console.Error.WriteLine(failure);
@@ -208,6 +206,8 @@ internal static class Program
 
         return failures.Count == 0 ? 0 : 2;
     }
+
+    private static string N(long value) => value.ToString("N0", CultureInfo.InvariantCulture);
 
     private static bool TryFindDpcs(string gameRoot, out string[] files)
     {

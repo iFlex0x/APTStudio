@@ -175,6 +175,50 @@ public sealed class BitmapHeadTests
     }
 
     [Fact]
+    public void RejectsOtherLinkSize()
+    {
+        byte[] header = BitmapTestData.Header(4, 4, 1, 8, 0x001B, linkSize: 62);
+
+        InvalidDataException error = Assert.Throws<InvalidDataException>(() =>
+            BitmapHead.Parse(header, "test"));
+
+        Assert.Contains("link header size 62", error.Message);
+    }
+
+    [Fact]
+    public void RejectsZeroStored()
+    {
+        byte[] header = BitmapTestData.Header(4, 4, 1, 0, 0x001B);
+
+        InvalidDataException error = Assert.Throws<InvalidDataException>(() =>
+            BitmapHead.Parse(header, "test"));
+
+        Assert.Contains("stored size is zero", error.Message);
+    }
+
+    [Fact]
+    public void RejectsZeroSurfaces()
+    {
+        byte[] header = BitmapTestData.Header(4, 4, 1, 8, 0x001B, surfaces: 0);
+
+        InvalidDataException error = Assert.Throws<InvalidDataException>(() =>
+            BitmapHead.Parse(header, "test"));
+
+        Assert.Contains("surface count", error.Message);
+    }
+
+    [Fact]
+    public void AcceptsUnknownFormat()
+    {
+        byte[] header = BitmapTestData.Header(4, 4, 1, 8, 0x002A);
+
+        BitmapHead head = BitmapHead.Parse(header, "test");
+
+        Assert.Equal(TextureFamily.Unknown, head.Format.Family);
+        Assert.Equal(TextureCodec.Unknown, head.Format.Codec);
+    }
+
+    [Fact]
     public void RejectsRawWithCompressedSize()
     {
         byte[] header = BitmapTestData.Header(4, 4, 1, 8, 0x001B, compressed: 10);

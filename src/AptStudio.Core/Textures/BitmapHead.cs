@@ -32,6 +32,7 @@ public sealed record BitmapHead(
     TextureFormat Format,
     long PayloadOffset)
 {
+    // Link header is 63 bytes on every measured row, so the fixed head read is 0x78.
     public const int HeaderSize = 0x78;
     public const ulong ClassHash = 0xE9659CD1C3F3326D;
 
@@ -76,9 +77,9 @@ public sealed record BitmapHead(
             throw new InvalidDataException($"{source}: kind {kindRaw}, expected 0, 1, or 2.");
         }
 
-        if (linkSize == 0)
+        if (linkSize != 63)
         {
-            throw new InvalidDataException($"{source}: link header size is zero.");
+            throw new InvalidDataException($"{source}: link header size {linkSize}, expected 63.");
         }
 
         if (stored == 0)
@@ -113,7 +114,12 @@ public sealed record BitmapHead(
         }
 
         BitmapKind kind = (BitmapKind)kindRaw;
-        int surfaces = kind == BitmapKind.Volume ? 1 : Math.Max(1, (int)(h256 >> 8));
+        int surfaces = (int)(h256 >> 8);
+        if (surfaces == 0)
+        {
+            throw new InvalidDataException($"{source}: surface count is zero.");
+        }
+
         TextureFormat format = TextureFormats.FromKey(formatKey);
         long payloadOffset = (0x33L + linkSize + 7) & ~7L;
 
@@ -131,7 +137,13 @@ public sealed record BitmapHead(
 
             if (format.Family != TextureFamily.Unknown)
             {
-                long expected = ChainBytes(format.Family, width, height, mipCount) * surfaces;
+                long chain = ChainBytes(format.Family, width, height, mipCount);
+                if (chain > long.MaxValue / surfaces)
+                {
+                    throw new InvalidDataException($"{source}: chain size overflows.");
+                }
+
+                long expected = chain * surfaces;
                 if (expected != stored)
                 {
                     throw new InvalidDataException(

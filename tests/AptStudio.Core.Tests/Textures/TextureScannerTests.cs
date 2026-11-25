@@ -37,9 +37,33 @@ public sealed class TextureScannerTests : IDisposable
     }
 
     [Fact]
+    public void ScansLz4Row()
+    {
+        DpcArchive archive = DpcArchive.Open(WriteFile(BuildDpc(
+            storage: BitmapStorage.Lz4,
+            compSize: 20)));
+
+        TextureEntry texture = Assert.Single(TextureScanner.Scan(archive));
+
+        Assert.Equal(BitmapStorage.Lz4, texture.Head.Storage);
+        Assert.Equal(20u, texture.Head.CompressedSize);
+    }
+
+    [Fact]
+    public void RejectsShortRow()
+    {
+        DpcArchive archive = DpcArchive.Open(WriteFile(BuildDpc(rowSize: 100)));
+
+        InvalidDataException error = Assert.Throws<InvalidDataException>(() =>
+            TextureScanner.Scan(archive));
+
+        Assert.Contains("body is 100 bytes", error.Message);
+    }
+
+    [Fact]
     public void RejectsRowExtentMismatch()
     {
-        DpcArchive archive = DpcArchive.Open(WriteFile(BuildDpc(compressed: 131)));
+        DpcArchive archive = DpcArchive.Open(WriteFile(BuildDpc(rowSize: 131)));
 
         InvalidDataException error = Assert.Throws<InvalidDataException>(() =>
             TextureScanner.Scan(archive));
@@ -78,10 +102,17 @@ public sealed class TextureScannerTests : IDisposable
 
     private static byte[] BuildDpc(
         ulong classHash = BitmapHead.ClassHash,
-        uint compressed = 132,
+        uint? rowSize = null,
         uint resourceBlockOffset = 300,
-        uint resourceBlockSize = 64)
+        uint resourceBlockSize = 64,
+        BitmapStorage storage = BitmapStorage.Raw,
+        uint stored = 8,
+        uint compSize = 0)
     {
+        uint payloadSize = storage == BitmapStorage.Raw ? stored + 4 : compSize;
+        uint objectSize = (uint)BitmapHead.HeaderSize + payloadSize;
+        uint actualRowSize = rowSize ?? objectSize;
+
         byte[] data = new byte[FileLength];
         byte[] banner = Encoding.ASCII.GetBytes("v2.128.58.19 - test");
         Array.Copy(banner, data, banner.Length);
@@ -107,15 +138,18 @@ public sealed class TextureScannerTests : IDisposable
         WriteU64(data, row + 8, classHash);
         WriteU64(data, row + 16, 0x3333);
         WriteU32(data, row + 24, 300);
-        WriteU32(data, row + 28, compressed);
+        WriteU32(data, row + 28, actualRowSize);
         WriteU32(data, row + 32, 0);
-        WriteU32(data, row + 36, 132);
+        WriteU32(data, row + 36, stored + 4);
         WriteU16(data, row + 40, 0);
         WriteU16(data, row + 42, 0);
 
-        byte[] bitmap = BitmapTestData.Header(4, 4, 1, 8, 0x001B);
+        byte[] bitmap = BitmapTestData.Header(
+            4, 4, 1, stored, 0x001B, storage: storage, compressed: compSize);
         Array.Copy(bitmap, 0, data, BodyOffset, bitmap.Length);
-        for (int i = 0; i < 8; i++)
+
+        int payloadLength = Math.Max(0, (int)(actualRowSize - BitmapHead.HeaderSize));
+        for (int i = 0; i < payloadLength && BodyOffset + BitmapHead.HeaderSize + i < data.Length; i++)
         {
             data[BodyOffset + BitmapHead.HeaderSize + i] = 0xAA;
         }
