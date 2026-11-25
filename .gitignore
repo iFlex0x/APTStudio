@@ -1,0 +1,22 @@
+# .NET build output
+bin/
+obj/
+
+# IDEs
+.vs/
+.vscode/
+
+# build tools dropfiles
+*.user
+*.suo
+
+# os junk
+Thumbs.db
+Desktop.ini
+
+# build output
+loader/out/
+*.dll
+*.exe
+*.obj
+*.lib
