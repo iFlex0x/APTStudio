@@ -5,5 +5,8 @@
     <LangVersion>latest</LangVersion>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <Deterministic>true</Deterministic>
+    <Authors>iFlex0x</Authors>
+    <Product>APTStudio</Product>
+    <Copyright>Copyright (c) 2026 iFlex0x</Copyright>
   </PropertyGroup>
 </Project>

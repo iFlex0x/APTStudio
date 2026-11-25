@@ -1,6 +1,6 @@
 # APTStudio
 
-Windows viewer and extractor for A Plague Tale game assets. V1 opens Resonance, lists DPC textures, previews BC1/BC3, and exports PNG. It reads game files and never writes to the game folder.
+Viewer and extractor for Resonance: A Plague Tale Legacy DPC archives. Textures only in V1: list rows, preview BC1/BC3, export PNG.
 
 ## Code
 
@@ -17,7 +17,7 @@ Windows viewer and extractor for A Plague Tale game assets. V1 opens Resonance, 
 
 - .NET 10 SDK. Solution `APTStudio.slnx`.
 - `dotnet build APTStudio.slnx`
-- `dotnet test tests/AptStudio.Core.Tests`
+- `dotnet test APTStudio.slnx`
 - Zero warnings.
 
 ## Branches and commits

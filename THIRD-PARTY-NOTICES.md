@@ -27,3 +27,20 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+## BCnEncoder.Net
+
+BC1 and BC3 decoding uses [BCnEncoder.Net](https://github.com/Nominom/BCnEncoder.NET),
+MIT or Unlicense, copyright Nominom. No source code is included.
+
+The package is dual licensed; this project takes it under the MIT option.
+
+## CommunityToolkit.HighPerformance
+
+[CommunityToolkit.HighPerformance](https://github.com/CommunityToolkit/dotnet),
+MIT, copyright the .NET Foundation and contributors. Pulled in by BCnEncoder.Net.
+
+## K4os.Compression.LZ4
+
+LZ4 decompression uses [K4os.Compression.LZ4](https://github.com/MiloszKrajewski/K4os.Compression.LZ4),
+MIT, copyright Milosz Krajewski. No source code is included.
