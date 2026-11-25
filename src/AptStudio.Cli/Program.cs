@@ -16,9 +16,22 @@ internal static class Program
             return Scan(args[1]);
         }
 
-        if (args.Length == 2 && string.Equals(args[0], "list", StringComparison.OrdinalIgnoreCase))
+        if ((args.Length == 2 || args.Length == 3)
+            && string.Equals(args[0], "list", StringComparison.OrdinalIgnoreCase))
         {
-            return List(args[1]);
+            bool rebuild = false;
+            if (args.Length == 3)
+            {
+                if (!string.Equals(args[2], "--rebuild", StringComparison.OrdinalIgnoreCase))
+                {
+                    Usage();
+                    return 1;
+                }
+
+                rebuild = true;
+            }
+
+            return List(args[1], rebuild);
         }
 
         if (args.Length == 4 && string.Equals(args[0], "export", StringComparison.OrdinalIgnoreCase))
@@ -34,7 +47,7 @@ internal static class Program
     {
         Console.Error.WriteLine("usage:");
         Console.Error.WriteLine("  aptstudio scan <gameRoot>");
-        Console.Error.WriteLine("  aptstudio list <gameRoot>");
+        Console.Error.WriteLine("  aptstudio list <gameRoot> [--rebuild]");
         Console.Error.WriteLine("  aptstudio export <gameRoot> <nameHash> <outputPath>");
     }
 
@@ -110,7 +123,7 @@ internal static class Program
         return failures.Count == 0 ? 0 : 2;
     }
 
-    private static int List(string gameRoot)
+    private static int List(string gameRoot, bool rebuildCache)
     {
         if (!TryFindDpcs(gameRoot, out string[] files))
         {
@@ -119,13 +132,15 @@ internal static class Program
 
         Stopwatch watch = Stopwatch.StartNew();
         List<string> failures = new();
-        Dictionary<string, int> byArchive = new(StringComparer.OrdinalIgnoreCase);
+        Dictionary<string, (int Count, bool Cached)> byArchive = new(StringComparer.OrdinalIgnoreCase);
         Dictionary<string, int> byFormat = new(StringComparer.Ordinal);
         int total = 0;
         int volumes = 0;
         int unknownCodec = 0;
         int skippedExternal = 0;
         int externalBitmaps = 0;
+        int cachedArchives = 0;
+        int scannedArchives = 0;
 
         foreach (string file in files)
         {
@@ -148,13 +163,23 @@ internal static class Program
                     continue;
                 }
 
-                IReadOnlyList<TextureEntry> textures = TextureScanner.Scan(archive);
+                IReadOnlyList<TextureEntry> textures = TextureCache.LoadOrScan(
+                    archive, rebuildCache, out bool fromCache);
                 if (textures.Count == 0)
                 {
                     continue;
                 }
 
-                byArchive[file] = textures.Count;
+                if (fromCache)
+                {
+                    cachedArchives++;
+                }
+                else
+                {
+                    scannedArchives++;
+                }
+
+                byArchive[file] = (textures.Count, fromCache);
                 foreach (TextureEntry texture in textures)
                 {
                     BitmapHead head = texture.Head;
@@ -187,9 +212,10 @@ internal static class Program
 
         watch.Stop();
         Console.WriteLine();
-        foreach ((string path, int count) in byArchive.OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase))
+        foreach ((string path, (int count, bool cached)) in byArchive.OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase))
         {
-            Console.WriteLine($"{Path.GetFileName(path),-28} {N(count),7} textures");
+            Console.WriteLine(
+                $"{Path.GetFileName(path),-28} {N(count),7} textures {(cached ? "cached" : "scanned")}");
         }
 
         Console.WriteLine("formats:");
@@ -199,7 +225,7 @@ internal static class Program
         }
 
         Console.WriteLine(
-            $"textures: {N(total)}, volumes: {N(volumes)}, unknown codec: {N(unknownCodec)}, external archives: {N(skippedExternal)}, external bitmap rows: {N(externalBitmaps)}, files: {N(files.Length)}, failed: {N(failures.Count)}, {N(watch.ElapsedMilliseconds)} ms");
+            $"textures: {N(total)}, volumes: {N(volumes)}, unknown codec: {N(unknownCodec)}, external archives: {N(skippedExternal)}, external bitmap rows: {N(externalBitmaps)}, cached: {N(cachedArchives)}, scanned: {N(scannedArchives)}, files: {N(files.Length)}, failed: {N(failures.Count)}, {N(watch.ElapsedMilliseconds)} ms");
         foreach (string failure in failures)
         {
             Console.Error.WriteLine(failure);
@@ -244,7 +270,7 @@ internal static class Program
                     continue;
                 }
 
-                matches.AddRange(TextureScanner.Scan(archive)
+                matches.AddRange(TextureCache.LoadOrScan(archive, false, out _)
                     .Where(texture => texture.Head.NameHash == name));
             }
             catch (InvalidDataException ex)

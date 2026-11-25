@@ -1,0 +1,94 @@
+using System.Buffers.Binary;
+using System.Text;
+using AptStudio.Core.Containers;
+using AptStudio.Core.Textures;
+
+namespace AptStudio.Core.Tests.Textures;
+
+internal static class DpcTestData
+{
+    private const int FileLength = 10240;
+    public const int BodyOffset = 300 * 32;
+
+    private const int BlockTable = 100 * 32;
+    private const int ResourcesMap = 128 * 32;
+    private const int RowCountOffset = ResourcesMap + 40 + 52 * 28;
+    private const int RowsOffset = RowCountOffset + 4;
+
+    public static byte[] Build(
+        ulong classHash = BitmapHead.ClassHash,
+        uint? rowSize = null,
+        uint resourceBlockOffset = 300,
+        uint resourceBlockSize = 64,
+        BitmapStorage storage = BitmapStorage.Raw,
+        uint stored = 8,
+        uint compSize = 0,
+        ulong bodyName = 0x1111,
+        ushort key = 0x001B,
+        int width = 4,
+        int height = 4,
+        int mips = 1,
+        int surfaces = 1,
+        BitmapKind kind = BitmapKind.Flat,
+        uint? decompressed = null,
+        ushort u2 = 0,
+        ushort u3 = 0)
+    {
+        uint payloadSize = storage == BitmapStorage.Raw ? stored + 4 : compSize;
+        uint objectSize = (uint)BitmapHead.HeaderSize + payloadSize;
+        uint actualRowSize = rowSize ?? objectSize;
+
+        byte[] data = new byte[FileLength];
+        byte[] banner = Encoding.ASCII.GetBytes("v2.128.58.19 - test");
+        Array.Copy(banner, data, banner.Length);
+
+        int header = DpcHeader.Offset;
+        data[header] = 1;
+        WriteU32(data, header + 1, 2);
+        WriteU32(data, header + 5, 100);
+        WriteU32(data, header + 9, resourceBlockSize);
+        WriteU32(data, header + 13, resourceBlockOffset);
+        WriteU32(data, header + 17, 0);
+        WriteU32(data, header + 21, 0);
+
+        WriteU32(data, BlockTable, 1);
+        WriteU32(data, BlockTable + 4 + 24, 128);
+        WriteU32(data, ResourcesMap, 1);
+        WriteU32(data, ResourcesMap + 4, 300);
+        WriteU32(data, ResourcesMap + 40, 1);
+        WriteU32(data, RowCountOffset, 1);
+
+        int row = RowsOffset;
+        WriteU64(data, row, 0x1111);
+        WriteU64(data, row + 8, classHash);
+        WriteU64(data, row + 16, 0x3333);
+        WriteU32(data, row + 24, 300);
+        WriteU32(data, row + 28, actualRowSize);
+        WriteU32(data, row + 32, 0);
+        WriteU32(data, row + 36, decompressed ?? stored + 4);
+        WriteU16(data, row + 40, u2);
+        WriteU16(data, row + 42, u3);
+
+        byte[] bitmap = BitmapTestData.Header(
+            width, height, mips, stored, key,
+            kind: kind, storage: storage, surfaces: surfaces, compressed: compSize, name: bodyName);
+        Array.Copy(bitmap, 0, data, BodyOffset, bitmap.Length);
+
+        int payloadLength = Math.Max(0, (int)(actualRowSize - BitmapHead.HeaderSize));
+        for (int i = 0; i < payloadLength && BodyOffset + BitmapHead.HeaderSize + i < data.Length; i++)
+        {
+            data[BodyOffset + BitmapHead.HeaderSize + i] = 0xAA;
+        }
+
+        return data;
+    }
+
+    private static void WriteU16(byte[] data, int offset, ushort value) =>
+        BinaryPrimitives.WriteUInt16LittleEndian(data.AsSpan(offset), value);
+
+    private static void WriteU32(byte[] data, int offset, uint value) =>
+        BinaryPrimitives.WriteUInt32LittleEndian(data.AsSpan(offset), value);
+
+    private static void WriteU64(byte[] data, int offset, ulong value) =>
+        BinaryPrimitives.WriteUInt64LittleEndian(data.AsSpan(offset), value);
+}

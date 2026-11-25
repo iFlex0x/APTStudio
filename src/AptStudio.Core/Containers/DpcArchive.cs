@@ -26,12 +26,14 @@ public sealed class DpcArchive
     private DpcArchive(
         string path,
         long length,
+        DateTime lastWriteTimeUtc,
         DpcHeader header,
         IReadOnlyList<DpcEntry> entries,
         BodyLocation bodyLocation)
     {
         Path = path;
         Length = length;
+        LastWriteTimeUtc = lastWriteTimeUtc;
         Header = header;
         Entries = entries;
         BodyLocation = bodyLocation;
@@ -40,6 +42,8 @@ public sealed class DpcArchive
     public string Path { get; }
 
     public long Length { get; }
+
+    public DateTime LastWriteTimeUtc { get; }
 
     public DpcHeader Header { get; }
 
@@ -55,6 +59,7 @@ public sealed class DpcArchive
         }
 
         string fullPath = System.IO.Path.GetFullPath(path);
+        DateTime lastWriteTimeUtc = File.GetLastWriteTimeUtc(fullPath);
         using FileStream stream = new(fullPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
         long length = stream.Length;
         string banner = Encoding.ASCII.GetString(ReadAt(stream, 0, BannerLength)).TrimEnd('\0');
@@ -79,7 +84,7 @@ public sealed class DpcArchive
             ValidateExtents(entries, length, fullPath);
         }
 
-        return new DpcArchive(fullPath, length, header, entries, bodyLocation);
+        return new DpcArchive(fullPath, length, lastWriteTimeUtc, header, entries, bodyLocation);
     }
 
     private static List<DpcEntry> ReadNormalEntries(FileStream stream, DpcHeader header)
