@@ -172,16 +172,12 @@ public sealed record BitmapHead(
 
     private static long ChainBytes(TextureFamily family, int width, int height, int mipCount)
     {
-        int unit = TextureFormats.UnitBytes(family);
-        bool block = TextureFormats.IsBlock(family);
         long total = 0;
         int w = width;
         int h = height;
         for (int i = 0; i < mipCount; i++)
         {
-            total += block
-                ? (long)Math.Max(1, (w + 3) / 4) * Math.Max(1, (h + 3) / 4) * unit
-                : (long)w * h * unit;
+            total += TextureFormats.MipBytes(family, w, h);
             w = Math.Max(1, w >> 1);
             h = Math.Max(1, h >> 1);
         }

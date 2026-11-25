@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Globalization;
 using AptStudio.Core.Containers;
 using AptStudio.Core.Games;
+using AptStudio.Core.Images;
 using AptStudio.Core.Textures;
 
 namespace AptStudio.Cli;
@@ -10,20 +11,19 @@ internal static class Program
 {
     private static int Main(string[] args)
     {
-        if (args.Length != 2)
-        {
-            Usage();
-            return 1;
-        }
-
-        if (string.Equals(args[0], "scan", StringComparison.OrdinalIgnoreCase))
+        if (args.Length == 2 && string.Equals(args[0], "scan", StringComparison.OrdinalIgnoreCase))
         {
             return Scan(args[1]);
         }
 
-        if (string.Equals(args[0], "list", StringComparison.OrdinalIgnoreCase))
+        if (args.Length == 2 && string.Equals(args[0], "list", StringComparison.OrdinalIgnoreCase))
         {
             return List(args[1]);
+        }
+
+        if (args.Length == 4 && string.Equals(args[0], "export", StringComparison.OrdinalIgnoreCase))
+        {
+            return Export(args[1], args[2], args[3]);
         }
 
         Usage();
@@ -35,6 +35,7 @@ internal static class Program
         Console.Error.WriteLine("usage:");
         Console.Error.WriteLine("  aptstudio scan <gameRoot>");
         Console.Error.WriteLine("  aptstudio list <gameRoot>");
+        Console.Error.WriteLine("  aptstudio export <gameRoot> <nameHash> <outputPath>");
     }
 
     private static int Scan(string gameRoot)
@@ -205,6 +206,79 @@ internal static class Program
         }
 
         return failures.Count == 0 ? 0 : 2;
+    }
+
+    private static int Export(string gameRoot, string hashText, string outputPath)
+    {
+        string text = hashText.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
+            ? hashText[2..]
+            : hashText;
+        if (!ulong.TryParse(text, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out ulong name))
+        {
+            Console.Error.WriteLine($"invalid texture hash '{hashText}'");
+            return 1;
+        }
+
+        if (!TryFindDpcs(gameRoot, out string[] files))
+        {
+            return 1;
+        }
+
+        string? externalMatch = null;
+        foreach (string file in files)
+        {
+            string archiveName = Path.GetFileName(file);
+            try
+            {
+                DpcArchive archive = DpcArchive.Open(file);
+                if (archive.BodyLocation != BodyLocation.Local)
+                {
+                    if (archive.Entries.Any(entry =>
+                        entry.ClassHash == BitmapHead.ClassHash && entry.NameHash == name))
+                    {
+                        externalMatch = archiveName;
+                    }
+
+                    continue;
+                }
+
+                TextureEntry? texture = TextureScanner.Scan(archive)
+                    .FirstOrDefault(item => item.Head.NameHash == name);
+                if (texture is null)
+                {
+                    continue;
+                }
+
+                using FileStream stream = new(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                DecodedTexture image = TextureDecoder.DecodeMip0(stream, texture);
+                byte[] png = PngWriter.EncodeRgba(image.Rgba, image.Width, image.Height);
+                string? directory = Path.GetDirectoryName(Path.GetFullPath(outputPath));
+                if (!string.IsNullOrEmpty(directory))
+                {
+                    Directory.CreateDirectory(directory);
+                }
+
+                File.WriteAllBytes(outputPath, png);
+                Console.WriteLine(
+                    $"{archiveName} 0x{name:X16} {image.Width}x{image.Height} {texture.Head.Format.DisplayName} {N(png.Length)} B -> {outputPath}");
+                return 0;
+            }
+            catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException or NotSupportedException)
+            {
+                Console.Error.WriteLine(ex.Message);
+                return 1;
+            }
+        }
+
+        if (externalMatch is not null)
+        {
+            Console.Error.WriteLine(
+                $"{externalMatch}: texture 0x{name:X16} resolves into another archive.");
+            return 1;
+        }
+
+        Console.Error.WriteLine($"texture 0x{name:X16} not found");
+        return 1;
     }
 
     private static string N(long value) => value.ToString("N0", CultureInfo.InvariantCulture);

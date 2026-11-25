@@ -63,4 +63,12 @@ public static class TextureFormats
 
     public static bool IsBlock(TextureFamily family) =>
         family is TextureFamily.Block8 or TextureFamily.Block16;
+
+    public static long MipBytes(TextureFamily family, int width, int height)
+    {
+        int unit = UnitBytes(family);
+        return IsBlock(family)
+            ? (long)Math.Max(1, (width + 3) / 4) * Math.Max(1, (height + 3) / 4) * unit
+            : (long)width * height * unit;
+    }
 }
