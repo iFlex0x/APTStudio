@@ -1,5 +1,7 @@
 using System.Buffers.Binary;
+using System.Security.Cryptography;
 using System.Text;
+using AptStudio.Core.Containers;
 using AptStudio.Core.Textures;
 
 namespace AptStudio.Core.Tests.Textures;
@@ -112,6 +114,7 @@ public sealed class TextureCacheTests : IDisposable
         string cacheFile = Assert.Single(Directory.GetFiles(cacheRoot));
         byte[] bytes = File.ReadAllBytes(cacheFile);
         bytes[EntryStart(archive) + EntryKindOffset] = 0xFF;
+        RewriteChecksum(bytes, EntryStart(archive));
         File.WriteAllBytes(cacheFile, bytes);
 
         IReadOnlyList<TextureEntry> textures = TextureCache.LoadOrScan(
@@ -119,6 +122,21 @@ public sealed class TextureCacheTests : IDisposable
 
         Assert.False(fromCache);
         Assert.Equal(BitmapKind.Flat, Assert.Single(textures).Head.Kind);
+    }
+
+    [Fact]
+    public void ReopensStaleArchive()
+    {
+        string archive = WriteFile(DpcTestData.Build(decompressed: 99, u2: 7, u3: 9));
+        DpcArchive opened = DpcArchive.Open(archive);
+        File.WriteAllBytes(archive, DpcTestData.Build(decompressed: 100, u2: 8, u3: 10));
+        File.SetLastWriteTimeUtc(archive, DateTime.UtcNow.AddMinutes(-5));
+        string cacheRoot = Path.Combine(_root, "cache");
+
+        IReadOnlyList<TextureEntry> textures = TextureCache.LoadOrScan(
+            opened, false, out _, cacheRoot);
+
+        Assert.Equal(100u, Assert.Single(textures).Row.DecompressedSize);
     }
 
     [Fact]
@@ -146,7 +164,7 @@ public sealed class TextureCacheTests : IDisposable
         TextureCache.LoadOrScan(archive, false, out _, cacheRoot);
         string cacheFile = Assert.Single(Directory.GetFiles(cacheRoot));
         byte[] bytes = File.ReadAllBytes(cacheFile);
-        int countOffset = EntryStart(archive) - ChecksumSize;
+        int countOffset = EntryStart(archive) - ChecksumSize - 4;
         BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(countOffset), 1_000_000);
         File.WriteAllBytes(cacheFile, bytes);
 
@@ -243,6 +261,12 @@ public sealed class TextureCacheTests : IDisposable
         Assert.Equal(BitmapKind.Volume, texture.Head.Kind);
         Assert.Equal(17, texture.Head.Width);
         Assert.Equal(0, texture.Head.Height);
+    }
+
+    private static void RewriteChecksum(byte[] bytes, int entryStart)
+    {
+        byte[] hash = SHA256.HashData(bytes.AsSpan(entryStart));
+        hash.CopyTo(bytes, entryStart - ChecksumSize);
     }
 
     private static int EntryStart(string archivePath) =>

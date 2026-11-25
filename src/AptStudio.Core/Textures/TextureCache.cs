@@ -34,8 +34,16 @@ public static class TextureCache
         out bool fromCache,
         string? cacheRoot = null)
     {
-        DpcArchive archive = DpcArchive.Open(archivePath);
-        return LoadOrScan(archive, rebuild, out fromCache, cacheRoot);
+        string fullPath = Path.GetFullPath(archivePath);
+        string cachePath = CachePath(cacheRoot ?? DefaultRoot, fullPath);
+        FileInfo before = new(fullPath);
+        if (!rebuild && TryRead(cachePath, fullPath, before, out IReadOnlyList<TextureEntry> cached))
+        {
+            fromCache = true;
+            return cached;
+        }
+
+        return ScanAndCache(DpcArchive.Open(fullPath), cachePath, fullPath, before, out fromCache);
     }
 
     public static IReadOnlyList<TextureEntry> LoadOrScan(
@@ -45,14 +53,29 @@ public static class TextureCache
         string? cacheRoot = null)
     {
         string fullPath = Path.GetFullPath(archive.Path);
-        string cachePath = CachePath(cacheRoot ?? DefaultRoot, fullPath);
         FileInfo before = new(fullPath);
+        if (before.Length != archive.Length || before.LastWriteTimeUtc != archive.LastWriteTimeUtc)
+        {
+            return LoadOrScan(fullPath, rebuild, out fromCache, cacheRoot);
+        }
+
+        string cachePath = CachePath(cacheRoot ?? DefaultRoot, fullPath);
         if (!rebuild && TryRead(cachePath, fullPath, before, out IReadOnlyList<TextureEntry> cached))
         {
             fromCache = true;
             return cached;
         }
 
+        return ScanAndCache(archive, cachePath, fullPath, before, out fromCache);
+    }
+
+    private static IReadOnlyList<TextureEntry> ScanAndCache(
+        DpcArchive archive,
+        string cachePath,
+        string fullPath,
+        FileInfo before,
+        out bool fromCache)
+    {
         fromCache = false;
         IReadOnlyList<TextureEntry> textures = TextureScanner.Scan(archive);
         FileInfo after = new(fullPath);
@@ -189,7 +212,7 @@ public static class TextureCache
             || storage is not (BitmapStorage.Raw or BitmapStorage.Lz4)
             || widthRaw is 0 or > MaxHeaderDimension
             || (kind != BitmapKind.Volume && (heightRaw is 0 or > MaxHeaderDimension))
-            || surfacesRaw is 0 or > int.MaxValue
+            || surfacesRaw is 0 or > MaxHeaderDimension
             || stored == 0
             || mips is < 1 or > 32
             || (ulong)stored + 4 != body
