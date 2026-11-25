@@ -23,7 +23,8 @@ internal static class DpcTestData
         BitmapStorage storage = BitmapStorage.Raw,
         uint stored = 8,
         uint compSize = 0,
-        ulong bodyName = 0x1111,
+        ulong name = 0x1111,
+        ulong? bodyName = null,
         ushort key = 0x001B,
         int width = 4,
         int height = 4,
@@ -59,7 +60,7 @@ internal static class DpcTestData
         WriteU32(data, RowCountOffset, 1);
 
         int row = RowsOffset;
-        WriteU64(data, row, 0x1111);
+        WriteU64(data, row, name);
         WriteU64(data, row + 8, classHash);
         WriteU64(data, row + 16, 0x3333);
         WriteU32(data, row + 24, 300);
@@ -71,7 +72,7 @@ internal static class DpcTestData
 
         byte[] bitmap = BitmapTestData.Header(
             width, height, mips, stored, key,
-            kind: kind, storage: storage, surfaces: surfaces, compressed: compSize, name: bodyName);
+            kind: kind, storage: storage, surfaces: surfaces, compressed: compSize, name: bodyName ?? name);
         Array.Copy(bitmap, 0, data, BodyOffset, bitmap.Length);
 
         int payloadLength = Math.Max(0, (int)(actualRowSize - BitmapHead.HeaderSize));

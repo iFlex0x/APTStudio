@@ -5,7 +5,7 @@ using K4os.Compression.LZ4;
 
 namespace AptStudio.Core.Textures;
 
-public sealed record DecodedTexture(int Width, int Height, byte[] Rgba);
+public sealed record DecodedTexture(int Mip, int Width, int Height, byte[] Rgba);
 
 public static class TextureDecoder
 {
@@ -18,7 +18,10 @@ public static class TextureDecoder
         && texture.Head.Height <= MaxDimension
         && texture.Head.Format.Codec is TextureCodec.Bc1 or TextureCodec.Bc3;
 
-    public static DecodedTexture DecodeMip0(Stream stream, TextureEntry texture)
+    public static DecodedTexture DecodeMip0(Stream stream, TextureEntry texture) =>
+        DecodeMip(stream, texture, 0);
+
+    public static DecodedTexture DecodeMip(Stream stream, TextureEntry texture, int mip)
     {
         ArgumentNullException.ThrowIfNull(stream);
         ArgumentNullException.ThrowIfNull(texture);
@@ -54,31 +57,12 @@ public static class TextureDecoder
                 $"{Source(texture)}: {head.Width}x{head.Height} exceeds the measured {MaxDimension} cap.");
         }
 
-        byte[] chain = ReadChain(stream, texture);
-        int mipBytes = (int)TextureFormats.MipBytes(head.Format.Family, head.Width, head.Height);
-        if (mipBytes > chain.Length)
+        if (mip < 0 || mip >= head.MipCount)
         {
-            throw new InvalidDataException(
-                $"{Source(texture)}: mip 0 needs {mipBytes} bytes, chain has {chain.Length}.");
+            throw new ArgumentOutOfRangeException(
+                nameof(mip), $"{Source(texture)}: mip {mip} is outside 0 to {head.MipCount - 1}.");
         }
 
-        ColorRgba32[] pixels = new BcDecoder().DecodeRaw(
-            chain[..mipBytes], head.Width, head.Height, format);
-        byte[] rgba = new byte[pixels.Length * 4];
-        for (int i = 0; i < pixels.Length; i++)
-        {
-            rgba[i * 4] = pixels[i].r;
-            rgba[i * 4 + 1] = pixels[i].g;
-            rgba[i * 4 + 2] = pixels[i].b;
-            rgba[i * 4 + 3] = pixels[i].a;
-        }
-
-        return new DecodedTexture(head.Width, head.Height, rgba);
-    }
-
-    private static byte[] ReadChain(Stream stream, TextureEntry texture)
-    {
-        BitmapHead head = texture.Head;
         if (head.BodySize > int.MaxValue)
         {
             throw new InvalidDataException(
@@ -91,11 +75,51 @@ public static class TextureDecoder
                 $"{Source(texture)}: stored size {head.StoredSize} is too large.");
         }
 
-        if (head.Storage == BitmapStorage.Raw)
+        int mipWidth = Math.Max(1, head.Width >> mip);
+        int mipHeight = Math.Max(1, head.Height >> mip);
+        long mipOffset = 0;
+        for (int level = 0; level < mip; level++)
         {
-            return ReadExactly(stream, texture.PayloadOffset, (int)head.StoredSize, texture);
+            mipOffset += TextureFormats.MipBytes(
+                head.Format.Family,
+                Math.Max(1, head.Width >> level),
+                Math.Max(1, head.Height >> level));
         }
 
+        int mipBytes = (int)TextureFormats.MipBytes(head.Format.Family, mipWidth, mipHeight);
+        if (mipOffset + mipBytes > head.StoredSize)
+        {
+            throw new InvalidDataException(
+                $"{Source(texture)}: mip {mip} needs {mipOffset + mipBytes} bytes, chain has {head.StoredSize}.");
+        }
+
+        byte[] data;
+        if (head.Storage == BitmapStorage.Raw)
+        {
+            data = ReadExactly(stream, texture.PayloadOffset + mipOffset, mipBytes, texture);
+        }
+        else
+        {
+            byte[] chain = ReadChain(stream, texture);
+            data = chain[(int)mipOffset..((int)mipOffset + mipBytes)];
+        }
+
+        ColorRgba32[] pixels = new BcDecoder().DecodeRaw(data, mipWidth, mipHeight, format);
+        byte[] rgba = new byte[pixels.Length * 4];
+        for (int i = 0; i < pixels.Length; i++)
+        {
+            rgba[i * 4] = pixels[i].r;
+            rgba[i * 4 + 1] = pixels[i].g;
+            rgba[i * 4 + 2] = pixels[i].b;
+            rgba[i * 4 + 3] = pixels[i].a;
+        }
+
+        return new DecodedTexture(mip, mipWidth, mipHeight, rgba);
+    }
+
+    private static byte[] ReadChain(Stream stream, TextureEntry texture)
+    {
+        BitmapHead head = texture.Head;
         byte[] frame = ReadExactly(stream, texture.PayloadOffset, 8, texture);
         uint decompressed = BinaryPrimitives.ReadUInt32LittleEndian(frame);
         uint compressed = BinaryPrimitives.ReadUInt32LittleEndian(frame.AsSpan(4));
