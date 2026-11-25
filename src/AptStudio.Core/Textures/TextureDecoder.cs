@@ -12,11 +12,14 @@ public static class TextureDecoder
     private const int MaxDimension = 8192;
 
     public static bool CanDecodeMip0(TextureEntry texture) =>
-        texture.Head.Kind == BitmapKind.Flat
-        && texture.Head.Surfaces == 1
-        && texture.Head.Width <= MaxDimension
-        && texture.Head.Height <= MaxDimension
-        && texture.Head.Format.Codec is TextureCodec.Bc1 or TextureCodec.Bc3;
+        CanDecodeMip0(texture.Head);
+
+    public static bool CanDecodeMip0(BitmapHead head) =>
+        head.Kind == BitmapKind.Flat
+        && head.Surfaces == 1
+        && head.Width <= MaxDimension
+        && head.Height <= MaxDimension
+        && head.Format.Codec is TextureCodec.Bc1 or TextureCodec.Bc3;
 
     public static DecodedTexture DecodeMip0(Stream stream, TextureEntry texture) =>
         DecodeMip(stream, texture, 0);

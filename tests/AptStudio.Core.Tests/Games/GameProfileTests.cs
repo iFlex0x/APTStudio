@@ -25,6 +25,23 @@ public sealed class GameProfileTests : IDisposable
         Assert.Equal(GameKind.Resonance, profile.Kind);
         Assert.Equal(Path.GetFullPath(_root), profile.Root);
         Assert.Equal(new[] { "DATAS", "FONT", "LEVELS" }, profile.DataRoots);
+        Assert.Equal(new[] { "DATAS", "FONT", "LEVELS" }, profile.AssetRoots);
+    }
+
+    [Fact]
+    public void IncludesRtcAndRteWhenPresent()
+    {
+        File.WriteAllBytes(Path.Combine(_root, "Resonance.exe"), []);
+        foreach (string folder in new[] { "DATAS", "FONT", "LEVELS", "RTC", "RTE" })
+        {
+            Directory.CreateDirectory(Path.Combine(_root, folder));
+        }
+
+        Assert.True(GameProfile.TryDetect(_root, out GameProfile? profile, out string? error), error);
+        Assert.NotNull(profile);
+        Assert.Equal(
+            new[] { "DATAS", "FONT", "LEVELS", "RTC", "RTE" },
+            profile.AssetRoots);
     }
 
     [Fact]

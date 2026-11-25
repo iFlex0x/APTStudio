@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Drawing.Imaging;
 using System.Globalization;
 using System.Runtime.InteropServices;
+using AptStudio.Core.Assets;
 using AptStudio.Core.Games;
 using AptStudio.Core.Textures;
 
@@ -11,6 +12,7 @@ internal sealed class MainForm : Form
 {
     private enum SortColumn
     {
+        Type,
         Hash,
         Format,
         Size,
@@ -46,7 +48,7 @@ internal sealed class MainForm : Form
     private readonly System.Windows.Forms.Timer _selectionTimer = new() { Interval = 120 };
     private readonly System.Windows.Forms.Timer _filterTimer = new() { Interval = 150 };
 
-    private IReadOnlyList<TextureEntry> _entries = Array.Empty<TextureEntry>();
+    private IReadOnlyList<AssetEntry> _entries = Array.Empty<AssetEntry>();
     private int[] _view = Array.Empty<int>();
     private GameProfile? _profile;
     private CancellationTokenSource? _scanCancel;
@@ -229,7 +231,7 @@ internal sealed class MainForm : Form
         _filterText.Width = 240;
         _filterText.BackColor = Theme.Surface;
         _filterText.ForeColor = Theme.Text;
-        _filterText.PlaceholderText = "hash, archive, format";
+        _filterText.PlaceholderText = "hash, archive, type";
         _filterText.Margin = new Padding(0, 0, 6, 0);
 
         TableLayoutPanel table = new()
@@ -252,7 +254,7 @@ internal sealed class MainForm : Form
             Padding = new Padding(0, 5, 0, 5),
             BackColor = Theme.Background,
         };
-        _typeCombo.Width = 120;
+        _typeCombo.Width = 200;
         _typeCombo.Margin = new Padding(0, 0, 6, 0);
         _formatCombo.Width = 165;
         _formatCombo.Margin = new Padding(0, 0, 6, 0);
@@ -408,13 +410,14 @@ internal sealed class MainForm : Form
             SelectionForeColor = Color.White,
         };
 
-        AddColumn("Hash", 150, SortColumn.Hash, mono: true);
-        AddColumn("Format", 110, SortColumn.Format);
-        AddColumn("Size", 100, SortColumn.Size, right: true);
+        AddColumn("Type", 110, SortColumn.Type);
+        AddColumn("Hash", 140, SortColumn.Hash, mono: true);
+        AddColumn("Format", 80, SortColumn.Format);
+        AddColumn("Size", 90, SortColumn.Size, right: true);
         AddColumn("Mips", 50, SortColumn.Mips, right: true);
-        AddColumn("Surf", 50, SortColumn.Surfaces, right: true);
-        AddColumn("Storage", 84, SortColumn.Storage);
-        AddColumn("Archive", 150, SortColumn.Archive);
+        AddColumn("Surf", 48, SortColumn.Surfaces, right: true);
+        AddColumn("Storage", 64, SortColumn.Storage);
+        AddColumn("Archive", 155, SortColumn.Archive);
 
         _grid.CellValueNeeded += OnCellValueNeeded;
         _grid.SelectionChanged += OnGridSelectionChanged;
@@ -492,7 +495,7 @@ internal sealed class MainForm : Form
         string? last = Settings.LoadLastGameRoot();
         if (last is not null)
         {
-            _ = LoadGameAsync(last, rebuild: false);
+            _ = LoadGameAsync(last);
         }
         else
         {
@@ -503,7 +506,7 @@ internal sealed class MainForm : Form
     private void ScaleGrid()
     {
         float scale = DeviceDpi / 96f * _shotScale;
-        int[] widths = [150, 110, 100, 50, 50, 84, 150];
+        int[] widths = [110, 140, 80, 90, 50, 48, 64, 155];
         for (int i = 0; i < _grid.Columns.Count && i < widths.Length; i++)
         {
             _grid.Columns[i].Width = (int)Math.Round(widths[i] * scale);
@@ -612,17 +615,20 @@ internal sealed class MainForm : Form
             return;
         }
 
-        TextureEntry entry = _entries[_view[e.RowIndex]];
-        BitmapHead head = entry.Head;
+        AssetEntry entry = _entries[_view[e.RowIndex]];
+        BitmapHead? head = entry.Bitmap;
         e.Value = e.ColumnIndex switch
         {
-            0 => head.NameHash.ToString("X16"),
-            1 => head.Format.DisplayName,
-            2 => head.Kind == BitmapKind.Volume ? $"w={head.Width}" : $"{head.Width}x{head.Height}",
-            3 => head.MipCount,
-            4 => head.Surfaces,
-            5 => head.Storage == BitmapStorage.Raw ? "raw" : "lz4",
-            6 => Path.GetFileName(entry.ArchivePath),
+            0 => entry.ClassName,
+            1 => entry.NameHash.ToString("X16"),
+            2 => head?.Format.DisplayName ?? "-",
+            3 => head is null
+                ? "-"
+                : head.Kind == BitmapKind.Volume ? $"w={head.Width}" : $"{head.Width}x{head.Height}",
+            4 => head?.MipCount.ToString(CultureInfo.InvariantCulture) ?? "-",
+            5 => head?.Surfaces.ToString(CultureInfo.InvariantCulture) ?? "-",
+            6 => head is null ? "-" : head.Storage == BitmapStorage.Raw ? "raw" : "lz4",
+            7 => Path.GetFileName(entry.ArchivePath),
             _ => null,
         };
     }
@@ -640,27 +646,27 @@ internal sealed class MainForm : Form
         }
 
         IEnumerable<int> indices = Enumerable.Range(0, _entries.Count);
-        FilterItem? kind = _typeCombo.SelectedItem as FilterItem;
+        FilterItem? type = _typeCombo.SelectedItem as FilterItem;
         FilterItem? format = _formatCombo.SelectedItem as FilterItem;
         bool previewable = _previewableCheck.Checked;
         string query = NormalizeQuery(_filterText.Text);
 
-        if (kind?.Kind is not null)
+        if (type?.Class is not null)
         {
-            indices = indices.Where(index => _entries[index].Head.Kind == kind.Kind);
+            indices = indices.Where(index => _entries[index].ClassHash == type.Class.Value);
         }
 
         if (format?.Format is not null)
         {
             indices = indices.Where(index =>
                 string.Equals(
-                    _entries[index].Head.Format.DisplayName, format.Format,
+                    _entries[index].Bitmap?.Format.DisplayName, format.Format,
                     StringComparison.OrdinalIgnoreCase));
         }
 
         if (previewable)
         {
-            indices = indices.Where(index => TextureDecoder.CanDecodeMip0(_entries[index]));
+            indices = indices.Where(index => _entries[index].IsPreviewable);
         }
 
         if (query.Length > 0)
@@ -675,17 +681,19 @@ internal sealed class MainForm : Form
 
     private int CompareRows(int a, int b)
     {
-        TextureEntry left = _entries[a];
-        TextureEntry right = _entries[b];
+        AssetEntry left = _entries[a];
+        AssetEntry right = _entries[b];
         int result = _sortColumn switch
         {
-            SortColumn.Hash => left.Head.NameHash.CompareTo(right.Head.NameHash),
+            SortColumn.Type => StringComparer.OrdinalIgnoreCase.Compare(
+                left.ClassName, right.ClassName),
+            SortColumn.Hash => left.NameHash.CompareTo(right.NameHash),
             SortColumn.Format => StringComparer.OrdinalIgnoreCase.Compare(
-                left.Head.Format.DisplayName, right.Head.Format.DisplayName),
+                left.Bitmap?.Format.DisplayName, right.Bitmap?.Format.DisplayName),
             SortColumn.Size => PixelCount(left).CompareTo(PixelCount(right)),
-            SortColumn.Mips => left.Head.MipCount.CompareTo(right.Head.MipCount),
-            SortColumn.Surfaces => left.Head.Surfaces.CompareTo(right.Head.Surfaces),
-            SortColumn.Storage => left.Head.Storage.CompareTo(right.Head.Storage),
+            SortColumn.Mips => Nullable.Compare(left.Bitmap?.MipCount, right.Bitmap?.MipCount),
+            SortColumn.Surfaces => Nullable.Compare(left.Bitmap?.Surfaces, right.Bitmap?.Surfaces),
+            SortColumn.Storage => Nullable.Compare(left.Bitmap?.Storage, right.Bitmap?.Storage),
             SortColumn.Archive => StringComparer.OrdinalIgnoreCase.Compare(
                 Path.GetFileName(left.ArchivePath), Path.GetFileName(right.ArchivePath)),
             _ => 0,
@@ -700,7 +708,7 @@ internal sealed class MainForm : Form
             return result;
         }
 
-        result = left.Head.NameHash.CompareTo(right.Head.NameHash);
+        result = left.NameHash.CompareTo(right.NameHash);
         if (result != 0)
         {
             return result;
@@ -710,8 +718,8 @@ internal sealed class MainForm : Form
         return result != 0 ? result : a.CompareTo(b);
     }
 
-    private static long PixelCount(TextureEntry entry) =>
-        (long)entry.Head.Width * entry.Head.Height;
+    private static long PixelCount(AssetEntry entry) =>
+        entry.Bitmap is null ? 0 : (long)entry.Bitmap.Width * entry.Bitmap.Height;
 
     private static string NormalizeQuery(string text)
     {
@@ -719,10 +727,12 @@ internal sealed class MainForm : Form
         return query.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? query[2..] : query;
     }
 
-    private static bool Matches(TextureEntry entry, string query) =>
-        entry.Head.NameHash.ToString("X16").Contains(query, StringComparison.OrdinalIgnoreCase)
+    private static bool Matches(AssetEntry entry, string query) =>
+        entry.NameHash.ToString("X16").Contains(query, StringComparison.OrdinalIgnoreCase)
+        || entry.ClassName.Contains(query, StringComparison.OrdinalIgnoreCase)
         || Path.GetFileName(entry.ArchivePath).Contains(query, StringComparison.OrdinalIgnoreCase)
-        || entry.Head.Format.DisplayName.Contains(query, StringComparison.OrdinalIgnoreCase);
+        || (entry.Bitmap is not null
+            && entry.Bitmap.Format.DisplayName.Contains(query, StringComparison.OrdinalIgnoreCase));
 
     private void SetView(int[] view, int keep, bool selectFirst)
     {
@@ -768,7 +778,7 @@ internal sealed class MainForm : Form
             _selectionLabel.Text = "0 selected";
             UpdateExportEnabled();
             _preview.ShowMessage(
-                _entries.Count == 0 ? "No textures in this game folder." : "Select a texture.",
+                _entries.Count == 0 ? "No assets in this game folder." : "Select an asset.",
                 false);
             _infoLabel.Text = "";
             _suppressMip = true;
@@ -806,7 +816,7 @@ internal sealed class MainForm : Form
         ApplyFilter(true);
     }
 
-    private TextureEntry? SelectedEntry()
+    private AssetEntry? SelectedEntry()
     {
         DataGridViewRow? row = _grid.CurrentRow;
         if (row is null || !row.Selected)
@@ -819,7 +829,7 @@ internal sealed class MainForm : Form
             : null;
     }
 
-    private List<TextureEntry> SelectedEntries() =>
+    private List<AssetEntry> SelectedEntries() =>
         _grid.SelectedRows
             .Cast<DataGridViewRow>()
             .OrderBy(row => row.Index)
@@ -829,37 +839,52 @@ internal sealed class MainForm : Form
 
     private async Task PreviewSelectionAsync(bool keepMip)
     {
-        TextureEntry? entry = SelectedEntry();
+        AssetEntry? entry = SelectedEntry();
         if (entry is null)
         {
             CancelPreview();
             _selectionTimer.Stop();
             _selectionLabel.Text = "0 selected";
             UpdateExportEnabled();
-            _preview.ShowMessage("Select a texture.", false);
+            _preview.ShowMessage("Select an asset.", false);
             _infoLabel.Text = "";
+            return;
+        }
+
+        if (entry.Bitmap is null)
+        {
+            CancelPreview();
+            _previewReady.TrySetResult(true);
+            _preview.ShowMessage(
+                entry.BodyError ?? $"{entry.ClassName} preview is not available yet.",
+                entry.BodyError is not null);
+            _infoLabel.Text =
+                $"{entry.ClassName} | 0x{entry.NameHash:X16} | {Path.GetFileName(entry.ArchivePath)}";
+            _suppressMip = true;
+            _mipCombo.Items.Clear();
+            _suppressMip = false;
             return;
         }
 
         if (!keepMip)
         {
-            FillMipCombo(entry);
+            FillMipCombo(entry.Bitmap);
         }
 
         int mip = _mipCombo.SelectedIndex >= 0 ? _mipCombo.SelectedIndex : 0;
         await DecodePreviewAsync(entry, mip);
     }
 
-    private void FillMipCombo(TextureEntry entry)
+    private void FillMipCombo(BitmapHead head)
     {
         _suppressMip = true;
         try
         {
             _mipCombo.Items.Clear();
-            for (int mip = 0; mip < entry.Head.MipCount; mip++)
+            for (int mip = 0; mip < head.MipCount; mip++)
             {
-                int width = Math.Max(1, entry.Head.Width >> mip);
-                int height = Math.Max(1, entry.Head.Height >> mip);
+                int width = Math.Max(1, head.Width >> mip);
+                int height = Math.Max(1, head.Height >> mip);
                 _mipCombo.Items.Add($"Mip {mip} - {width}x{height}");
             }
 
@@ -874,20 +899,27 @@ internal sealed class MainForm : Form
         }
     }
 
-    private async Task DecodePreviewAsync(TextureEntry entry, int mip)
+    private async Task DecodePreviewAsync(AssetEntry entry, int mip)
     {
+        TextureEntry? texture = entry.Texture;
+        if (texture is null)
+        {
+            return;
+        }
+
         CancelPreview();
         CancellationTokenSource cancel = new();
         _previewCancel = cancel;
-        _infoLabel.Text = $"{entry.Head.Format.DisplayName} | {Path.GetFileName(entry.ArchivePath)}";
+        _infoLabel.Text =
+            $"{entry.ClassName} | {entry.Bitmap!.Format.DisplayName} | {Path.GetFileName(entry.ArchivePath)}";
 
         try
         {
             (Bitmap Bitmap, int Width, int Height) result = await Task.Run(() =>
             {
                 using FileStream stream = new(
-                    entry.ArchivePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-                DecodedTexture image = TextureDecoder.DecodeMip(stream, entry, mip);
+                    entry.BodyArchivePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                DecodedTexture image = TextureDecoder.DecodeMip(stream, texture, mip);
                 return (PreviewBitmap.Create(image), image.Width, image.Height);
             }, cancel.Token);
 
@@ -899,7 +931,7 @@ internal sealed class MainForm : Form
 
             _preview.SetImage(result.Bitmap);
             _infoLabel.Text =
-                $"Mip {mip} | {result.Width:N0}x{result.Height:N0} | {entry.Head.MipCount} mips | {entry.Head.Format.DisplayName} | {Path.GetFileName(entry.ArchivePath)}";
+                $"Mip {mip} | {result.Width:N0}x{result.Height:N0} | {entry.Bitmap!.MipCount} mips | {entry.Bitmap.Format.DisplayName} | {Path.GetFileName(entry.ArchivePath)}";
             _previewReady.TrySetResult(true);
         }
         catch (OperationCanceledException)
@@ -911,7 +943,8 @@ internal sealed class MainForm : Form
             if (!IsDisposed && cancel == _previewCancel)
             {
                 _preview.ShowMessage(ex.Message, true);
-                _infoLabel.Text = $"{entry.Head.Format.DisplayName} | {Path.GetFileName(entry.ArchivePath)}";
+                _infoLabel.Text =
+                    $"{entry.ClassName} | {entry.Bitmap!.Format.DisplayName} | {Path.GetFileName(entry.ArchivePath)}";
                 _previewReady.TrySetResult(true);
             }
         }
@@ -931,9 +964,11 @@ internal sealed class MainForm : Form
             return;
         }
 
-        List<TextureEntry> entries = SelectedEntries();
+        List<AssetEntry> selected = SelectedEntries();
+        List<AssetEntry> entries = selected.Where(entry => entry.Texture is not null).ToList();
         if (entries.Count == 0)
         {
+            _statusLabel.Text = "Select at least one texture to export.";
             return;
         }
 
@@ -954,10 +989,10 @@ internal sealed class MainForm : Form
             return;
         }
 
-        await ExportEntriesAsync(entries, dialog.SelectedPath);
+        await ExportEntriesAsync(entries, dialog.SelectedPath, selected.Count - entries.Count);
     }
 
-    private async Task ExportEntriesAsync(List<TextureEntry> entries, string folder)
+    private async Task ExportEntriesAsync(List<AssetEntry> entries, string folder, int skipped = 0)
     {
         if (entries.Count == 0)
         {
@@ -993,15 +1028,15 @@ internal sealed class MainForm : Form
             await Task.Run(() =>
             {
                 HashSet<string> used = new(StringComparer.OrdinalIgnoreCase);
-                foreach (TextureEntry entry in entries)
+                foreach (AssetEntry entry in entries)
                 {
                     cancel.Token.ThrowIfCancellationRequested();
                     string name = ExportNames.Unique(
-                        folder, entry.ArchivePath, entry.Head.NameHash, used);
+                        folder, entry.ArchivePath, entry.NameHash, used);
                     string path = Path.Combine(folder, name);
                     try
                     {
-                        TextureExport.ExportPng(entry, path);
+                        TextureExport.ExportPng(entry.Texture!, path);
                     }
                     catch (Exception ex) when (ex is InvalidDataException or NotSupportedException
                         or IOException or UnauthorizedAccessException)
@@ -1020,7 +1055,7 @@ internal sealed class MainForm : Form
             }
 
             _statusLabel.Text = failures.Count == 0
-                ? $"Exported {completed:N0} textures -> {folder}"
+                ? $"Exported {completed:N0} textures{(skipped > 0 ? $" ({skipped:N0} non-texture rows skipped)" : "")} -> {folder}"
                 : $"Exported {completed - failures.Count:N0}, failed {failures.Count:N0} -> {folder}";
             if (failures.Count > 0)
             {
@@ -1057,7 +1092,7 @@ internal sealed class MainForm : Form
 
     private void CopyHash()
     {
-        TextureEntry? entry = SelectedEntry();
+        AssetEntry? entry = SelectedEntry();
         if (entry is null)
         {
             return;
@@ -1065,8 +1100,8 @@ internal sealed class MainForm : Form
 
         try
         {
-            Clipboard.SetText(entry.Head.NameHash.ToString("X16"));
-            _statusLabel.Text = $"Copied 0x{entry.Head.NameHash:X16}.";
+            Clipboard.SetText(entry.NameHash.ToString("X16"));
+            _statusLabel.Text = $"Copied 0x{entry.NameHash:X16}.";
         }
         catch (ExternalException)
         {
@@ -1090,7 +1125,7 @@ internal sealed class MainForm : Form
 
         if (dialog.ShowDialog(this) == DialogResult.OK)
         {
-            _ = LoadGameAsync(dialog.SelectedPath, rebuild: false);
+            _ = LoadGameAsync(dialog.SelectedPath);
         }
     }
 
@@ -1098,11 +1133,11 @@ internal sealed class MainForm : Form
     {
         if (_profile is not null && !_scanning && !_exporting)
         {
-            _ = LoadGameAsync(_profile.Root, rebuild: true);
+            _ = LoadGameAsync(_profile.Root);
         }
     }
 
-    private async Task LoadGameAsync(string root, bool rebuild)
+    private async Task LoadGameAsync(string root)
     {
         if (!GameProfile.TryDetect(root, out GameProfile? profile, out string? error) || profile is null)
         {
@@ -1116,7 +1151,7 @@ internal sealed class MainForm : Form
         CancellationTokenSource cancel = new();
         _scanCancel = cancel;
         SetScanning(true);
-        _statusLabel.Text = rebuild ? "Rebuilding index..." : "Scanning...";
+        _statusLabel.Text = "Scanning...";
         _statusLabel.ToolTipText = "";
         Stopwatch watch = Stopwatch.StartNew();
         IProgress<CatalogProgress> progress = new Progress<CatalogProgress>(item =>
@@ -1130,8 +1165,8 @@ internal sealed class MainForm : Form
 
         try
         {
-            TextureCatalog catalog = await Task.Run(
-                () => TextureCatalog.Load(profile, rebuild, null, progress, cancel.Token),
+            AssetCatalog catalog = await Task.Run(
+                () => AssetCatalog.Load(profile, progress, cancel.Token),
                 cancel.Token);
             if (IsDisposed || cancel != _scanCancel)
             {
@@ -1147,18 +1182,21 @@ internal sealed class MainForm : Form
                 Settings.SaveLastGameRoot(profile.Root);
             }
 
-            _entries = catalog.Textures;
+            _entries = catalog.Entries;
             RebuildOptions(catalog);
             SetScanning(false);
             ApplyFilter(true);
-            int archives = catalog.Archives.Count(
-                item => !item.IsExternal && item.TextureCount > 0);
             _statusLabel.Text =
-                $"{N(_entries.Count)} textures | {N(catalog.PreviewableCount)} previewable | {archives} archives | {catalog.Failures.Count} failed | {watch.ElapsedMilliseconds} ms";
-            if (catalog.Failures.Count > 0)
+                $"{N(_entries.Count)} assets | {N(catalog.BitmapCount)} textures | {N(catalog.PreviewableCount)} previewable | {N(catalog.Archives.Count)} archives | {N(catalog.BodyErrorCount)} body errors | {catalog.Failures.Count} failed | {watch.ElapsedMilliseconds} ms";
+            List<string> problems = catalog.Failures.Select(failure => failure.Message)
+                .Concat(catalog.Entries
+                    .Where(entry => entry.BodyError is not null)
+                    .Select(entry => entry.BodyError!))
+                .Take(20)
+                .ToList();
+            if (problems.Count > 0)
             {
-                _statusLabel.ToolTipText = string.Join(
-                    Environment.NewLine, catalog.Failures.Take(20).Select(item => item.Message));
+                _statusLabel.ToolTipText = string.Join(Environment.NewLine, problems);
             }
         }
         catch (OperationCanceledException)
@@ -1183,28 +1221,26 @@ internal sealed class MainForm : Form
         }
     }
 
-    private void RebuildOptions(TextureCatalog catalog)
+    private void RebuildOptions(AssetCatalog catalog)
     {
         _suppressFilters = true;
         try
         {
             _typeCombo.Items.Clear();
-            _typeCombo.Items.Add(new FilterItem("All types", null, null));
-            foreach (IGrouping<BitmapKind, TextureEntry> group in catalog.Textures
-                .GroupBy(entry => entry.Head.Kind)
-                .OrderByDescending(group => group.Count())
-                .ThenBy(group => group.Key))
+            _typeCombo.Items.Add(new FilterItem("All classes", null, null));
+            foreach (AssetClassCount group in catalog.Classes)
             {
                 _typeCombo.Items.Add(new FilterItem(
-                    $"{group.Key} ({group.Count():N0})", group.Key, null));
+                    $"{group.Name} ({group.Count:N0})", group.Hash, null));
             }
 
             _typeCombo.SelectedIndex = 0;
 
             _formatCombo.Items.Clear();
             _formatCombo.Items.Add(new FilterItem("All formats", null, null));
-            foreach (IGrouping<string, TextureEntry> group in catalog.Textures
-                .GroupBy(entry => entry.Head.Format.DisplayName)
+            foreach (IGrouping<string, AssetEntry> group in catalog.Entries
+                .Where(entry => entry.Bitmap is not null)
+                .GroupBy(entry => entry.Bitmap!.Format.DisplayName)
                 .OrderByDescending(group => group.Count())
                 .ThenBy(group => group.Key, StringComparer.Ordinal))
             {
@@ -1309,20 +1345,32 @@ internal sealed class MainForm : Form
 
     internal void ScaleForShot(float scale)
     {
-        if (scale <= 0f || Math.Abs(scale - 1f) < 0.001f)
+        if (scale <= 0f)
         {
             return;
         }
 
         _shotScale = scale;
-        Scale(new SizeF(scale, scale));
+        if (Math.Abs(scale - 1f) > 0.001f)
+        {
+            Scale(new SizeF(scale, scale));
+        }
+
         Font = new Font(Font.FontFamily, 9f * scale);
         _monoFont.Dispose();
         _monoFont = new Font("Consolas", 9f * scale);
-        _grid.Columns[0].DefaultCellStyle.Font = _monoFont;
+        DataGridViewColumn? hashColumn = _grid.Columns
+            .Cast<DataGridViewColumn>()
+            .FirstOrDefault(column => column.Tag is SortColumn.Hash);
+        if (hashColumn is not null)
+        {
+            hashColumn.DefaultCellStyle.Font = _monoFont;
+        }
+
         Font? header = _grid.ColumnHeadersDefaultCellStyle.Font;
         _grid.ColumnHeadersDefaultCellStyle.Font = new Font("Segoe UI Semibold", 9f * scale);
         header?.Dispose();
+        ScaleGrid();
         _filterText.Width = (int)Math.Round(240 * scale);
         _filterText.Font = _grid.Font;
         _preview.Font = _grid.Font;
@@ -1337,7 +1385,7 @@ internal sealed class MainForm : Form
     {
         _previewReady = new TaskCompletionSource<bool>(
             TaskCreationOptions.RunContinuationsAsynchronously);
-        return LoadGameAsync(root, rebuild: false);
+        return LoadGameAsync(root);
     }
 
     internal void FilterForShot(string text)
@@ -1425,7 +1473,10 @@ internal sealed class MainForm : Form
         _grid.CurrentCell = _grid.Rows[0].Cells[0];
         _selectionTimer.Stop();
         _ = PreviewSelectionAsync(keepMip: false);
-        return ExportEntriesAsync(SelectedEntries(), folder);
+        List<AssetEntry> entries = SelectedEntries()
+            .Where(entry => entry.Texture is not null)
+            .ToList();
+        return ExportEntriesAsync(entries, folder);
     }
 
     internal string StatusText => _statusLabel.Text ?? string.Empty;
@@ -1442,7 +1493,7 @@ internal sealed class MainForm : Form
         bitmap.Save(path, ImageFormat.Png);
     }
 
-    private sealed record FilterItem(string Text, BitmapKind? Kind, string? Format)
+    private sealed record FilterItem(string Text, ulong? Class, string? Format)
     {
         public override string ToString() => Text;
     }

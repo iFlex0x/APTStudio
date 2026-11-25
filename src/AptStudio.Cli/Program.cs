@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Globalization;
+using AptStudio.Core.Assets;
 using AptStudio.Core.Containers;
 using AptStudio.Core.Games;
 using AptStudio.Core.Textures;
@@ -33,6 +34,11 @@ internal static class Program
             return List(args[1], rebuild);
         }
 
+        if (args.Length == 2 && string.Equals(args[0], "assets", StringComparison.OrdinalIgnoreCase))
+        {
+            return Assets(args[1]);
+        }
+
         if (args.Length == 4 && string.Equals(args[0], "export", StringComparison.OrdinalIgnoreCase))
         {
             return Export(args[1], args[2], args[3]);
@@ -47,7 +53,52 @@ internal static class Program
         Console.Error.WriteLine("usage:");
         Console.Error.WriteLine("  aptstudio scan <gameRoot>");
         Console.Error.WriteLine("  aptstudio list <gameRoot> [--rebuild]");
+        Console.Error.WriteLine("  aptstudio assets <gameRoot>");
         Console.Error.WriteLine("  aptstudio export <gameRoot> <nameHash> <outputPath>");
+    }
+
+    private static int Assets(string gameRoot)
+    {
+        if (!GameProfile.TryDetect(gameRoot, out GameProfile? profile, out string? error) || profile is null)
+        {
+            Console.Error.WriteLine(error);
+            return 1;
+        }
+
+        Stopwatch watch = Stopwatch.StartNew();
+        AssetCatalog catalog;
+        try
+        {
+            catalog = AssetCatalog.Load(profile);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Console.Error.WriteLine(ex.Message);
+            return 1;
+        }
+
+        watch.Stop();
+        foreach (AssetClassCount group in catalog.Classes)
+        {
+            Console.WriteLine($"{group.Name,-20} {N(group.Count),8}");
+        }
+
+        Console.WriteLine(
+            $"assets: {N(catalog.Entries.Count)}, bitmap rows: {N(catalog.BitmapCount)}, previewable rows: {N(catalog.PreviewableCount)}, archives: {N(catalog.Archives.Count)}, files: {N(catalog.FileCount)}, body errors: {N(catalog.BodyErrorCount)}, failed: {N(catalog.Failures.Count)}, {N(watch.ElapsedMilliseconds)} ms");
+
+        foreach (CatalogFailure failure in catalog.Failures)
+        {
+            Console.Error.WriteLine(failure.Message);
+        }
+
+        foreach (AssetEntry entry in catalog.Entries
+            .Where(item => item.BodyError is not null)
+            .Take(20))
+        {
+            Console.Error.WriteLine(entry.BodyError);
+        }
+
+        return catalog.Failures.Count == 0 && catalog.BodyErrorCount == 0 ? 0 : 2;
     }
 
     private static int Scan(string gameRoot)
