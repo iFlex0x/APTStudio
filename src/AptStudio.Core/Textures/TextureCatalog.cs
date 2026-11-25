@@ -13,7 +13,7 @@ public sealed record CatalogArchive(
     public int TextureCount => Textures.Count;
 }
 
-public sealed record CatalogFailure(string ArchivePath, string Message);
+public sealed record CatalogFailure(string Path, string Message);
 
 public sealed record CatalogProgress(int Index, int Total, string ArchivePath);
 
@@ -51,6 +51,7 @@ public sealed record TextureCatalog(
         }
 
         files.Sort(StringComparer.OrdinalIgnoreCase);
+        cancellationToken.ThrowIfCancellationRequested();
         List<CatalogArchive> archives = new(files.Count);
         List<TextureEntry> textures = new();
         for (int i = 0; i < files.Count; i++)

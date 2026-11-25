@@ -118,6 +118,33 @@ public sealed class TextureCatalogTests : IDisposable
     }
 
     [Fact]
+    public void ThrowsWhenCancelledBeforeAnyArchive()
+    {
+        using CancellationTokenSource cancel = new();
+        cancel.Cancel();
+
+        Assert.Throws<OperationCanceledException>(() => TextureCatalog.Load(
+            Detect(), cacheRoot: _cacheRoot, cancellationToken: cancel.Token));
+    }
+
+    [Fact]
+    public void ReportsDataRootFailure()
+    {
+        WriteArchive("SHARED.DPC", DpcTestData.Build());
+        GameProfile profile = Detect();
+        string font = Path.Combine(_root, "FONT");
+        Directory.Delete(font);
+
+        TextureCatalog catalog = TextureCatalog.Load(profile, cacheRoot: _cacheRoot);
+
+        CatalogFailure failure = Assert.Single(catalog.Failures);
+        Assert.Equal(font, failure.Path);
+        Assert.Single(catalog.Archives);
+        Assert.Single(catalog.Textures);
+        Assert.Equal(1, catalog.FileCount);
+    }
+
+    [Fact]
     public void CountsOnlyDecodableRowsAsPreviewable()
     {
         WriteArchive("A_BC1.DPC", DpcTestData.Build());
@@ -142,7 +169,7 @@ public sealed class TextureCatalogTests : IDisposable
         TextureCatalog catalog = TextureCatalog.Load(Detect(), cacheRoot: _cacheRoot);
 
         CatalogFailure failure = Assert.Single(catalog.Failures);
-        Assert.Equal("BAD.DPC", Path.GetFileName(failure.ArchivePath));
+        Assert.Equal("BAD.DPC", Path.GetFileName(failure.Path));
         Assert.Contains("read of", failure.Message);
         Assert.DoesNotContain("BAD.DPC: BAD.DPC", failure.Message);
         Assert.Single(catalog.Archives);
