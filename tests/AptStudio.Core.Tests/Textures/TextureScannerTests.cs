@@ -72,6 +72,17 @@ public sealed class TextureScannerTests : IDisposable
     }
 
     [Fact]
+    public void RejectsBodyNameMismatch()
+    {
+        DpcArchive archive = DpcArchive.Open(WriteFile(BuildDpc(bodyName: 0x9999)));
+
+        InvalidDataException error = Assert.Throws<InvalidDataException>(() =>
+            TextureScanner.Scan(archive));
+
+        Assert.Contains("body name", error.Message);
+    }
+
+    [Fact]
     public void SkipsNonBitmapRows()
     {
         DpcArchive archive = DpcArchive.Open(WriteFile(BuildDpc(classHash: 0x2222)));
@@ -107,7 +118,8 @@ public sealed class TextureScannerTests : IDisposable
         uint resourceBlockSize = 64,
         BitmapStorage storage = BitmapStorage.Raw,
         uint stored = 8,
-        uint compSize = 0)
+        uint compSize = 0,
+        ulong bodyName = 0x1111)
     {
         uint payloadSize = storage == BitmapStorage.Raw ? stored + 4 : compSize;
         uint objectSize = (uint)BitmapHead.HeaderSize + payloadSize;
@@ -145,7 +157,7 @@ public sealed class TextureScannerTests : IDisposable
         WriteU16(data, row + 42, 0);
 
         byte[] bitmap = BitmapTestData.Header(
-            4, 4, 1, stored, 0x001B, storage: storage, compressed: compSize);
+            4, 4, 1, stored, 0x001B, storage: storage, compressed: compSize, name: bodyName);
         Array.Copy(bitmap, 0, data, BodyOffset, bitmap.Length);
 
         int payloadLength = Math.Max(0, (int)(actualRowSize - BitmapHead.HeaderSize));

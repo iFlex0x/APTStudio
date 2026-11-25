@@ -128,6 +128,79 @@ public sealed class TextureDecoderTests
     }
 
     [Fact]
+    public void RejectsLz4CompressedSizeMismatch()
+    {
+        (TextureEntry texture, byte[] bytes) = Build(Bc1Red, storage: BitmapStorage.Lz4);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(BitmapHead.HeaderSize + 4), 999);
+
+        InvalidDataException error = Assert.Throws<InvalidDataException>(() =>
+            TextureDecoder.DecodeMip0(new MemoryStream(bytes), texture));
+
+        Assert.Contains("compressed", error.Message);
+    }
+
+    [Fact]
+    public void RejectsMalformedLz4Block()
+    {
+        (TextureEntry texture, byte[] bytes) = Build(Bc1Red, storage: BitmapStorage.Lz4);
+        bytes.AsSpan(BitmapHead.HeaderSize + 8).Fill(0xFF);
+
+        InvalidDataException error = Assert.Throws<InvalidDataException>(() =>
+            TextureDecoder.DecodeMip0(new MemoryStream(bytes), texture));
+
+        Assert.Contains("LZ4", error.Message);
+    }
+
+    [Fact]
+    public void RejectsLargeBody()
+    {
+        TextureEntry texture = DirectEntry(4, 4, 100, (uint)int.MaxValue + 1);
+
+        InvalidDataException error = Assert.Throws<InvalidDataException>(() =>
+            TextureDecoder.DecodeMip0(new MemoryStream(), texture));
+
+        Assert.Contains("too large", error.Message);
+    }
+
+    [Fact]
+    public void RejectsOversizeDimensions()
+    {
+        TextureEntry texture = DirectEntry(16384, 16384, 8, 12);
+
+        NotSupportedException error = Assert.Throws<NotSupportedException>(() =>
+            TextureDecoder.DecodeMip0(new MemoryStream(new byte[0x80]), texture));
+
+        Assert.Contains("8192", error.Message);
+    }
+
+    [Fact]
+    public void ReportsDecodableRows()
+    {
+        Assert.True(TextureDecoder.CanDecodeMip0(Build(Bc1Red).Texture));
+        Assert.True(TextureDecoder.CanDecodeMip0(Build(Bc3RedOpaque, key: 0x001D).Texture));
+        Assert.False(TextureDecoder.CanDecodeMip0(
+            Build(Bc1Red, key: 0x0013, kind: BitmapKind.Volume).Texture));
+        Assert.False(TextureDecoder.CanDecodeMip0(
+            Build(new byte[48], kind: BitmapKind.Cube, surfaces: 6).Texture));
+        Assert.False(TextureDecoder.CanDecodeMip0(
+            Build([.. Bc1Red, .. Bc1Red], surfaces: 2).Texture));
+        Assert.False(TextureDecoder.CanDecodeMip0(Build(Bc1Red, key: 0x001E).Texture));
+        Assert.False(TextureDecoder.CanDecodeMip0(DirectEntry(16384, 16384, 8, 12)));
+    }
+
+    [Fact]
+    public void DecodesBc3AlphaRamp()
+    {
+        (TextureEntry texture, byte[] bytes) = Build(Bc3AlphaRamp(), key: 0x001D);
+
+        DecodedTexture image = TextureDecoder.DecodeMip0(new MemoryStream(bytes), texture);
+
+        Assert.Equal(255, image.Rgba[3]);
+        Assert.Equal(0, image.Rgba[7]);
+        Assert.InRange(image.Rgba[11], 1, 254);
+    }
+
+    [Fact]
     public void RejectsShortPayload()
     {
         (TextureEntry texture, byte[] bytes) = Build(Bc1Red);
@@ -137,6 +210,36 @@ public sealed class TextureDecoderTests
             TextureDecoder.DecodeMip0(new MemoryStream(truncated), texture));
 
         Assert.Contains("short read", error.Message);
+    }
+
+    private static TextureEntry DirectEntry(int width, int height, uint stored, uint bodySize)
+    {
+        BitmapHead head = new(
+            0x1111, 0x2222, BitmapKind.Flat, width, height, 1, 1,
+            BitmapStorage.Raw, stored, bodySize, 0, 63, 0x001B,
+            TextureFormats.FromKey(0x001B), BitmapHead.HeaderSize);
+        DpcEntry row = new(0x1111, BitmapHead.ClassHash, 0, 0, 0, 0, 0, 0, 0);
+        return new TextureEntry("test.dpc", row, head);
+    }
+
+    private static byte[] Bc3AlphaRamp()
+    {
+        byte[] block = new byte[16];
+        block[0] = 255;
+        block[1] = 0;
+        for (int pixel = 0; pixel < 16; pixel++)
+        {
+            int index = pixel % 8;
+            int bit = pixel * 3;
+            block[2 + bit / 8] |= (byte)(index << (bit % 8));
+            if (bit % 8 > 5)
+            {
+                block[2 + bit / 8 + 1] |= (byte)(index >> (8 - bit % 8));
+            }
+        }
+
+        Bc1Red.CopyTo(block, 8);
+        return block;
     }
 
     private static (TextureEntry Texture, byte[] Bytes) Build(

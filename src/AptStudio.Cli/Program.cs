@@ -224,6 +224,8 @@ internal static class Program
             return 1;
         }
 
+        List<TextureEntry> matches = new();
+        int failedArchives = 0;
         string? externalMatch = null;
         foreach (string file in files)
         {
@@ -236,49 +238,86 @@ internal static class Program
                     if (archive.Entries.Any(entry =>
                         entry.ClassHash == BitmapHead.ClassHash && entry.NameHash == name))
                     {
-                        externalMatch = archiveName;
+                        externalMatch ??= archiveName;
                     }
 
                     continue;
                 }
 
-                TextureEntry? texture = TextureScanner.Scan(archive)
-                    .FirstOrDefault(item => item.Head.NameHash == name);
-                if (texture is null)
-                {
-                    continue;
-                }
-
-                using FileStream stream = new(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-                DecodedTexture image = TextureDecoder.DecodeMip0(stream, texture);
-                byte[] png = PngWriter.EncodeRgba(image.Rgba, image.Width, image.Height);
-                string? directory = Path.GetDirectoryName(Path.GetFullPath(outputPath));
-                if (!string.IsNullOrEmpty(directory))
-                {
-                    Directory.CreateDirectory(directory);
-                }
-
-                File.WriteAllBytes(outputPath, png);
-                Console.WriteLine(
-                    $"{archiveName} 0x{name:X16} {image.Width}x{image.Height} {texture.Head.Format.DisplayName} {N(png.Length)} B -> {outputPath}");
-                return 0;
+                matches.AddRange(TextureScanner.Scan(archive)
+                    .Where(texture => texture.Head.NameHash == name));
             }
-            catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException or NotSupportedException)
+            catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
+            {
+                failedArchives++;
+                Console.Error.WriteLine($"{archiveName}: {ex.Message}");
+            }
+        }
+
+        if (matches.Count == 0)
+        {
+            if (externalMatch is not null)
+            {
+                Console.Error.WriteLine(
+                    $"{externalMatch}: texture 0x{name:X16} resolves into another archive; external bodies are not decoded.");
+                return 2;
+            }
+
+            Console.Error.WriteLine($"texture 0x{name:X16} not found");
+            return failedArchives == 0 ? 1 : 2;
+        }
+
+        List<TextureEntry> decodable = matches
+            .Where(TextureDecoder.CanDecodeMip0)
+            .ToList();
+        if (decodable.Count == 0)
+        {
+            try
+            {
+                TextureEntry first = matches[0];
+                using FileStream stream = new(
+                    first.ArchivePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                TextureDecoder.DecodeMip0(stream, first);
+            }
+            catch (Exception ex) when (ex is InvalidDataException or NotSupportedException
+                or IOException or UnauthorizedAccessException)
             {
                 Console.Error.WriteLine(ex.Message);
-                return 1;
             }
+
+            return 2;
         }
 
-        if (externalMatch is not null)
+        TextureEntry chosen = decodable[0];
+        if (matches.Count > 1)
         {
-            Console.Error.WriteLine(
-                $"{externalMatch}: texture 0x{name:X16} resolves into another archive.");
-            return 1;
+            Console.WriteLine(
+                $"note: {matches.Count} rows share 0x{name:X16}; exporting {Path.GetFileName(chosen.ArchivePath)} {chosen.Head.Format.DisplayName} {chosen.Head.Width}x{chosen.Head.Height}");
         }
 
-        Console.Error.WriteLine($"texture 0x{name:X16} not found");
-        return 1;
+        try
+        {
+            using FileStream stream = new(
+                chosen.ArchivePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            DecodedTexture image = TextureDecoder.DecodeMip0(stream, chosen);
+            byte[] png = PngWriter.EncodeRgba(image.Rgba, image.Width, image.Height);
+            string? directory = Path.GetDirectoryName(Path.GetFullPath(outputPath));
+            if (!string.IsNullOrEmpty(directory))
+            {
+                Directory.CreateDirectory(directory);
+            }
+
+            File.WriteAllBytes(outputPath, png);
+            Console.WriteLine(
+                $"{Path.GetFileName(chosen.ArchivePath)} 0x{name:X16} {image.Width}x{image.Height} {chosen.Head.Format.DisplayName} {N(png.Length)} B -> {outputPath}");
+            return 0;
+        }
+        catch (Exception ex) when (ex is InvalidDataException or IOException
+            or UnauthorizedAccessException or NotSupportedException)
+        {
+            Console.Error.WriteLine(ex.Message);
+            return 2;
+        }
     }
 
     private static string N(long value) => value.ToString("N0", CultureInfo.InvariantCulture);

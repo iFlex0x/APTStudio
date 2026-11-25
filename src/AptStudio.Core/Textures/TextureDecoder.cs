@@ -9,6 +9,15 @@ public sealed record DecodedTexture(int Width, int Height, byte[] Rgba);
 
 public static class TextureDecoder
 {
+    private const int MaxDimension = 8192;
+
+    public static bool CanDecodeMip0(TextureEntry texture) =>
+        texture.Head.Kind == BitmapKind.Flat
+        && texture.Head.Surfaces == 1
+        && texture.Head.Width <= MaxDimension
+        && texture.Head.Height <= MaxDimension
+        && texture.Head.Format.Codec is TextureCodec.Bc1 or TextureCodec.Bc3;
+
     public static DecodedTexture DecodeMip0(Stream stream, TextureEntry texture)
     {
         ArgumentNullException.ThrowIfNull(stream);
@@ -16,18 +25,18 @@ public static class TextureDecoder
         BitmapHead head = texture.Head;
         if (head.Kind == BitmapKind.Volume)
         {
-            throw new NotSupportedException($"{texture.Row.NameHash:X16}: volume layout is not decoded.");
+            throw new NotSupportedException($"{Source(texture)}: volume layout is not decoded.");
         }
 
         if (head.Kind == BitmapKind.Cube)
         {
-            throw new NotSupportedException($"{texture.Row.NameHash:X16}: cube textures are not decoded.");
+            throw new NotSupportedException($"{Source(texture)}: cube textures are not decoded.");
         }
 
         if (head.Surfaces != 1)
         {
             throw new NotSupportedException(
-                $"{texture.Row.NameHash:X16}: {head.Surfaces} surfaces are not decoded.");
+                $"{Source(texture)}: {head.Surfaces} surfaces are not decoded.");
         }
 
         CompressionFormat format = head.Format.Codec switch
@@ -35,15 +44,22 @@ public static class TextureDecoder
             TextureCodec.Bc1 => CompressionFormat.Bc1,
             TextureCodec.Bc3 => CompressionFormat.Bc3,
             _ => throw new NotSupportedException(
-                $"{texture.Row.NameHash:X16}: codec 0x{head.Format.Key:X2} is not decoded."),
+                $"{Source(texture)}: codec 0x{head.Format.Key:X2} is not decoded."),
         };
+
+        // Largest BC1/BC3 in 1.3.0.0 is 8192x8192; keep the RGBA allocation bounded.
+        if (head.Width > MaxDimension || head.Height > MaxDimension)
+        {
+            throw new NotSupportedException(
+                $"{Source(texture)}: {head.Width}x{head.Height} exceeds the measured {MaxDimension} cap.");
+        }
 
         byte[] chain = ReadChain(stream, texture);
         int mipBytes = (int)TextureFormats.MipBytes(head.Format.Family, head.Width, head.Height);
         if (mipBytes > chain.Length)
         {
             throw new InvalidDataException(
-                $"{texture.Row.NameHash:X16}: mip 0 needs {mipBytes} bytes, chain has {chain.Length}.");
+                $"{Source(texture)}: mip 0 needs {mipBytes} bytes, chain has {chain.Length}.");
         }
 
         ColorRgba32[] pixels = new BcDecoder().DecodeRaw(
@@ -63,10 +79,16 @@ public static class TextureDecoder
     private static byte[] ReadChain(Stream stream, TextureEntry texture)
     {
         BitmapHead head = texture.Head;
+        if (head.BodySize > int.MaxValue)
+        {
+            throw new InvalidDataException(
+                $"{Source(texture)}: body size {head.BodySize} is too large.");
+        }
+
         if (head.StoredSize > int.MaxValue)
         {
             throw new InvalidDataException(
-                $"{texture.Row.NameHash:X16}: stored size {head.StoredSize} is too large.");
+                $"{Source(texture)}: stored size {head.StoredSize} is too large.");
         }
 
         if (head.Storage == BitmapStorage.Raw)
@@ -80,28 +102,37 @@ public static class TextureDecoder
         if (decompressed != head.BodySize)
         {
             throw new InvalidDataException(
-                $"{texture.Row.NameHash:X16}: decompressed {decompressed} != body {head.BodySize}.");
+                $"{Source(texture)}: decompressed {decompressed} != body {head.BodySize}.");
         }
 
         if (compressed != head.CompressedSize)
         {
             throw new InvalidDataException(
-                $"{texture.Row.NameHash:X16}: compressed {compressed} != header {head.CompressedSize}.");
+                $"{Source(texture)}: compressed {compressed} != header {head.CompressedSize}.");
         }
 
         if (compressed > int.MaxValue)
         {
             throw new InvalidDataException(
-                $"{texture.Row.NameHash:X16}: compressed size {compressed} is too large.");
+                $"{Source(texture)}: compressed size {compressed} is too large.");
         }
 
         byte[] block = ReadExactly(stream, texture.PayloadOffset + 8, (int)compressed - 8, texture);
         byte[] body = new byte[decompressed];
-        int written = LZ4Codec.Decode(block, body);
+        int written;
+        try
+        {
+            written = LZ4Codec.Decode(block, body);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
+        {
+            throw new InvalidDataException($"{Source(texture)}: LZ4 block is invalid.", ex);
+        }
+
         if (written != body.Length)
         {
             throw new InvalidDataException(
-                $"{texture.Row.NameHash:X16}: LZ4 wrote {written}, expected {body.Length}.");
+                $"{Source(texture)}: LZ4 wrote {written}, expected {body.Length}.");
         }
 
         return body.AsSpan(0, (int)head.StoredSize).ToArray();
@@ -118,7 +149,7 @@ public static class TextureDecoder
             if (n == 0)
             {
                 throw new InvalidDataException(
-                    $"{texture.Row.NameHash:X16}: short read at {offset}.");
+                    $"{Source(texture)}: short read at {offset}.");
             }
 
             read += n;
@@ -126,4 +157,7 @@ public static class TextureDecoder
 
         return buffer;
     }
+
+    private static string Source(TextureEntry texture) =>
+        $"{Path.GetFileName(texture.ArchivePath)} 0x{texture.Row.NameHash:X16}";
 }
