@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/AptStudio.Cli/AptStudio.Cli.csproj" />
+    <Project Path="src/AptStudio.Core/AptStudio.Core.csproj" />
+    <Project Path="src/AptStudio.Desktop/AptStudio.Desktop.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/AptStudio.Core.Tests/AptStudio.Core.Tests.csproj" />
+  </Folder>
+</Solution>
