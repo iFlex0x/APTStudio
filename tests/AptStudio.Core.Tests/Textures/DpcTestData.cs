@@ -121,6 +121,112 @@ internal static class DpcTestData
         return data;
     }
 
+    public const uint BlockBodySize = 132;
+
+    public static byte[] BuildTwoBlocks(uint duplicateCompressed = BlockBodySize)
+    {
+        byte[] data = new byte[FileLength];
+        byte[] banner = Encoding.ASCII.GetBytes("v2.128.58.19 - test");
+        Array.Copy(banner, data, banner.Length);
+
+        int header = DpcHeader.Offset;
+        data[header] = 1;
+        WriteU32(data, header + 1, 2);
+        WriteU32(data, header + 5, 100);
+        WriteU32(data, header + 9, 4096);
+        WriteU32(data, header + 13, 300);
+        WriteU32(data, header + 17, 0);
+        WriteU32(data, header + 21, 0);
+
+        WriteU32(data, BlockTable, 2);
+        WriteU32(data, BlockTable + 4 + 24, 128);
+        WriteU32(data, BlockTable + 4 + 32 + 24, 200);
+
+        WriteMap(
+            data,
+            128 * 32,
+            [(0x1111UL, 300u, BlockBodySize)],
+            [(0x2222UL, 305u, BlockBodySize), (0x4444UL, 315u, BlockBodySize)],
+            firstCount: 2,
+            secondCount: 3);
+        WriteMap(
+            data,
+            200 * 32,
+            [(0x3333UL, 310u, BlockBodySize)],
+            [(0x1111UL, 300u, duplicateCompressed)]);
+
+        WriteBitmap(data, 300, 0x1111);
+        WriteBitmap(data, 305, 0x2222);
+        WriteBitmap(data, 310, 0x3333);
+        WriteBitmap(data, 315, 0x4444);
+        return data;
+    }
+
+    private static void WriteMap(
+        byte[] data,
+        int mapOffset,
+        (ulong Name, uint Offset, uint Compressed)[] rows,
+        (ulong Name, uint Offset, uint Compressed)[] secondary,
+        uint firstCount = 0,
+        uint secondCount = 0)
+    {
+        WriteU32(data, mapOffset, 0);
+        WriteU32(data, mapOffset + 1496, (uint)rows.Length);
+        int cursor = mapOffset + 1500;
+        foreach ((ulong name, uint offset, uint compressed) in rows)
+        {
+            WriteRow(data, cursor, name, offset, compressed);
+            cursor += DpcArchive.NormalEntrySize;
+        }
+
+        int rowsEnd = cursor;
+        WriteU64(data, rowsEnd, 0);
+        cursor = rowsEnd + 8;
+        WriteU32(data, cursor, firstCount);
+        cursor += 4 + (int)firstCount * 16;
+        WriteU32(data, cursor, secondCount);
+        cursor += 4 + (int)secondCount * 4;
+        WriteU32(data, cursor, (uint)secondary.Length);
+        cursor += 4;
+        foreach ((ulong name, uint offset, uint compressed) in secondary)
+        {
+            WriteU64(data, cursor, name);
+            WriteU64(data, cursor + 8, BitmapHead.ClassHash);
+            WriteU64(data, cursor + 16, 0x4444);
+            WriteU32(data, cursor + 24, offset);
+            WriteU32(data, cursor + 28, compressed);
+            WriteU32(data, cursor + 32, 0);
+            WriteU32(data, cursor + 36, 12);
+            WriteU16(data, cursor + 40, 0);
+            WriteU16(data, cursor + 42, 0);
+            cursor += DpcArchive.SecondaryEntrySize;
+        }
+    }
+
+    private static void WriteRow(byte[] data, int at, ulong name, uint offset, uint compressed)
+    {
+        WriteU64(data, at, name);
+        WriteU64(data, at + 8, BitmapHead.ClassHash);
+        WriteU64(data, at + 16, 0x3333);
+        WriteU32(data, at + 24, offset);
+        WriteU32(data, at + 28, compressed);
+        WriteU32(data, at + 32, 0);
+        WriteU32(data, at + 36, 12);
+        WriteU16(data, at + 40, 0);
+        WriteU16(data, at + 42, 0);
+    }
+
+    private static void WriteBitmap(byte[] data, uint offset, ulong name)
+    {
+        int at = (int)offset * 32;
+        byte[] bitmap = BitmapTestData.Header(4, 4, 1, 8, 0x001B, name: name);
+        Array.Copy(bitmap, 0, data, at, bitmap.Length);
+        for (int i = 0; i < 12; i++)
+        {
+            data[at + BitmapHead.HeaderSize + i] = 0xAA;
+        }
+    }
+
     private static void WriteU16(byte[] data, int offset, ushort value) =>
         BinaryPrimitives.WriteUInt16LittleEndian(data.AsSpan(offset), value);
 

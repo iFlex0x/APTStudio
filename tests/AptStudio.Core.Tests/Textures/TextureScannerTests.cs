@@ -72,6 +72,34 @@ public sealed class TextureScannerTests : IDisposable
     }
 
     [Fact]
+    public void ScansEveryBlockAndCollapsesDuplicates()
+    {
+        DpcArchive archive = DpcArchive.Open(WriteFile(DpcTestData.BuildTwoBlocks()));
+
+        Assert.Equal(2, archive.Entries.Count);
+        Assert.Equal(3, archive.SecondaryEntries.Count);
+        IReadOnlyList<TextureEntry> textures = TextureScanner.Scan(archive);
+        Assert.Equal(4, textures.Count);
+        Assert.Single(textures, texture => texture.Head.NameHash == 0x1111);
+        Assert.Contains(textures, texture => texture.Head.NameHash == 0x2222);
+        Assert.Contains(textures, texture => texture.Head.NameHash == 0x3333);
+        Assert.Contains(textures, texture => texture.Head.NameHash == 0x4444);
+    }
+
+    [Fact]
+    public void RejectsConflictingDuplicateReference()
+    {
+        DpcArchive archive = DpcArchive.Open(WriteFile(DpcTestData.BuildTwoBlocks(
+            duplicateCompressed: DpcTestData.BlockBodySize + 1)));
+
+        InvalidDataException error = Assert.Throws<InvalidDataException>(() =>
+            TextureScanner.Scan(archive));
+
+        Assert.Contains("duplicate reference", error.Message);
+        Assert.Contains("0x0000000000001111", error.Message);
+    }
+
+    [Fact]
     public void RejectsShortRow()
     {
         DpcArchive archive = DpcArchive.Open(WriteFile(DpcTestData.Build(rowSize: 100)));

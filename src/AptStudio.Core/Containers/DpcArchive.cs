@@ -87,8 +87,8 @@ public sealed class DpcArchive
         BodyLocation bodyLocation = ownsBodies ? BodyLocation.Local : BodyLocation.External;
         if (ownsBodies)
         {
-            ValidateExtents(entries, length, fullPath);
-            ValidateExtents(secondaryEntries, length, fullPath);
+            ValidateExtents(entries, length, fullPath, "row");
+            ValidateExtents(secondaryEntries, length, fullPath, "resources2 row");
         }
 
         return new DpcArchive(
@@ -123,7 +123,7 @@ public sealed class DpcArchive
                 throw new InvalidDataException($"{name}: block {i} has no resource map.");
             }
 
-            ReadResources(stream, (long)mapOffset * SectorSize, entries, secondaryEntries, name);
+            ReadResources(stream, (long)mapOffset * SectorSize, entries, secondaryEntries, name, i);
         }
 
         return entries;
@@ -134,7 +134,8 @@ public sealed class DpcArchive
         long mapOffset,
         List<DpcEntry> entries,
         List<DpcEntry> secondaryEntries,
-        string name)
+        string name,
+        int block)
     {
         byte[] prefix = ReadAt(stream, mapOffset, MapPrefixSize);
         uint dataCount = BinaryPrimitives.ReadUInt32LittleEndian(prefix);
@@ -157,27 +158,65 @@ public sealed class DpcArchive
         }
 
         long rowsEnd = countOffset + 4 + (long)rowCount * NormalEntrySize;
-        _ = ReadAt(stream, rowsEnd, 8);
+        ReadSecondaryEntries(stream, rowsEnd, name, block, secondaryEntries);
+    }
+
+    private static void ReadSecondaryEntries(
+        FileStream stream,
+        long rowsEnd,
+        string name,
+        int block,
+        List<DpcEntry> secondaryEntries)
+    {
         long cursor = rowsEnd + 8;
-        uint firstCount = ReadUInt32(stream, cursor);
-        cursor = checked(cursor + 4 + (long)firstCount * 16);
-        uint secondCount = ReadUInt32(stream, cursor);
-        cursor = checked(cursor + 4 + (long)secondCount * 4);
-        uint secondaryCount = ReadUInt32(stream, cursor);
-        cursor += 4;
-        if (secondaryCount > MaxRowCount)
+        if (cursor > stream.Length)
         {
-            throw new InvalidDataException($"{name}: resources2 count {secondaryCount} is out of range.");
+            throw new InvalidDataException($"{name}: block {block} resources2 tail is outside the file.");
         }
 
-        byte[] secondaryRows = ReadAt(
-            stream,
-            cursor,
-            checked((int)secondaryCount * SecondaryEntrySize));
-        for (int i = 0; i < secondaryCount; i++)
+        uint ReadCount(string label)
+        {
+            if (cursor + 4 > stream.Length)
+            {
+                throw new InvalidDataException(
+                    $"{name}: block {block} resources2 {label} is outside the file.");
+            }
+
+            uint value = ReadUInt32(stream, cursor);
+            cursor += 4;
+            return value;
+        }
+
+        void Skip(uint count, int size, string label)
+        {
+            long bytes = (long)count * size;
+            if (bytes > stream.Length - cursor)
+            {
+                throw new InvalidDataException(
+                    $"{name}: block {block} resources2 {label} runs past the file.");
+            }
+
+            cursor += bytes;
+        }
+
+        uint firstCount = ReadCount("first count");
+        Skip(firstCount, 16, "first entries");
+        uint secondCount = ReadCount("second count");
+        Skip(secondCount, 4, "second entries");
+        uint count = ReadCount("record count");
+        if (count > MaxRowCount)
+        {
+            throw new InvalidDataException(
+                $"{name}: block {block} resources2 count {count} is out of range.");
+        }
+
+        long recordsAt = cursor;
+        Skip(count, SecondaryEntrySize, "records");
+        byte[] rows = ReadAt(stream, recordsAt, (int)count * SecondaryEntrySize);
+        for (int i = 0; i < count; i++)
         {
             // 45-byte stride; the last byte is unused.
-            secondaryEntries.Add(ParseNormalEntry(secondaryRows, i * SecondaryEntrySize));
+            secondaryEntries.Add(ParseNormalEntry(rows, i * SecondaryEntrySize));
         }
     }
 
@@ -242,7 +281,11 @@ public sealed class DpcArchive
             BinaryPrimitives.ReadUInt16LittleEndian(record[50..]));
     }
 
-    private static void ValidateExtents(IReadOnlyList<DpcEntry> entries, long length, string path)
+    private static void ValidateExtents(
+        IReadOnlyList<DpcEntry> entries,
+        long length,
+        string path,
+        string label)
     {
         string name = System.IO.Path.GetFileName(path);
         for (int i = 0; i < entries.Count; i++)
@@ -252,7 +295,7 @@ public sealed class DpcArchive
             if (end > length)
             {
                 throw new InvalidDataException(
-                    $"{name}: row {i} name 0x{entry.NameHash:X16} ends at {end}, file is {length} bytes.");
+                    $"{name}: {label} {i} name 0x{entry.NameHash:X16} ends at {end}, file is {length} bytes.");
             }
         }
     }

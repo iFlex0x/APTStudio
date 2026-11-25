@@ -51,7 +51,7 @@ public sealed class TextureCatalogTests : IDisposable
         CatalogArchive external = Assert.Single(
             catalog.Archives, archive => archive.IsExternal);
         Assert.Empty(external.Textures);
-        Assert.Equal(1, external.ExternalBitmapRows);
+        Assert.Equal(1, external.ExternalBitmapReferences);
         Assert.Single(catalog.Textures);
     }
 
@@ -97,7 +97,7 @@ public sealed class TextureCatalogTests : IDisposable
 
         CatalogArchive external = Assert.Single(catalog.Archives);
         Assert.True(external.IsExternal);
-        Assert.Equal(2, external.ExternalBitmapRows);
+        Assert.Equal(2, external.ExternalBitmapReferences);
         Assert.Empty(catalog.Textures);
     }
 

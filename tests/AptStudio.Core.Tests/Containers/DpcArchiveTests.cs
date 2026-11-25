@@ -78,6 +78,21 @@ public sealed class DpcArchiveTests : IDisposable
                 secondaryCompressed: 1000))));
 
         Assert.Contains("0x0000000000004444", error.Message);
+        Assert.Contains("resources2 row 0", error.Message);
+    }
+
+    [Fact]
+    public void ReportsTailCountOutsideFile()
+    {
+        byte[] data = BuildNormal(secondaryCount: 1);
+        int rowsEnd = RowsOffset + 2 * DpcArchive.NormalEntrySize;
+        BinaryPrimitives.WriteUInt32LittleEndian(data.AsSpan(rowsEnd + 8), 0x0FFFFFFF);
+
+        InvalidDataException error = Assert.Throws<InvalidDataException>(() =>
+            DpcArchive.Open(WriteFile(data)));
+
+        Assert.Contains("block 0", error.Message);
+        Assert.Contains("resources2 first entries", error.Message);
     }
 
     [Fact]

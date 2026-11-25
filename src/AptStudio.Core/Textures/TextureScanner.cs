@@ -4,7 +4,7 @@ namespace AptStudio.Core.Textures;
 
 public static class TextureScanner
 {
-    // Bump when row selection or header extraction changes; the cache keys on it.
+    // Bump when row selection, block/tail parsing, or header extraction changes; the cache keys on it.
     public const uint ParserVersion = 2;
 
     public static IReadOnlyList<TextureEntry> Scan(DpcArchive archive)
@@ -16,7 +16,7 @@ public static class TextureScanner
 
         using FileStream stream = new(archive.Path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
         List<TextureEntry> textures = new();
-        HashSet<(ulong Name, uint Offset)> seen = new();
+        Dictionary<(ulong Name, uint Offset), uint> seen = new();
         ScanRows(archive.Entries, "row");
         ScanRows(archive.SecondaryEntries, "resources2 row");
         return textures;
@@ -31,12 +31,19 @@ public static class TextureScanner
                     continue;
                 }
 
-                if (!seen.Add((row.NameHash, row.Offset)))
+                string source = $"{Path.GetFileName(archive.Path)} {list} {i} name 0x{row.NameHash:X16}";
+                if (seen.TryGetValue((row.NameHash, row.Offset), out uint compressed))
                 {
+                    if (compressed != row.CompressedSize)
+                    {
+                        throw new InvalidDataException(
+                            $"{source}: duplicate reference is {row.CompressedSize} bytes, first was {compressed}.");
+                    }
+
                     continue;
                 }
 
-                string source = $"{Path.GetFileName(archive.Path)} {list} {i} name 0x{row.NameHash:X16}";
+                seen[(row.NameHash, row.Offset)] = row.CompressedSize;
                 if (row.CompressedSize < BitmapHead.HeaderSize)
                 {
                     throw new InvalidDataException(

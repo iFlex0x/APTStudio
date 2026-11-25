@@ -150,10 +150,10 @@ internal static class Program
             string name = Path.GetFileName(archive.Path);
             if (archive.IsExternal)
             {
-                if (archive.ExternalBitmapRows > 0)
+                if (archive.ExternalBitmapReferences > 0)
                 {
                     Console.WriteLine(
-                        $"{name,-28} {N(archive.ExternalBitmapRows),7} bitmap rows in another archive (not listed)");
+                        $"{name,-28} {N(archive.ExternalBitmapReferences),7} bitmap refs in another archive (not listed)");
                 }
 
                 continue;
@@ -203,9 +203,9 @@ internal static class Program
         int scannedArchives = catalog.Archives.Count(
             item => !item.IsExternal && item.TextureCount > 0 && !item.FromCache);
         int externalArchives = catalog.Archives.Count(item => item.IsExternal);
-        int externalBitmaps = catalog.Archives.Sum(item => item.ExternalBitmapRows);
+        int externalReferences = catalog.Archives.Sum(item => item.ExternalBitmapReferences);
         Console.WriteLine(
-            $"textures: {N(catalog.Textures.Count)}, previewable: {N(catalog.PreviewableCount)}, volumes: {N(volumes)}, unknown codec: {N(unknownCodec)}, external archives: {N(externalArchives)}, external bitmap rows: {N(externalBitmaps)}, cached: {N(cachedArchives)}, scanned: {N(scannedArchives)}, files: {N(catalog.FileCount)}, failed: {N(catalog.Failures.Count)}, {N(watch.ElapsedMilliseconds)} ms");
+            $"textures: {N(catalog.Textures.Count)}, previewable: {N(catalog.PreviewableCount)}, volumes: {N(volumes)}, unknown codec: {N(unknownCodec)}, external archives: {N(externalArchives)}, external bitmap refs: {N(externalReferences)}, cached: {N(cachedArchives)}, scanned: {N(scannedArchives)}, files: {N(catalog.FileCount)}, failed: {N(catalog.Failures.Count)}, {N(watch.ElapsedMilliseconds)} ms");
         foreach (CatalogFailure failure in catalog.Failures)
         {
             Console.Error.WriteLine(failure.Message);

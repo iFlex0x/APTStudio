@@ -8,7 +8,7 @@ public sealed record CatalogArchive(
     bool IsExternal,
     IReadOnlyList<TextureEntry> Textures,
     bool FromCache,
-    int ExternalBitmapRows)
+    int ExternalBitmapReferences)
 {
     public int TextureCount => Textures.Count;
 }
