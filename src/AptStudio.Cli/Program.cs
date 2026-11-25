@@ -2,7 +2,6 @@ using System.Diagnostics;
 using System.Globalization;
 using AptStudio.Core.Containers;
 using AptStudio.Core.Games;
-using AptStudio.Core.Images;
 using AptStudio.Core.Textures;
 
 namespace AptStudio.Cli;
@@ -146,7 +145,6 @@ internal static class Program
         Dictionary<string, int> byFormat = new(StringComparer.Ordinal);
         int volumes = 0;
         int unknownCodec = 0;
-        int textureIndex = 0;
         foreach (CatalogArchive archive in catalog.Archives)
         {
             string name = Path.GetFileName(archive.Path);
@@ -161,10 +159,8 @@ internal static class Program
                 continue;
             }
 
-            // catalog appends textures archive by archive, in this same order.
-            for (int row = 0; row < archive.TextureCount; row++)
+            foreach (TextureEntry texture in archive.Textures)
             {
-                TextureEntry texture = catalog.Textures[textureIndex++];
                 BitmapHead head = texture.Head;
                 string format = head.Format.DisplayName;
                 byFormat[format] = byFormat.GetValueOrDefault(format) + 1;
@@ -210,9 +206,9 @@ internal static class Program
         int externalBitmaps = catalog.Archives.Sum(item => item.ExternalBitmapRows);
         Console.WriteLine(
             $"textures: {N(catalog.Textures.Count)}, previewable: {N(catalog.PreviewableCount)}, volumes: {N(volumes)}, unknown codec: {N(unknownCodec)}, external archives: {N(externalArchives)}, external bitmap rows: {N(externalBitmaps)}, cached: {N(cachedArchives)}, scanned: {N(scannedArchives)}, files: {N(catalog.FileCount)}, failed: {N(catalog.Failures.Count)}, {N(watch.ElapsedMilliseconds)} ms");
-        foreach (string failure in catalog.Failures)
+        foreach (CatalogFailure failure in catalog.Failures)
         {
-            Console.Error.WriteLine(failure);
+            Console.Error.WriteLine(failure.Message);
         }
 
         return catalog.Failures.Count == 0 ? 0 : 2;
@@ -312,19 +308,10 @@ internal static class Program
 
         try
         {
-            using FileStream stream = new(
-                chosen.ArchivePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-            DecodedTexture image = TextureDecoder.DecodeMip0(stream, chosen);
-            byte[] png = PngWriter.EncodeRgba(image.Rgba, image.Width, image.Height);
-            string? directory = Path.GetDirectoryName(Path.GetFullPath(outputPath));
-            if (!string.IsNullOrEmpty(directory))
-            {
-                Directory.CreateDirectory(directory);
-            }
-
-            File.WriteAllBytes(outputPath, png);
+            DecodedTexture image = TextureExport.ExportPng(chosen, outputPath);
+            long bytes = new FileInfo(Path.GetFullPath(outputPath)).Length;
             Console.WriteLine(
-                $"{Path.GetFileName(chosen.ArchivePath)} 0x{name:X16} {image.Width}x{image.Height} {chosen.Head.Format.DisplayName} {N(png.Length)} B -> {outputPath}");
+                $"{Path.GetFileName(chosen.ArchivePath)} 0x{name:X16} {image.Width}x{image.Height} {chosen.Head.Format.DisplayName} {N(bytes)} B -> {outputPath}");
             return 0;
         }
         catch (Exception ex) when (ex is InvalidDataException or IOException

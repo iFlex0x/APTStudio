@@ -79,6 +79,7 @@ public sealed class TextureDecoderTests
 
         DecodedTexture image = TextureDecoder.DecodeMip(new MemoryStream(bytes), texture, 1);
 
+        Assert.Equal(1, image.Mip);
         Assert.Equal(4, image.Width);
         Assert.Equal(4, image.Height);
         Assert.Equal(0, image.Rgba[0]);
@@ -94,6 +95,7 @@ public sealed class TextureDecoderTests
 
         DecodedTexture image = TextureDecoder.DecodeMip(new MemoryStream(bytes), texture, 1);
 
+        Assert.Equal(1, image.Mip);
         Assert.Equal(4, image.Width);
         Assert.Equal(0, image.Rgba[0]);
         Assert.Equal(255, image.Rgba[1]);

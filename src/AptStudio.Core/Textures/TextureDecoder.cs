@@ -5,7 +5,7 @@ using K4os.Compression.LZ4;
 
 namespace AptStudio.Core.Textures;
 
-public sealed record DecodedTexture(int Width, int Height, byte[] Rgba);
+public sealed record DecodedTexture(int Mip, int Width, int Height, byte[] Rgba);
 
 public static class TextureDecoder
 {
@@ -114,17 +114,12 @@ public static class TextureDecoder
             rgba[i * 4 + 3] = pixels[i].a;
         }
 
-        return new DecodedTexture(mipWidth, mipHeight, rgba);
+        return new DecodedTexture(mip, mipWidth, mipHeight, rgba);
     }
 
     private static byte[] ReadChain(Stream stream, TextureEntry texture)
     {
         BitmapHead head = texture.Head;
-        if (head.Storage == BitmapStorage.Raw)
-        {
-            return ReadExactly(stream, texture.PayloadOffset, (int)head.StoredSize, texture);
-        }
-
         byte[] frame = ReadExactly(stream, texture.PayloadOffset, 8, texture);
         uint decompressed = BinaryPrimitives.ReadUInt32LittleEndian(frame);
         uint compressed = BinaryPrimitives.ReadUInt32LittleEndian(frame.AsSpan(4));

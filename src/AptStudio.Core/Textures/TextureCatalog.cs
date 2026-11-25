@@ -6,20 +6,24 @@ namespace AptStudio.Core.Textures;
 public sealed record CatalogArchive(
     string Path,
     bool IsExternal,
-    int TextureCount,
+    IReadOnlyList<TextureEntry> Textures,
     bool FromCache,
-    int ExternalBitmapRows);
+    int ExternalBitmapRows)
+{
+    public int TextureCount => Textures.Count;
+}
+
+public sealed record CatalogFailure(string ArchivePath, string Message);
 
 public sealed record CatalogProgress(int Index, int Total, string ArchivePath);
 
 public sealed record TextureCatalog(
     IReadOnlyList<CatalogArchive> Archives,
     IReadOnlyList<TextureEntry> Textures,
-    IReadOnlyList<string> Failures)
+    IReadOnlyList<CatalogFailure> Failures,
+    int FileCount)
 {
     public int PreviewableCount => Textures.Count(TextureDecoder.CanDecodeMip0);
-
-    public int FileCount => Archives.Count + Failures.Count;
 
     public static TextureCatalog Load(
         GameProfile profile,
@@ -30,22 +34,30 @@ public sealed record TextureCatalog(
     {
         ArgumentNullException.ThrowIfNull(profile);
 
-        string[] files = profile.DataRoots
-            .SelectMany(root => Directory.EnumerateFiles(
-                Path.Combine(profile.Root, root),
-                "*.DPC",
-                SearchOption.TopDirectoryOnly))
-            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
-            .ToArray();
+        List<string> files = new();
+        List<CatalogFailure> failures = new();
+        foreach (string root in profile.DataRoots)
+        {
+            string rootPath = Path.Combine(profile.Root, root);
+            try
+            {
+                files.AddRange(Directory.EnumerateFiles(
+                    rootPath, "*.DPC", SearchOption.TopDirectoryOnly));
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                failures.Add(new CatalogFailure(rootPath, ex.Message));
+            }
+        }
 
-        List<CatalogArchive> archives = new(files.Length);
+        files.Sort(StringComparer.OrdinalIgnoreCase);
+        List<CatalogArchive> archives = new(files.Count);
         List<TextureEntry> textures = new();
-        List<string> failures = new();
-        for (int i = 0; i < files.Length; i++)
+        for (int i = 0; i < files.Count; i++)
         {
             cancellationToken.ThrowIfCancellationRequested();
             string file = files[i];
-            progress?.Report(new CatalogProgress(i + 1, files.Length, file));
+            progress?.Report(new CatalogProgress(i + 1, files.Count, file));
             try
             {
                 DpcArchive archive = DpcArchive.Open(file);
@@ -53,21 +65,22 @@ public sealed record TextureCatalog(
                 {
                     int externalRows = archive.Entries.Count(
                         entry => entry.ClassHash == BitmapHead.ClassHash);
-                    archives.Add(new CatalogArchive(file, true, 0, false, externalRows));
+                    archives.Add(new CatalogArchive(
+                        file, true, Array.Empty<TextureEntry>(), false, externalRows));
                     continue;
                 }
 
                 IReadOnlyList<TextureEntry> found = TextureCache.LoadOrScan(
                     archive, rebuildCache, out bool fromCache, cacheRoot);
-                archives.Add(new CatalogArchive(file, false, found.Count, fromCache, 0));
+                archives.Add(new CatalogArchive(file, false, found, fromCache, 0));
                 textures.AddRange(found);
             }
             catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
             {
-                failures.Add($"{Path.GetFileName(file)}: {ex.Message}");
+                failures.Add(new CatalogFailure(file, ex.Message));
             }
         }
 
-        return new TextureCatalog(archives, textures, failures);
+        return new TextureCatalog(archives, textures, failures, files.Count);
     }
 }

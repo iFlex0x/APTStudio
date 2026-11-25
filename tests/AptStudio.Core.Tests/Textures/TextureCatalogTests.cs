@@ -31,11 +31,11 @@ public sealed class TextureCatalogTests : IDisposable
 
         CatalogArchive archive = Assert.Single(catalog.Archives);
         Assert.False(archive.IsExternal);
-        Assert.Equal(1, archive.TextureCount);
         Assert.False(archive.FromCache);
-        TextureEntry texture = Assert.Single(catalog.Textures);
+        TextureEntry texture = Assert.Single(archive.Textures);
         Assert.Equal(0x1111UL, texture.Head.NameHash);
         Assert.Empty(catalog.Failures);
+        Assert.Equal(1, catalog.FileCount);
         Assert.Equal(1, catalog.PreviewableCount);
     }
 
@@ -50,7 +50,7 @@ public sealed class TextureCatalogTests : IDisposable
 
         CatalogArchive external = Assert.Single(
             catalog.Archives, archive => archive.IsExternal);
-        Assert.Equal(0, external.TextureCount);
+        Assert.Empty(external.Textures);
         Assert.Equal(1, external.ExternalBitmapRows);
         Assert.Single(catalog.Textures);
     }
@@ -70,6 +70,70 @@ public sealed class TextureCatalogTests : IDisposable
     }
 
     [Fact]
+    public void KeepsArchiveAndTextureOrder()
+    {
+        WriteArchive("A.DPC", DpcTestData.Build(name: 0xAAAA));
+        WriteArchive("B.DPC", DpcTestData.Build(name: 0xBBBB));
+
+        TextureCatalog catalog = TextureCatalog.Load(Detect(), cacheRoot: _cacheRoot);
+
+        Assert.Equal(
+            new[] { "A.DPC", "B.DPC" },
+            catalog.Archives.Select(archive => Path.GetFileName(archive.Path)).ToArray());
+        Assert.Equal(
+            new ulong[] { 0xAAAA, 0xBBBB },
+            catalog.Archives.SelectMany(archive => archive.Textures)
+                .Select(texture => texture.Head.NameHash).ToArray());
+        Assert.Equal(
+            new ulong[] { 0xAAAA, 0xBBBB },
+            catalog.Textures.Select(texture => texture.Head.NameHash).ToArray());
+    }
+
+    [Fact]
+    public void ReportsProgressPerArchive()
+    {
+        WriteArchive("A.DPC", DpcTestData.Build(name: 0xAAAA));
+        WriteArchive("B.DPC", DpcTestData.Build(name: 0xBBBB));
+        ListProgress progress = new();
+
+        TextureCatalog.Load(Detect(), cacheRoot: _cacheRoot, progress: progress);
+
+        Assert.Equal(2, progress.Items.Count);
+        Assert.Equal([1, 2], progress.Items.Select(item => item.Index).ToArray());
+        Assert.All(progress.Items, item => Assert.Equal(2, item.Total));
+        Assert.Equal(
+            new[] { "A.DPC", "B.DPC" },
+            progress.Items.Select(item => Path.GetFileName(item.ArchivePath)).ToArray());
+    }
+
+    [Fact]
+    public void ThrowsWhenCancelled()
+    {
+        WriteArchive("SHARED.DPC", DpcTestData.Build());
+        using CancellationTokenSource cancel = new();
+        cancel.Cancel();
+
+        Assert.Throws<OperationCanceledException>(() => TextureCatalog.Load(
+            Detect(), cacheRoot: _cacheRoot, cancellationToken: cancel.Token));
+    }
+
+    [Fact]
+    public void CountsOnlyDecodableRowsAsPreviewable()
+    {
+        WriteArchive("A_BC1.DPC", DpcTestData.Build());
+        WriteArchive("B_BC3.DPC", DpcTestData.Build(key: 0x001D, stored: 16));
+        WriteArchive("C_VOLUME.DPC", DpcTestData.Build(key: 0x0013, kind: BitmapKind.Volume));
+        WriteArchive("D_UNKNOWN.DPC", DpcTestData.Build(key: 0x001E));
+        WriteArchive("E_MULTI.DPC", DpcTestData.Build(stored: 16, surfaces: 2));
+        WriteArchive("F_CUBE.DPC", DpcTestData.Build(stored: 48, kind: BitmapKind.Cube, surfaces: 6));
+
+        TextureCatalog catalog = TextureCatalog.Load(Detect(), cacheRoot: _cacheRoot);
+
+        Assert.Equal(6, catalog.Textures.Count);
+        Assert.Equal(2, catalog.PreviewableCount);
+    }
+
+    [Fact]
     public void KeepsGoodArchivesWhenOneFails()
     {
         WriteArchive("BAD.DPC", new byte[16]);
@@ -77,8 +141,10 @@ public sealed class TextureCatalogTests : IDisposable
 
         TextureCatalog catalog = TextureCatalog.Load(Detect(), cacheRoot: _cacheRoot);
 
-        Assert.Single(catalog.Failures);
-        Assert.Contains("BAD.DPC", catalog.Failures[0]);
+        CatalogFailure failure = Assert.Single(catalog.Failures);
+        Assert.Equal("BAD.DPC", Path.GetFileName(failure.ArchivePath));
+        Assert.Contains("read of", failure.Message);
+        Assert.DoesNotContain("BAD.DPC: BAD.DPC", failure.Message);
         Assert.Single(catalog.Archives);
         Assert.Equal(2, catalog.FileCount);
         Assert.Single(catalog.Textures);
@@ -93,11 +159,13 @@ public sealed class TextureCatalogTests : IDisposable
 
         DecodedTexture image = TextureExport.ExportPng(Assert.Single(catalog.Textures), output);
 
+        Assert.Equal(0, image.Mip);
         Assert.Equal(4, image.Width);
         Assert.Equal(4, image.Height);
         byte[] png = File.ReadAllBytes(output);
         Assert.True(png.Length > 8);
         Assert.Equal<byte[]>([137, 80, 78, 71, 13, 10, 26, 10], png[..8]);
+        Assert.Empty(Directory.GetFiles(Path.GetDirectoryName(output)!, "*.tmp"));
     }
 
     private GameProfile Detect()
@@ -108,4 +176,11 @@ public sealed class TextureCatalogTests : IDisposable
 
     private void WriteArchive(string name, byte[] bytes) =>
         File.WriteAllBytes(Path.Combine(_dataRoot, name), bytes);
+
+    private sealed class ListProgress : IProgress<CatalogProgress>
+    {
+        public List<CatalogProgress> Items { get; } = new();
+
+        public void Report(CatalogProgress value) => Items.Add(value);
+    }
 }
