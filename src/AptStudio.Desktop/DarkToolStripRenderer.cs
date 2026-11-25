@@ -35,7 +35,7 @@ internal sealed class DarkToolStripRenderer : ToolStripProfessionalRenderer
 
     protected override void OnRenderItemText(ToolStripItemTextRenderEventArgs e)
     {
-        e.TextColor = e.Item.Enabled ? Theme.Text : Theme.Muted;
+        e.TextColor = e.Item.Enabled ? e.Item.ForeColor : Theme.Muted;
         base.OnRenderItemText(e);
     }
 

@@ -22,6 +22,7 @@ internal sealed class PreviewControl : Control
     private string? _message = "Open the game folder.";
     private bool _messageIsError;
     private float _scale = 1f;
+    private float _dpiScale = 1f;
     private PointF _origin;
     private bool _fit = true;
     private bool _panning;
@@ -48,7 +49,9 @@ internal sealed class PreviewControl : Control
 
     public bool IsFit => _fit;
 
-    public void SetImage(Bitmap image, bool fit)
+    public bool HasImage => _image is not null;
+
+    public void SetImage(Bitmap image)
     {
         ArgumentNullException.ThrowIfNull(image);
         Bitmap? previous = _image;
@@ -56,17 +59,7 @@ internal sealed class PreviewControl : Control
         _message = null;
         _messageIsError = false;
         previous?.Dispose();
-        if (fit)
-        {
-            Fit();
-        }
-        else
-        {
-            _scale = 1f;
-            Center();
-            _fit = false;
-        }
-
+        Fit();
         Invalidate();
     }
 
@@ -78,7 +71,32 @@ internal sealed class PreviewControl : Control
         _message = text;
         _messageIsError = error;
         _fit = true;
+        _scale = 1f;
+        ZoomChanged?.Invoke(this, EventArgs.Empty);
         Invalidate();
+    }
+
+    internal void SetDpiScale(float scale)
+    {
+        if (scale <= 0f)
+        {
+            return;
+        }
+
+        _dpiScale = scale;
+        _checkerBrush?.Dispose();
+        _checkerBrush = null;
+        _checkerTile?.Dispose();
+        _checkerTile = null;
+        _checkerTileSize = 0;
+        if (_fit)
+        {
+            Fit();
+        }
+        else
+        {
+            Invalidate();
+        }
     }
 
     public void SetChannel(ChannelView view)
@@ -96,7 +114,7 @@ internal sealed class PreviewControl : Control
             return;
         }
 
-        float padding = 16f * DeviceDpi / 96f;
+        float padding = 16f * DeviceDpi / 96f * _dpiScale;
         float scaleX = (ClientSize.Width - padding * 2) / _image.Width;
         float scaleY = (ClientSize.Height - padding * 2) / _image.Height;
         _scale = Math.Clamp(Math.Min(scaleX, scaleY), 0.01f, 16f);
@@ -131,17 +149,12 @@ internal sealed class PreviewControl : Control
         }
     }
 
-    protected override void OnMouseEnter(EventArgs e)
-    {
-        base.OnMouseEnter(e);
-        Focus();
-    }
-
     protected override void OnMouseDown(MouseEventArgs e)
     {
         base.OnMouseDown(e);
         if (e.Button == MouseButtons.Left && _image is not null)
         {
+            Focus();
             _panning = true;
             _panStart = e.Location;
             _panOrigin = _origin;
@@ -287,7 +300,7 @@ internal sealed class PreviewControl : Control
 
     private void DrawCheckerboard(Graphics graphics)
     {
-        int expected = Math.Max(8, 8 * DeviceDpi / 96);
+        int expected = Math.Max(8, (int)Math.Round(8 * DeviceDpi / 96f * _dpiScale));
         if (_checkerBrush is null || _checkerTileSize != expected)
         {
             _checkerBrush?.Dispose();

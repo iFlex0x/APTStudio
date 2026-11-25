@@ -42,7 +42,7 @@ internal sealed class MainForm : Form
     private readonly Button _actualButton = MakeButton("1:1", Theme.Text);
     private readonly Button _clearButton = MakeButton("Clear", Theme.Muted);
     private readonly SplitContainer _split = new();
-    private readonly Font _monoFont = new("Consolas", 9f);
+    private Font _monoFont = new("Consolas", 9f);
     private readonly System.Windows.Forms.Timer _selectionTimer = new() { Interval = 120 };
     private readonly System.Windows.Forms.Timer _filterTimer = new() { Interval = 150 };
 
@@ -58,6 +58,7 @@ internal sealed class MainForm : Form
     private bool _scanning;
     private bool _exporting;
     private bool _screenshotMode;
+    private float _shotScale = 1f;
     private TaskCompletionSource<bool> _previewReady = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private SortColumn _sortColumn = SortColumn.Hash;
     private bool _sortAscending = true;
@@ -71,10 +72,12 @@ internal sealed class MainForm : Form
         BackColor = Theme.Background;
         ForeColor = Theme.Text;
         Font = new Font("Segoe UI", 9f);
+        AutoScaleDimensions = new SizeF(7F, 15F);
         AutoScaleMode = AutoScaleMode.Font;
         KeyPreview = true;
         KeyDown += OnKeyDown;
         FormClosing += OnFormClosing;
+        DpiChanged += (_, _) => OnDpiChanged();
 
         ConfigureGrid();
         ConfigurePreview();
@@ -223,7 +226,7 @@ internal sealed class MainForm : Form
     private Control BuildFilters()
     {
         _filterText.BorderStyle = BorderStyle.FixedSingle;
-        _filterText.Width = 204;
+        _filterText.Width = 240;
         _filterText.BackColor = Theme.Surface;
         _filterText.ForeColor = Theme.Text;
         _filterText.PlaceholderText = "hash, archive, format";
@@ -410,12 +413,13 @@ internal sealed class MainForm : Form
         AddColumn("Size", 100, SortColumn.Size, right: true);
         AddColumn("Mips", 50, SortColumn.Mips, right: true);
         AddColumn("Surf", 50, SortColumn.Surfaces, right: true);
-        AddColumn("Storage", 72, SortColumn.Storage);
+        AddColumn("Storage", 84, SortColumn.Storage);
         AddColumn("Archive", 150, SortColumn.Archive);
 
         _grid.CellValueNeeded += OnCellValueNeeded;
         _grid.SelectionChanged += OnGridSelectionChanged;
         _grid.ColumnHeaderMouseClick += OnColumnHeaderClick;
+        _grid.CellMouseDown += OnCellMouseDown;
         _grid.ContextMenuStrip = BuildGridMenu();
     }
 
@@ -430,6 +434,7 @@ internal sealed class MainForm : Form
             ReadOnly = true,
             Tag = sort,
         };
+        column.HeaderCell.Tag = header;
         if (mono)
         {
             column.DefaultCellStyle.Font = _monoFont;
@@ -476,23 +481,14 @@ internal sealed class MainForm : Form
 
     private void OnShown(object? sender, EventArgs e)
     {
-        _split.Panel1MinSize = 420;
-        _split.Panel2MinSize = 400;
-        int width = _split.ClientSize.Width;
-        int maximum = width - _split.SplitterWidth - _split.Panel2MinSize;
-        if (maximum >= _split.Panel1MinSize)
-        {
-            _split.SplitterDistance = Math.Clamp((int)(width * 0.58), _split.Panel1MinSize, maximum);
-        }
-
+        ConfigureSplit();
+        ScaleGrid();
+        _grid.Focus();
         if (_screenshotMode)
         {
-            _grid.Focus();
             return;
         }
 
-        ScaleGrid();
-        _grid.Focus();
         string? last = Settings.LoadLastGameRoot();
         if (last is not null)
         {
@@ -506,8 +502,8 @@ internal sealed class MainForm : Form
 
     private void ScaleGrid()
     {
-        float scale = DeviceDpi / 96f;
-        int[] widths = [150, 110, 100, 50, 50, 72, 150];
+        float scale = DeviceDpi / 96f * _shotScale;
+        int[] widths = [150, 110, 100, 50, 50, 84, 150];
         for (int i = 0; i < _grid.Columns.Count && i < widths.Length; i++)
         {
             _grid.Columns[i].Width = (int)Math.Round(widths[i] * scale);
@@ -515,6 +511,47 @@ internal sealed class MainForm : Form
 
         _grid.RowTemplate.Height = (int)Math.Round(22 * scale);
         _grid.ColumnHeadersHeight = (int)Math.Round(26 * scale);
+    }
+
+    private void ConfigureSplit()
+    {
+        float scale = DeviceDpi / 96f;
+        _split.Panel1MinSize = (int)Math.Round(420 * scale);
+        _split.Panel2MinSize = (int)Math.Round(400 * scale);
+        int width = _split.ClientSize.Width;
+        int maximum = width - _split.SplitterWidth - _split.Panel2MinSize;
+        if (maximum >= _split.Panel1MinSize)
+        {
+            _split.SplitterDistance = Math.Clamp((int)(width * 0.58), _split.Panel1MinSize, maximum);
+        }
+    }
+
+    private void OnDpiChanged()
+    {
+        ConfigureSplit();
+        ScaleGrid();
+        if (_entries.Count > 0 && !_scanning)
+        {
+            ApplyFilter(false);
+        }
+    }
+
+    private void OnCellMouseDown(object? sender, DataGridViewCellMouseEventArgs e)
+    {
+        if (e.Button != MouseButtons.Right || e.RowIndex < 0)
+        {
+            return;
+        }
+
+        DataGridViewRow row = _grid.Rows[e.RowIndex];
+        if (!row.Selected)
+        {
+            _grid.ClearSelection();
+            row.Selected = true;
+        }
+
+        int column = Math.Clamp(e.ColumnIndex, 0, _grid.Columns.Count - 1);
+        _grid.CurrentCell = row.Cells[column];
     }
 
     private void OnGridSelectionChanged(object? sender, EventArgs e)
@@ -560,9 +597,11 @@ internal sealed class MainForm : Form
                 continue;
             }
 
-            column.HeaderCell.SortGlyphDirection = sort == _sortColumn
-                ? _sortAscending ? SortOrder.Ascending : SortOrder.Descending
-                : SortOrder.None;
+            string header = column.HeaderCell.Tag as string ?? column.HeaderText;
+            column.HeaderText = sort == _sortColumn
+                ? $"{header} {(_sortAscending ? "▲" : "▼")}"
+                : header;
+            column.HeaderCell.SortGlyphDirection = SortOrder.None;
         }
     }
 
@@ -724,6 +763,10 @@ internal sealed class MainForm : Form
         else
         {
             _grid.ClearSelection();
+            CancelPreview();
+            _selectionTimer.Stop();
+            _selectionLabel.Text = "0 selected";
+            UpdateExportEnabled();
             _preview.ShowMessage(
                 _entries.Count == 0 ? "No textures in this game folder." : "Select a texture.",
                 false);
@@ -765,13 +808,15 @@ internal sealed class MainForm : Form
 
     private TextureEntry? SelectedEntry()
     {
-        if (_grid.SelectedRows.Count == 0)
+        DataGridViewRow? row = _grid.CurrentRow;
+        if (row is null || !row.Selected)
         {
-            return null;
+            row = _grid.SelectedRows.Count > 0 ? _grid.SelectedRows[0] : null;
         }
 
-        int row = _grid.SelectedRows[0].Index;
-        return row >= 0 && row < _view.Length ? _entries[_view[row]] : null;
+        return row is not null && row.Index >= 0 && row.Index < _view.Length
+            ? _entries[_view[row.Index]]
+            : null;
     }
 
     private List<TextureEntry> SelectedEntries() =>
@@ -787,6 +832,10 @@ internal sealed class MainForm : Form
         TextureEntry? entry = SelectedEntry();
         if (entry is null)
         {
+            CancelPreview();
+            _selectionTimer.Stop();
+            _selectionLabel.Text = "0 selected";
+            UpdateExportEnabled();
             _preview.ShowMessage("Select a texture.", false);
             _infoLabel.Text = "";
             return;
@@ -827,11 +876,9 @@ internal sealed class MainForm : Form
 
     private async Task DecodePreviewAsync(TextureEntry entry, int mip)
     {
-        _previewCancel?.Cancel();
-        _previewCancel?.Dispose();
+        CancelPreview();
         CancellationTokenSource cancel = new();
         _previewCancel = cancel;
-        _preview.ShowMessage($"Loading 0x{entry.Head.NameHash:X16}...", false);
         _infoLabel.Text = $"{entry.Head.Format.DisplayName} | {Path.GetFileName(entry.ArchivePath)}";
 
         try
@@ -841,16 +888,16 @@ internal sealed class MainForm : Form
                 using FileStream stream = new(
                     entry.ArchivePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
                 DecodedTexture image = TextureDecoder.DecodeMip(stream, entry, mip);
-                return (ToBitmap(image), image.Width, image.Height);
+                return (PreviewBitmap.Create(image), image.Width, image.Height);
             }, cancel.Token);
 
-            if (cancel != _previewCancel)
+            if (IsDisposed || cancel != _previewCancel)
             {
                 result.Bitmap.Dispose();
                 return;
             }
 
-            _preview.SetImage(result.Bitmap, fit: true);
+            _preview.SetImage(result.Bitmap);
             _infoLabel.Text =
                 $"Mip {mip} | {result.Width:N0}x{result.Height:N0} | {entry.Head.MipCount} mips | {entry.Head.Format.DisplayName} | {Path.GetFileName(entry.ArchivePath)}";
             _previewReady.TrySetResult(true);
@@ -861,7 +908,7 @@ internal sealed class MainForm : Form
         catch (Exception ex) when (ex is InvalidDataException or NotSupportedException
             or IOException or UnauthorizedAccessException)
         {
-            if (cancel == _previewCancel)
+            if (!IsDisposed && cancel == _previewCancel)
             {
                 _preview.ShowMessage(ex.Message, true);
                 _infoLabel.Text = $"{entry.Head.Format.DisplayName} | {Path.GetFileName(entry.ArchivePath)}";
@@ -870,30 +917,11 @@ internal sealed class MainForm : Form
         }
     }
 
-    private static Bitmap ToBitmap(DecodedTexture image)
+    private void CancelPreview()
     {
-        Bitmap bitmap = new(image.Width, image.Height, PixelFormat.Format32bppArgb);
-        BitmapData data = bitmap.LockBits(
-            new Rectangle(0, 0, image.Width, image.Height),
-            ImageLockMode.WriteOnly,
-            PixelFormat.Format32bppArgb);
-        try
-        {
-            for (int y = 0; y < image.Height; y++)
-            {
-                Marshal.Copy(
-                    image.Rgba,
-                    y * image.Width * 4,
-                    data.Scan0 + y * data.Stride,
-                    image.Width * 4);
-            }
-        }
-        finally
-        {
-            bitmap.UnlockBits(data);
-        }
-
-        return bitmap;
+        _previewCancel?.Cancel();
+        _previewCancel?.Dispose();
+        _previewCancel = null;
     }
 
     private async Task ExportSelectedAsync()
@@ -931,6 +959,17 @@ internal sealed class MainForm : Form
 
     private async Task ExportEntriesAsync(List<TextureEntry> entries, string folder)
     {
+        if (entries.Count == 0)
+        {
+            return;
+        }
+
+        if (IsInsideGameFolder(folder))
+        {
+            _statusLabel.Text = "Pick an export folder outside the game folder.";
+            return;
+        }
+
         _exporting = true;
         _exportButton.Enabled = false;
         _cancelButton.Visible = true;
@@ -942,7 +981,7 @@ internal sealed class MainForm : Form
         _statusLabel.ToolTipText = "";
         IProgress<int> progress = new Progress<int>(value =>
         {
-            if (_exporting)
+            if (!IsDisposed && _exporting)
             {
                 _statusLabel.Text = $"Exporting {value:N0}/{entries.Count:N0}";
             }
@@ -957,7 +996,8 @@ internal sealed class MainForm : Form
                 foreach (TextureEntry entry in entries)
                 {
                     cancel.Token.ThrowIfCancellationRequested();
-                    string name = UniqueName(folder, entry, used);
+                    string name = ExportNames.Unique(
+                        folder, entry.ArchivePath, entry.Head.NameHash, used);
                     string path = Path.Combine(folder, name);
                     try
                     {
@@ -974,6 +1014,11 @@ internal sealed class MainForm : Form
                 }
             }, cancel.Token);
 
+            if (IsDisposed)
+            {
+                return;
+            }
+
             _statusLabel.Text = failures.Count == 0
                 ? $"Exported {completed:N0} textures -> {folder}"
                 : $"Exported {completed - failures.Count:N0}, failed {failures.Count:N0} -> {folder}";
@@ -985,7 +1030,10 @@ internal sealed class MainForm : Form
         }
         catch (OperationCanceledException)
         {
-            _statusLabel.Text = $"Export cancelled after {completed:N0} of {entries.Count:N0}";
+            if (!IsDisposed)
+            {
+                _statusLabel.Text = $"Export cancelled after {completed:N0} of {entries.Count:N0}";
+            }
         }
         finally
         {
@@ -996,24 +1044,16 @@ internal sealed class MainForm : Form
 
             cancel.Dispose();
             _exporting = false;
-            _cancelButton.Visible = false;
-            UpdateExportEnabled();
+            if (!IsDisposed)
+            {
+                _cancelButton.Visible = false;
+                UpdateExportEnabled();
+            }
         }
     }
 
-    private static string UniqueName(string folder, TextureEntry entry, HashSet<string> used)
-    {
-        string stem = $"{Path.GetFileNameWithoutExtension(entry.ArchivePath)}_{entry.Head.NameHash:X16}";
-        string name = stem + ".png";
-        int suffix = 2;
-        while (used.Contains(name) || File.Exists(Path.Combine(folder, name)))
-        {
-            name = $"{stem}_{suffix++}.png";
-        }
-
-        used.Add(name);
-        return name;
-    }
+    private bool IsInsideGameFolder(string folder) =>
+        _profile is not null && GameFolderGuard.IsInside(_profile.Root, folder);
 
     private void CopyHash()
     {
@@ -1026,9 +1066,11 @@ internal sealed class MainForm : Form
         try
         {
             Clipboard.SetText(entry.Head.NameHash.ToString("X16"));
+            _statusLabel.Text = $"Copied 0x{entry.Head.NameHash:X16}.";
         }
         catch (ExternalException)
         {
+            _statusLabel.Text = "Clipboard is busy. Try again.";
         }
     }
 
@@ -1054,7 +1096,7 @@ internal sealed class MainForm : Form
 
     private void Rescan()
     {
-        if (_profile is not null && !_scanning)
+        if (_profile is not null && !_scanning && !_exporting)
         {
             _ = LoadGameAsync(_profile.Root, rebuild: true);
         }
@@ -1073,17 +1115,13 @@ internal sealed class MainForm : Form
         _scanCancel?.Dispose();
         CancellationTokenSource cancel = new();
         _scanCancel = cancel;
-        _profile = profile;
-        _pathLabel.Text = profile.Root;
-        Text = $"APTStudio - {profile.Kind}";
-        Settings.SaveLastGameRoot(profile.Root);
         SetScanning(true);
         _statusLabel.Text = rebuild ? "Rebuilding index..." : "Scanning...";
         _statusLabel.ToolTipText = "";
         Stopwatch watch = Stopwatch.StartNew();
         IProgress<CatalogProgress> progress = new Progress<CatalogProgress>(item =>
         {
-            if (cancel == _scanCancel)
+            if (!IsDisposed && cancel == _scanCancel)
             {
                 _statusLabel.Text =
                     $"Scanning {Path.GetFileName(item.ArchivePath)} {item.Index}/{item.Total}";
@@ -1095,12 +1133,20 @@ internal sealed class MainForm : Form
             TextureCatalog catalog = await Task.Run(
                 () => TextureCatalog.Load(profile, rebuild, null, progress, cancel.Token),
                 cancel.Token);
-            if (cancel != _scanCancel)
+            if (IsDisposed || cancel != _scanCancel)
             {
                 return;
             }
 
             watch.Stop();
+            _profile = profile;
+            _pathLabel.Text = profile.Root;
+            Text = $"APTStudio - {profile.Kind}";
+            if (!_screenshotMode)
+            {
+                Settings.SaveLastGameRoot(profile.Root);
+            }
+
             _entries = catalog.Textures;
             RebuildOptions(catalog);
             SetScanning(false);
@@ -1121,7 +1167,7 @@ internal sealed class MainForm : Form
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            if (cancel == _scanCancel)
+            if (!IsDisposed && cancel == _scanCancel)
             {
                 _statusLabel.Text = ex.Message;
             }
@@ -1130,7 +1176,7 @@ internal sealed class MainForm : Form
         }
         finally
         {
-            if (cancel == _scanCancel)
+            if (!IsDisposed && cancel == _scanCancel)
             {
                 SetScanning(false);
             }
@@ -1197,7 +1243,7 @@ internal sealed class MainForm : Form
 
     private void UpdateZoomLabel()
     {
-        _zoomLabel.Text = $"{_preview.Zoom * 100f:0}%";
+        _zoomLabel.Text = _preview.HasImage ? $"{_preview.Zoom * 100f:0}%" : "";
         _fitButton.ForeColor = _preview.IsFit ? Theme.Accent : Theme.Text;
         _actualButton.ForeColor = _preview.IsFit ? Theme.Text : Theme.Accent;
     }
@@ -1206,13 +1252,21 @@ internal sealed class MainForm : Form
     {
         if (e.Control && e.KeyCode == Keys.O)
         {
-            OpenGameFolder();
+            if (!_scanning && !_exporting)
+            {
+                OpenGameFolder();
+            }
+
             e.Handled = true;
             e.SuppressKeyPress = true;
         }
         else if (e.Control && e.KeyCode == Keys.E)
         {
-            _ = ExportSelectedAsync();
+            if (!_scanning && !_exporting)
+            {
+                _ = ExportSelectedAsync();
+            }
+
             e.Handled = true;
             e.SuppressKeyPress = true;
         }
@@ -1232,8 +1286,12 @@ internal sealed class MainForm : Form
     private void OnFormClosing(object? sender, FormClosingEventArgs e)
     {
         _scanCancel?.Cancel();
-        _previewCancel?.Cancel();
+        _scanCancel?.Dispose();
+        _scanCancel = null;
+        CancelPreview();
         _exportCancel?.Cancel();
+        _exportCancel?.Dispose();
+        _exportCancel = null;
     }
 
     private static string N(long value) =>
@@ -1256,10 +1314,19 @@ internal sealed class MainForm : Form
             return;
         }
 
+        _shotScale = scale;
         Scale(new SizeF(scale, scale));
-        _filterText.Width = (int)Math.Round(204 * scale);
+        Font = new Font(Font.FontFamily, 9f * scale);
+        _monoFont.Dispose();
+        _monoFont = new Font("Consolas", 9f * scale);
+        _grid.Columns[0].DefaultCellStyle.Font = _monoFont;
+        Font? header = _grid.ColumnHeadersDefaultCellStyle.Font;
+        _grid.ColumnHeadersDefaultCellStyle.Font = new Font("Segoe UI Semibold", 9f * scale);
+        header?.Dispose();
+        _filterText.Width = (int)Math.Round(240 * scale);
         _filterText.Font = _grid.Font;
         _preview.Font = _grid.Font;
+        _preview.SetDpiScale(scale);
         _infoLabel.Font = _grid.Font;
         _zoomLabel.Font = _grid.Font;
         _statusLabel.Font = _grid.Font;
@@ -1343,12 +1410,22 @@ internal sealed class MainForm : Form
 
     internal Task ExportForShotAsync(string folder, int count)
     {
-        int take = count <= 0 ? _view.Length : Math.Min(count, _view.Length);
-        List<TextureEntry> entries = _view
-            .Take(take)
-            .Select(index => _entries[index])
-            .ToList();
-        return ExportEntriesAsync(entries, folder);
+        if (count <= 0 || _view.Length == 0)
+        {
+            return Task.CompletedTask;
+        }
+
+        int take = Math.Min(count, _view.Length);
+        _grid.ClearSelection();
+        for (int i = 0; i < take; i++)
+        {
+            _grid.Rows[i].Selected = true;
+        }
+
+        _grid.CurrentCell = _grid.Rows[0].Cells[0];
+        _selectionTimer.Stop();
+        _ = PreviewSelectionAsync(keepMip: false);
+        return ExportEntriesAsync(SelectedEntries(), folder);
     }
 
     internal string StatusText => _statusLabel.Text ?? string.Empty;

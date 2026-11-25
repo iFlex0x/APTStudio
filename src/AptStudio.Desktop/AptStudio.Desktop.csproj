@@ -11,4 +11,8 @@
     <ProjectReference Include="..\AptStudio.Core\AptStudio.Core.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="AptStudio.Desktop.Tests" />
+  </ItemGroup>
+
 </Project>

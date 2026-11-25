@@ -40,7 +40,7 @@ internal static class Settings
         {
             string path = FilePath;
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            string temp = path + ".tmp";
+            string temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
             File.WriteAllText(temp, JsonSerializer.Serialize(
                 new Dictionary<string, string> { [LastGameRootKey] = root }));
             File.Move(temp, path, overwrite: true);

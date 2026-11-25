@@ -129,10 +129,19 @@ internal static class ScreenshotMode
 
                 if (exportFolder is not null)
                 {
-                    Directory.CreateDirectory(exportFolder);
-                    await form.ExportForShotAsync(exportFolder, count);
-                    File.WriteAllText(
-                        output + ".export.txt", form.StatusText + Environment.NewLine);
+                    if (count <= 0)
+                    {
+                        File.WriteAllText(
+                            output + ".export.txt",
+                            "export skipped: --count must be positive" + Environment.NewLine);
+                    }
+                    else
+                    {
+                        Directory.CreateDirectory(exportFolder);
+                        await form.ExportForShotAsync(exportFolder, count);
+                        File.WriteAllText(
+                            output + ".export.txt", form.StatusText + Environment.NewLine);
+                    }
                 }
 
                 await Task.Delay(300);
