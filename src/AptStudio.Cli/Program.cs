@@ -247,7 +247,12 @@ internal static class Program
                 matches.AddRange(TextureScanner.Scan(archive)
                     .Where(texture => texture.Head.NameHash == name));
             }
-            catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
+            catch (InvalidDataException ex)
+            {
+                failedArchives++;
+                Console.Error.WriteLine(ex.Message);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
                 failedArchives++;
                 Console.Error.WriteLine($"{archiveName}: {ex.Message}");
