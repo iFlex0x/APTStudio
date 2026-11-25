@@ -14,6 +14,7 @@ public sealed class DpcArchive
     public const string SupportedVersion = "v2.128.58.19";
     public const int SectorSize = 32;
     public const int NormalEntrySize = 44;
+    public const int SecondaryEntrySize = 45;
     public const int CommonEntrySize = 68;
 
     private const int BannerLength = 64;
@@ -29,6 +30,7 @@ public sealed class DpcArchive
         DateTime lastWriteTimeUtc,
         DpcHeader header,
         IReadOnlyList<DpcEntry> entries,
+        IReadOnlyList<DpcEntry> secondaryEntries,
         BodyLocation bodyLocation)
     {
         Path = path;
@@ -36,6 +38,7 @@ public sealed class DpcArchive
         LastWriteTimeUtc = lastWriteTimeUtc;
         Header = header;
         Entries = entries;
+        SecondaryEntries = secondaryEntries;
         BodyLocation = bodyLocation;
     }
 
@@ -48,6 +51,8 @@ public sealed class DpcArchive
     public DpcHeader Header { get; }
 
     public IReadOnlyList<DpcEntry> Entries { get; }
+
+    public IReadOnlyList<DpcEntry> SecondaryEntries { get; }
 
     public BodyLocation BodyLocation { get; }
 
@@ -69,9 +74,10 @@ public sealed class DpcArchive
         }
 
         DpcHeader header = DpcHeader.Parse(ReadAt(stream, DpcHeader.Offset, DpcHeader.Size));
+        List<DpcEntry> secondaryEntries = new();
         List<DpcEntry> entries = header.Kind switch
         {
-            DpcKind.Rtc or DpcKind.Normal => ReadNormalEntries(stream, header),
+            DpcKind.Rtc or DpcKind.Normal => ReadNormalEntries(stream, header, secondaryEntries),
             DpcKind.Common => ReadCommonEntries(stream, header),
             _ => throw new InvalidDataException($"{System.IO.Path.GetFileName(fullPath)}: unknown type {header.KindRaw}."),
         };
@@ -81,13 +87,18 @@ public sealed class DpcArchive
         BodyLocation bodyLocation = ownsBodies ? BodyLocation.Local : BodyLocation.External;
         if (ownsBodies)
         {
-            ValidateExtents(entries, length, fullPath);
+            ValidateExtents(entries, length, fullPath, "row");
+            ValidateExtents(secondaryEntries, length, fullPath, "resources2 row");
         }
 
-        return new DpcArchive(fullPath, length, lastWriteTimeUtc, header, entries, bodyLocation);
+        return new DpcArchive(
+            fullPath, length, lastWriteTimeUtc, header, entries, secondaryEntries, bodyLocation);
     }
 
-    private static List<DpcEntry> ReadNormalEntries(FileStream stream, DpcHeader header)
+    private static List<DpcEntry> ReadNormalEntries(
+        FileStream stream,
+        DpcHeader header,
+        List<DpcEntry> secondaryEntries)
     {
         string name = System.IO.Path.GetFileName(stream.Name);
         if (header.BlockDescriptionOffset == 0)
@@ -112,13 +123,19 @@ public sealed class DpcArchive
                 throw new InvalidDataException($"{name}: block {i} has no resource map.");
             }
 
-            ReadResources(stream, (long)mapOffset * SectorSize, entries, name);
+            ReadResources(stream, (long)mapOffset * SectorSize, entries, secondaryEntries, name, i);
         }
 
         return entries;
     }
 
-    private static void ReadResources(FileStream stream, long mapOffset, List<DpcEntry> entries, string name)
+    private static void ReadResources(
+        FileStream stream,
+        long mapOffset,
+        List<DpcEntry> entries,
+        List<DpcEntry> secondaryEntries,
+        string name,
+        int block)
     {
         byte[] prefix = ReadAt(stream, mapOffset, MapPrefixSize);
         uint dataCount = BinaryPrimitives.ReadUInt32LittleEndian(prefix);
@@ -138,6 +155,68 @@ public sealed class DpcArchive
         for (int i = 0; i < rowCount; i++)
         {
             entries.Add(ParseNormalEntry(rows, i * NormalEntrySize));
+        }
+
+        long rowsEnd = countOffset + 4 + (long)rowCount * NormalEntrySize;
+        ReadSecondaryEntries(stream, rowsEnd, name, block, secondaryEntries);
+    }
+
+    private static void ReadSecondaryEntries(
+        FileStream stream,
+        long rowsEnd,
+        string name,
+        int block,
+        List<DpcEntry> secondaryEntries)
+    {
+        long cursor = rowsEnd + 8;
+        if (cursor > stream.Length)
+        {
+            throw new InvalidDataException($"{name}: block {block} resources2 tail is outside the file.");
+        }
+
+        uint ReadCount(string label)
+        {
+            if (cursor + 4 > stream.Length)
+            {
+                throw new InvalidDataException(
+                    $"{name}: block {block} resources2 {label} is outside the file.");
+            }
+
+            uint value = ReadUInt32(stream, cursor);
+            cursor += 4;
+            return value;
+        }
+
+        void Skip(uint count, int size, string label)
+        {
+            long bytes = (long)count * size;
+            if (bytes > stream.Length - cursor)
+            {
+                throw new InvalidDataException(
+                    $"{name}: block {block} resources2 {label} runs past the file.");
+            }
+
+            cursor += bytes;
+        }
+
+        uint firstCount = ReadCount("first count");
+        Skip(firstCount, 16, "first entries");
+        uint secondCount = ReadCount("second count");
+        Skip(secondCount, 4, "second entries");
+        uint count = ReadCount("record count");
+        if (count > MaxRowCount)
+        {
+            throw new InvalidDataException(
+                $"{name}: block {block} resources2 count {count} is out of range.");
+        }
+
+        long recordsAt = cursor;
+        Skip(count, SecondaryEntrySize, "records");
+        byte[] rows = ReadAt(stream, recordsAt, (int)count * SecondaryEntrySize);
+        for (int i = 0; i < count; i++)
+        {
+            // 45-byte stride; the last byte is unused.
+            secondaryEntries.Add(ParseNormalEntry(rows, i * SecondaryEntrySize));
         }
     }
 
@@ -202,7 +281,11 @@ public sealed class DpcArchive
             BinaryPrimitives.ReadUInt16LittleEndian(record[50..]));
     }
 
-    private static void ValidateExtents(IReadOnlyList<DpcEntry> entries, long length, string path)
+    private static void ValidateExtents(
+        IReadOnlyList<DpcEntry> entries,
+        long length,
+        string path,
+        string label)
     {
         string name = System.IO.Path.GetFileName(path);
         for (int i = 0; i < entries.Count; i++)
@@ -212,7 +295,7 @@ public sealed class DpcArchive
             if (end > length)
             {
                 throw new InvalidDataException(
-                    $"{name}: row {i} name 0x{entry.NameHash:X16} ends at {end}, file is {length} bytes.");
+                    $"{name}: {label} {i} name 0x{entry.NameHash:X16} ends at {end}, file is {length} bytes.");
             }
         }
     }

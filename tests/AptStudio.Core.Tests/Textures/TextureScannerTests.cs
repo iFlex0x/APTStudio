@@ -41,6 +41,65 @@ public sealed class TextureScannerTests : IDisposable
     }
 
     [Fact]
+    public void ScansSecondaryBitmapRow()
+    {
+        DpcArchive archive = DpcArchive.Open(WriteFile(DpcTestData.Build(
+            secondaryCount: 1,
+            secondaryName: 0x2222,
+            secondaryOffset: 310)));
+
+        IReadOnlyList<TextureEntry> textures = TextureScanner.Scan(archive);
+
+        Assert.Equal(2, textures.Count);
+        TextureEntry secondary = Assert.Single(textures, texture => texture.Head.NameHash == 0x2222);
+        Assert.Equal(4, secondary.Head.Width);
+        Assert.Equal(4, secondary.Head.Height);
+        Assert.Equal(DpcTestData.SecondaryBodyOffset, secondary.Row.BodyOffset);
+        Assert.Equal(DpcTestData.SecondaryBodyOffset + BitmapHead.HeaderSize, secondary.PayloadOffset);
+    }
+
+    [Fact]
+    public void SkipsRepeatedSecondaryReference()
+    {
+        DpcArchive archive = DpcArchive.Open(WriteFile(DpcTestData.Build(
+            secondaryCount: 2,
+            secondaryName: 0x1111,
+            secondaryOffset: 300)));
+
+        TextureEntry texture = Assert.Single(TextureScanner.Scan(archive));
+
+        Assert.Equal(0x1111UL, texture.Head.NameHash);
+    }
+
+    [Fact]
+    public void ScansEveryBlockAndCollapsesDuplicates()
+    {
+        DpcArchive archive = DpcArchive.Open(WriteFile(DpcTestData.BuildTwoBlocks()));
+
+        Assert.Equal(2, archive.Entries.Count);
+        Assert.Equal(3, archive.SecondaryEntries.Count);
+        IReadOnlyList<TextureEntry> textures = TextureScanner.Scan(archive);
+        Assert.Equal(4, textures.Count);
+        Assert.Single(textures, texture => texture.Head.NameHash == 0x1111);
+        Assert.Contains(textures, texture => texture.Head.NameHash == 0x2222);
+        Assert.Contains(textures, texture => texture.Head.NameHash == 0x3333);
+        Assert.Contains(textures, texture => texture.Head.NameHash == 0x4444);
+    }
+
+    [Fact]
+    public void RejectsConflictingDuplicateReference()
+    {
+        DpcArchive archive = DpcArchive.Open(WriteFile(DpcTestData.BuildTwoBlocks(
+            duplicateCompressed: DpcTestData.BlockBodySize + 1)));
+
+        InvalidDataException error = Assert.Throws<InvalidDataException>(() =>
+            TextureScanner.Scan(archive));
+
+        Assert.Contains("duplicate reference", error.Message);
+        Assert.Contains("0x0000000000001111", error.Message);
+    }
+
+    [Fact]
     public void RejectsShortRow()
     {
         DpcArchive archive = DpcArchive.Open(WriteFile(DpcTestData.Build(rowSize: 100)));

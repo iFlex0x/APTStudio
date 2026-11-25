@@ -67,7 +67,7 @@ internal static class Program
                 DpcArchive archive = DpcArchive.Open(file);
                 parsed.Add((file, archive));
                 Console.WriteLine(
-                    $"{Path.GetFileName(file),-28} {archive.Header.Kind,-7} {N(archive.Entries.Count),7} rows  {archive.BodyLocation,-8} {N(archive.Length),14} B");
+                    $"{Path.GetFileName(file),-28} {archive.Header.Kind,-7} {N(archive.Entries.Count),7} + {N(archive.SecondaryEntries.Count),6} rows  {archive.BodyLocation,-8} {N(archive.Length),14} B");
             }
             catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
             {
@@ -92,7 +92,7 @@ internal static class Program
                     continue;
                 }
 
-                foreach (DpcEntry entry in archive.Entries)
+                foreach (DpcEntry entry in archive.Entries.Concat(archive.SecondaryEntries))
                 {
                     external++;
                     if (entry.BodyOffset + entry.CompressedSize > common.Length)
@@ -150,10 +150,10 @@ internal static class Program
             string name = Path.GetFileName(archive.Path);
             if (archive.IsExternal)
             {
-                if (archive.ExternalBitmapRows > 0)
+                if (archive.ExternalBitmapReferences > 0)
                 {
                     Console.WriteLine(
-                        $"{name,-28} {N(archive.ExternalBitmapRows),7} bitmap rows in another archive (not listed)");
+                        $"{name,-28} {N(archive.ExternalBitmapReferences),7} bitmap refs in another archive (not listed)");
                 }
 
                 continue;
@@ -203,9 +203,9 @@ internal static class Program
         int scannedArchives = catalog.Archives.Count(
             item => !item.IsExternal && item.TextureCount > 0 && !item.FromCache);
         int externalArchives = catalog.Archives.Count(item => item.IsExternal);
-        int externalBitmaps = catalog.Archives.Sum(item => item.ExternalBitmapRows);
+        int externalReferences = catalog.Archives.Sum(item => item.ExternalBitmapReferences);
         Console.WriteLine(
-            $"textures: {N(catalog.Textures.Count)}, previewable: {N(catalog.PreviewableCount)}, volumes: {N(volumes)}, unknown codec: {N(unknownCodec)}, external archives: {N(externalArchives)}, external bitmap rows: {N(externalBitmaps)}, cached: {N(cachedArchives)}, scanned: {N(scannedArchives)}, files: {N(catalog.FileCount)}, failed: {N(catalog.Failures.Count)}, {N(watch.ElapsedMilliseconds)} ms");
+            $"textures: {N(catalog.Textures.Count)}, previewable: {N(catalog.PreviewableCount)}, volumes: {N(volumes)}, unknown codec: {N(unknownCodec)}, external archives: {N(externalArchives)}, external bitmap refs: {N(externalReferences)}, cached: {N(cachedArchives)}, scanned: {N(scannedArchives)}, files: {N(catalog.FileCount)}, failed: {N(catalog.Failures.Count)}, {N(watch.ElapsedMilliseconds)} ms");
         foreach (CatalogFailure failure in catalog.Failures)
         {
             Console.Error.WriteLine(failure.Message);
@@ -241,7 +241,7 @@ internal static class Program
                 DpcArchive archive = DpcArchive.Open(file);
                 if (archive.BodyLocation != BodyLocation.Local)
                 {
-                    if (archive.Entries.Any(entry =>
+                    if (archive.Entries.Concat(archive.SecondaryEntries).Any(entry =>
                         entry.ClassHash == BitmapHead.ClassHash && entry.NameHash == name))
                     {
                         externalMatch ??= archiveName;
@@ -339,7 +339,7 @@ internal static class Program
                 .SelectMany(root => Directory.EnumerateFiles(
                     Path.Combine(profile.Root, root),
                     "*.DPC",
-                    SearchOption.TopDirectoryOnly))
+                    SearchOption.AllDirectories))
                 .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
                 .ToArray();
             return true;
