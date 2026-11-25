@@ -32,6 +32,12 @@ public static class TextureScanner
             stream.Seek(row.BodyOffset, SeekOrigin.Begin);
             stream.ReadExactly(header);
             BitmapHead head = BitmapHead.Parse(header, source);
+            if (head.NameHash != row.NameHash)
+            {
+                throw new InvalidDataException(
+                    $"{source}: body name 0x{head.NameHash:X16} != row name 0x{row.NameHash:X16}.");
+            }
+
             long payloadEnd = row.BodyOffset + head.PayloadOffset
                 + (head.Storage == BitmapStorage.Raw ? head.BodySize : head.CompressedSize);
             long rowEnd = row.BodyOffset + row.CompressedSize;
