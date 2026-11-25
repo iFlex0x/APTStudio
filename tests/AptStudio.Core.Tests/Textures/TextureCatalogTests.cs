@@ -56,6 +56,71 @@ public sealed class TextureCatalogTests : IDisposable
     }
 
     [Fact]
+    public void LoadsSecondaryRows()
+    {
+        WriteArchive("SHARED.DPC", DpcTestData.Build(
+            secondaryCount: 1,
+            secondaryName: 0x2222,
+            secondaryOffset: 310));
+
+        TextureCatalog catalog = TextureCatalog.Load(Detect(), cacheRoot: _cacheRoot);
+
+        Assert.Equal(2, catalog.Textures.Count);
+        Assert.Contains(catalog.Textures, texture => texture.Head.NameHash == 0x2222);
+        Assert.Empty(catalog.Failures);
+    }
+
+    [Fact]
+    public void IndexesLevelSubfolders()
+    {
+        string level = Path.Combine(_root, "LEVELS", "GREECE");
+        Directory.CreateDirectory(level);
+        File.WriteAllBytes(Path.Combine(level, "GREECE.DPC"), DpcTestData.Build(name: 0x3333));
+
+        TextureCatalog catalog = TextureCatalog.Load(Detect(), cacheRoot: _cacheRoot);
+
+        CatalogArchive archive = Assert.Single(catalog.Archives);
+        Assert.Equal("GREECE.DPC", Path.GetFileName(archive.Path));
+        Assert.Equal(0x3333UL, Assert.Single(catalog.Textures).Head.NameHash);
+        Assert.Equal(1, catalog.FileCount);
+    }
+
+    [Fact]
+    public void CountsSecondaryRowsAsExternal()
+    {
+        WriteArchive("EXTERNAL.DPC", DpcTestData.Build(
+            resourceBlockOffset: 0,
+            resourceBlockSize: 0,
+            secondaryCount: 1));
+
+        TextureCatalog catalog = TextureCatalog.Load(Detect(), cacheRoot: _cacheRoot);
+
+        CatalogArchive external = Assert.Single(catalog.Archives);
+        Assert.True(external.IsExternal);
+        Assert.Equal(2, external.ExternalBitmapRows);
+        Assert.Empty(catalog.Textures);
+    }
+
+    [Fact]
+    public void ReusesCacheWithSecondaryRows()
+    {
+        WriteArchive("SHARED.DPC", DpcTestData.Build(
+            secondaryCount: 1,
+            secondaryName: 0x2222,
+            secondaryOffset: 310));
+        GameProfile profile = Detect();
+
+        TextureCatalog first = TextureCatalog.Load(profile, cacheRoot: _cacheRoot);
+        TextureCatalog second = TextureCatalog.Load(profile, cacheRoot: _cacheRoot);
+
+        Assert.Equal(2, first.Textures.Count);
+        Assert.False(Assert.Single(first.Archives).FromCache);
+        Assert.True(Assert.Single(second.Archives).FromCache);
+        Assert.Equal(2, second.Textures.Count);
+        Assert.Contains(second.Textures, texture => texture.Head.NameHash == 0x2222);
+    }
+
+    [Fact]
     public void ReusesCacheOnSecondLoad()
     {
         WriteArchive("SHARED.DPC", DpcTestData.Build());

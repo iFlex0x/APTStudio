@@ -41,6 +41,37 @@ public sealed class TextureScannerTests : IDisposable
     }
 
     [Fact]
+    public void ScansSecondaryBitmapRow()
+    {
+        DpcArchive archive = DpcArchive.Open(WriteFile(DpcTestData.Build(
+            secondaryCount: 1,
+            secondaryName: 0x2222,
+            secondaryOffset: 310)));
+
+        IReadOnlyList<TextureEntry> textures = TextureScanner.Scan(archive);
+
+        Assert.Equal(2, textures.Count);
+        TextureEntry secondary = Assert.Single(textures, texture => texture.Head.NameHash == 0x2222);
+        Assert.Equal(4, secondary.Head.Width);
+        Assert.Equal(4, secondary.Head.Height);
+        Assert.Equal(DpcTestData.SecondaryBodyOffset, secondary.Row.BodyOffset);
+        Assert.Equal(DpcTestData.SecondaryBodyOffset + BitmapHead.HeaderSize, secondary.PayloadOffset);
+    }
+
+    [Fact]
+    public void SkipsRepeatedSecondaryReference()
+    {
+        DpcArchive archive = DpcArchive.Open(WriteFile(DpcTestData.Build(
+            secondaryCount: 2,
+            secondaryName: 0x1111,
+            secondaryOffset: 300)));
+
+        TextureEntry texture = Assert.Single(TextureScanner.Scan(archive));
+
+        Assert.Equal(0x1111UL, texture.Head.NameHash);
+    }
+
+    [Fact]
     public void RejectsShortRow()
     {
         DpcArchive archive = DpcArchive.Open(WriteFile(DpcTestData.Build(rowSize: 100)));

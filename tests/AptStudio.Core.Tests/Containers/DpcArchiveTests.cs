@@ -45,6 +45,42 @@ public sealed class DpcArchiveTests : IDisposable
     }
 
     [Fact]
+    public void ParsesSecondaryRows()
+    {
+        DpcArchive archive = DpcArchive.Open(WriteFile(BuildNormal(
+            secondaryCount: 1,
+            secondaryName: 0x4444,
+            secondaryClass: 0x5555,
+            secondaryOffset: 301,
+            secondaryCompressed: 8)));
+
+        Assert.Equal(2, archive.Entries.Count);
+        DpcEntry entry = Assert.Single(archive.SecondaryEntries);
+        Assert.Equal(0x4444UL, entry.NameHash);
+        Assert.Equal(0x5555UL, entry.ClassHash);
+        Assert.Equal(0x6666UL, entry.LinkHash);
+        Assert.Equal(301u, entry.Offset);
+        Assert.Equal(301L * 32, entry.BodyOffset);
+        Assert.Equal(8u, entry.CompressedSize);
+        Assert.Equal(9u, entry.Flags);
+        Assert.Equal(40u, entry.DecompressedSize);
+        Assert.Equal((ushort)3, entry.U2);
+        Assert.Equal((ushort)4, entry.U3);
+    }
+
+    [Fact]
+    public void RejectsSecondaryExtentPastEnd()
+    {
+        InvalidDataException error = Assert.Throws<InvalidDataException>(() =>
+            DpcArchive.Open(WriteFile(BuildNormal(
+                secondaryCount: 1,
+                secondaryOffset: 300,
+                secondaryCompressed: 1000))));
+
+        Assert.Contains("0x0000000000004444", error.Message);
+    }
+
+    [Fact]
     public void ParsesZeroRows()
     {
         DpcArchive archive = DpcArchive.Open(WriteFile(BuildNormal(rowCount: 0)));
@@ -202,7 +238,12 @@ public sealed class DpcArchiveTests : IDisposable
         uint resourceBlockSize = 64,
         uint firstCompressed = 16,
         uint firstRowOffset = 300,
-        string banner = "v2.128.58.19 - test")
+        string banner = "v2.128.58.19 - test",
+        uint secondaryCount = 0,
+        ulong secondaryName = 0x4444,
+        ulong secondaryClass = 0x5555,
+        uint secondaryOffset = 300,
+        uint secondaryCompressed = 8)
     {
         byte[] data = new byte[FileLength];
         WriteBanner(data, banner);
@@ -248,6 +289,25 @@ public sealed class DpcArchiveTests : IDisposable
         WriteU64(data, BodiesOffset + 32, 0x2223);
         WriteU64(data, BodiesOffset + 40, 0x1112);
         WriteU64(data, BodiesOffset + 48, 0x3334);
+
+        int rowsEnd = RowsOffset + (int)rowCount * DpcArchive.NormalEntrySize;
+        WriteU64(data, rowsEnd, 0);
+        WriteU32(data, rowsEnd + 8, 0);
+        WriteU32(data, rowsEnd + 12, 0);
+        WriteU32(data, rowsEnd + 16, secondaryCount);
+        for (int i = 0; i < secondaryCount; i++)
+        {
+            int record = rowsEnd + 20 + i * 45;
+            WriteU64(data, record, secondaryName);
+            WriteU64(data, record + 8, secondaryClass);
+            WriteU64(data, record + 16, 0x6666);
+            WriteU32(data, record + 24, secondaryOffset);
+            WriteU32(data, record + 28, secondaryCompressed);
+            WriteU32(data, record + 32, 9);
+            WriteU32(data, record + 36, 40);
+            WriteU16(data, record + 40, 3);
+            WriteU16(data, record + 42, 4);
+        }
 
         return data;
     }

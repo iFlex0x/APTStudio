@@ -9,6 +9,7 @@ internal static class DpcTestData
 {
     private const int FileLength = 10240;
     public const int BodyOffset = 300 * 32;
+    public const int SecondaryBodyOffset = 310 * 32;
 
     private const int BlockTable = 100 * 32;
     private const int ResourcesMap = 128 * 32;
@@ -33,7 +34,10 @@ internal static class DpcTestData
         BitmapKind kind = BitmapKind.Flat,
         uint? decompressed = null,
         ushort u2 = 0,
-        ushort u3 = 0)
+        ushort u3 = 0,
+        int secondaryCount = 0,
+        ulong secondaryName = 0x2222,
+        uint secondaryOffset = 310)
     {
         uint payloadSize = storage == BitmapStorage.Raw ? stored + 4 : compSize;
         uint objectSize = (uint)BitmapHead.HeaderSize + payloadSize;
@@ -70,6 +74,25 @@ internal static class DpcTestData
         WriteU16(data, row + 40, u2);
         WriteU16(data, row + 42, u3);
 
+        int rowsEnd = RowsOffset + (int)DpcArchive.NormalEntrySize;
+        WriteU64(data, rowsEnd, 0);
+        WriteU32(data, rowsEnd + 8, 0);
+        WriteU32(data, rowsEnd + 12, 0);
+        WriteU32(data, rowsEnd + 16, (uint)secondaryCount);
+        for (int i = 0; i < secondaryCount; i++)
+        {
+            int record = rowsEnd + 20 + i * 45;
+            WriteU64(data, record, secondaryName);
+            WriteU64(data, record + 8, classHash);
+            WriteU64(data, record + 16, 0x4444);
+            WriteU32(data, record + 24, secondaryOffset);
+            WriteU32(data, record + 28, objectSize);
+            WriteU32(data, record + 32, 0);
+            WriteU32(data, record + 36, decompressed ?? stored + 4);
+            WriteU16(data, record + 40, 0);
+            WriteU16(data, record + 42, 0);
+        }
+
         byte[] bitmap = BitmapTestData.Header(
             width, height, mips, stored, key,
             kind: kind, storage: storage, surfaces: surfaces, compressed: compSize, name: bodyName ?? name);
@@ -79,6 +102,20 @@ internal static class DpcTestData
         for (int i = 0; i < payloadLength && BodyOffset + BitmapHead.HeaderSize + i < data.Length; i++)
         {
             data[BodyOffset + BitmapHead.HeaderSize + i] = 0xAA;
+        }
+
+        if (secondaryCount > 0 && secondaryOffset != 300)
+        {
+            byte[] secondary = BitmapTestData.Header(
+                width, height, mips, stored, key,
+                kind: kind, storage: storage, surfaces: surfaces, compressed: compSize, name: secondaryName);
+            int secondaryBody = (int)secondaryOffset * 32;
+            Array.Copy(secondary, 0, data, secondaryBody, secondary.Length);
+            int secondaryPayload = Math.Max(0, (int)(objectSize - BitmapHead.HeaderSize));
+            for (int i = 0; i < secondaryPayload && secondaryBody + BitmapHead.HeaderSize + i < data.Length; i++)
+            {
+                data[secondaryBody + BitmapHead.HeaderSize + i] = 0xAA;
+            }
         }
 
         return data;

@@ -67,7 +67,7 @@ internal static class Program
                 DpcArchive archive = DpcArchive.Open(file);
                 parsed.Add((file, archive));
                 Console.WriteLine(
-                    $"{Path.GetFileName(file),-28} {archive.Header.Kind,-7} {N(archive.Entries.Count),7} rows  {archive.BodyLocation,-8} {N(archive.Length),14} B");
+                    $"{Path.GetFileName(file),-28} {archive.Header.Kind,-7} {N(archive.Entries.Count),7} + {N(archive.SecondaryEntries.Count),6} rows  {archive.BodyLocation,-8} {N(archive.Length),14} B");
             }
             catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
             {
@@ -92,7 +92,7 @@ internal static class Program
                     continue;
                 }
 
-                foreach (DpcEntry entry in archive.Entries)
+                foreach (DpcEntry entry in archive.Entries.Concat(archive.SecondaryEntries))
                 {
                     external++;
                     if (entry.BodyOffset + entry.CompressedSize > common.Length)
@@ -241,7 +241,7 @@ internal static class Program
                 DpcArchive archive = DpcArchive.Open(file);
                 if (archive.BodyLocation != BodyLocation.Local)
                 {
-                    if (archive.Entries.Any(entry =>
+                    if (archive.Entries.Concat(archive.SecondaryEntries).Any(entry =>
                         entry.ClassHash == BitmapHead.ClassHash && entry.NameHash == name))
                     {
                         externalMatch ??= archiveName;
@@ -339,7 +339,7 @@ internal static class Program
                 .SelectMany(root => Directory.EnumerateFiles(
                     Path.Combine(profile.Root, root),
                     "*.DPC",
-                    SearchOption.TopDirectoryOnly))
+                    SearchOption.AllDirectories))
                 .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
                 .ToArray();
             return true;

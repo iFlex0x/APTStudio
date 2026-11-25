@@ -42,7 +42,7 @@ public sealed record TextureCatalog(
             try
             {
                 files.AddRange(Directory.EnumerateFiles(
-                    rootPath, "*.DPC", SearchOption.TopDirectoryOnly));
+                    rootPath, "*.DPC", SearchOption.AllDirectories));
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
@@ -65,6 +65,8 @@ public sealed record TextureCatalog(
                 if (archive.BodyLocation != BodyLocation.Local)
                 {
                     int externalRows = archive.Entries.Count(
+                        entry => entry.ClassHash == BitmapHead.ClassHash);
+                    externalRows += archive.SecondaryEntries.Count(
                         entry => entry.ClassHash == BitmapHead.ClassHash);
                     archives.Add(new CatalogArchive(
                         file, true, Array.Empty<TextureEntry>(), false, externalRows));
