@@ -3,12 +3,19 @@ namespace AptStudio.Core.Games;
 public sealed class GameProfile
 {
     private static readonly string[] DataFolderNames = ["DATAS", "FONT", "LEVELS"];
+    private static readonly string[] ArchiveFolderNames = ["DATAS", "FONT", "LEVELS", "RTC", "RTE"];
 
-    private GameProfile(GameKind kind, string root, IReadOnlyList<string> dataRoots, string executableName)
+    private GameProfile(
+        GameKind kind,
+        string root,
+        IReadOnlyList<string> dataRoots,
+        IReadOnlyList<string> assetRoots,
+        string executableName)
     {
         Kind = kind;
         Root = root;
         DataRoots = dataRoots;
+        AssetRoots = assetRoots;
         ExecutableName = executableName;
     }
 
@@ -17,6 +24,8 @@ public sealed class GameProfile
     public string Root { get; }
 
     public IReadOnlyList<string> DataRoots { get; }
+
+    public IReadOnlyList<string> AssetRoots { get; }
 
     public string ExecutableName { get; }
 
@@ -69,7 +78,13 @@ public sealed class GameProfile
             }
         }
 
-        profile = new GameProfile(GameKind.Resonance, fullRoot, Array.AsReadOnly(DataFolderNames), "Resonance.exe");
+        profile = new GameProfile(
+            GameKind.Resonance,
+            fullRoot,
+            Array.AsReadOnly(DataFolderNames),
+            Array.AsReadOnly(ArchiveFolderNames.Where(folder =>
+                Directory.Exists(Path.Combine(fullRoot, folder))).ToArray()),
+            "Resonance.exe");
         return true;
     }
 }
