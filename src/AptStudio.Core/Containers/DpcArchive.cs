@@ -58,7 +58,7 @@ public sealed class DpcArchive
         using FileStream stream = new(fullPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
         long length = stream.Length;
         string banner = Encoding.ASCII.GetString(ReadAt(stream, 0, BannerLength)).TrimEnd('\0');
-        if (!banner.StartsWith(SupportedVersion, StringComparison.Ordinal))
+        if (!banner.StartsWith(SupportedVersion + " ", StringComparison.Ordinal))
         {
             throw new InvalidDataException($"{System.IO.Path.GetFileName(fullPath)}: unsupported version '{banner}'.");
         }

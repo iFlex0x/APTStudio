@@ -1,4 +1,5 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
+using System.Globalization;
 using AptStudio.Core.Containers;
 using AptStudio.Core.Games;
 
@@ -20,13 +21,22 @@ internal static class Program
             return 1;
         }
 
-        string[] files = profile.DataRoots
-            .SelectMany(root => Directory.EnumerateFiles(
-                Path.Combine(profile.Root, root),
-                "*.DPC",
-                SearchOption.TopDirectoryOnly))
-            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
-            .ToArray();
+        string[] files;
+        try
+        {
+            files = profile.DataRoots
+                .SelectMany(root => Directory.EnumerateFiles(
+                    Path.Combine(profile.Root, root),
+                    "*.DPC",
+                    SearchOption.TopDirectoryOnly))
+                .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Console.Error.WriteLine(ex.Message);
+            return 1;
+        }
 
         Stopwatch watch = Stopwatch.StartNew();
         List<(string Path, DpcArchive Archive)> parsed = new();
@@ -38,12 +48,12 @@ internal static class Program
                 DpcArchive archive = DpcArchive.Open(file);
                 parsed.Add((file, archive));
                 Console.WriteLine(
-                    $"{Path.GetFileName(file),-28} {archive.Header.Kind,-7} {archive.Entries.Count,7:N0} rows  {archive.BodyLocation,-8} {archive.Length,14:N0} B");
+                    $"{Path.GetFileName(file),-28} {archive.Header.Kind,-7} {archive.Entries.Count.ToString("N0", CultureInfo.InvariantCulture),7} rows  {archive.BodyLocation,-8} {archive.Length.ToString("N0", CultureInfo.InvariantCulture),14} B");
             }
-            catch (InvalidDataException ex)
+            catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
             {
                 failures.Add(ex.Message);
-                Console.WriteLine($"{Path.GetFileName(file),-28} ERROR {ex.Message}");
+                Console.WriteLine($"{Path.GetFileName(file),-28} ERROR");
             }
         }
 
@@ -74,15 +84,17 @@ internal static class Program
                 }
             }
 
-            Console.WriteLine($"external extents checked against COMMON: {external:N0}, outside: {outside:N0}");
+            Console.WriteLine(
+                $"external extents checked against COMMON: {external.ToString("N0", CultureInfo.InvariantCulture)}, outside: {outside.ToString("N0", CultureInfo.InvariantCulture)}");
         }
         else if (parsed.Exists(item => item.Archive.BodyLocation == BodyLocation.External))
         {
-            Console.WriteLine("COMMON.DPC not found; external extents not checked.");
+            failures.Add("COMMON.DPC not found; external extents were not checked.");
         }
 
         watch.Stop();
-        Console.WriteLine($"files: {files.Length}, parsed: {parsed.Count}, failed: {failures.Count}, {watch.ElapsedMilliseconds} ms");
+        Console.WriteLine(
+            $"files: {files.Length.ToString("N0", CultureInfo.InvariantCulture)}, parsed: {parsed.Count.ToString("N0", CultureInfo.InvariantCulture)}, failed: {failures.Count.ToString("N0", CultureInfo.InvariantCulture)}, {watch.ElapsedMilliseconds.ToString("N0", CultureInfo.InvariantCulture)} ms");
         foreach (string failure in failures)
         {
             Console.Error.WriteLine(failure);
