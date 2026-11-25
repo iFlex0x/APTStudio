@@ -451,8 +451,8 @@ internal sealed class MainForm : Form
 
     private ContextMenuStrip BuildGridMenu()
     {
-        ToolStripMenuItem export = new("Export Selected");
-        ToolStripMenuItem copy = new("Copy Hash");
+        ToolStripMenuItem export = new("Export Selected") { ForeColor = Theme.Text };
+        ToolStripMenuItem copy = new("Copy Hash") { ForeColor = Theme.Text };
         export.Click += (_, _) => _ = ExportSelectedAsync();
         copy.Click += (_, _) => CopyHash();
 
