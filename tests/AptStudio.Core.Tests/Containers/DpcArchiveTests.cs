@@ -76,6 +76,15 @@ public sealed class DpcArchiveTests : IDisposable
     }
 
     [Fact]
+    public void RejectsVersionLookalike()
+    {
+        InvalidDataException error = Assert.Throws<InvalidDataException>(() =>
+            DpcArchive.Open(WriteFile(BuildNormal(banner: "v2.128.58.190 - test"))));
+
+        Assert.Contains("version", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void RejectsUnknownType()
     {
         InvalidDataException error = Assert.Throws<InvalidDataException>(() =>
@@ -91,6 +100,51 @@ public sealed class DpcArchiveTests : IDisposable
             DpcArchive.Open(WriteFile(BuildNormal(firstCompressed: 1000))));
 
         Assert.Contains("0x0000000000001111", error.Message);
+    }
+
+    [Fact]
+    public void RejectsExtentOneBytePastEnd()
+    {
+        InvalidDataException error = Assert.Throws<InvalidDataException>(() =>
+            DpcArchive.Open(WriteFile(BuildNormal(rowCount: 1, firstCompressed: 65))));
+
+        Assert.Contains("test.dpc", error.Message);
+        Assert.Contains("0x0000000000001111", error.Message);
+    }
+
+    [Fact]
+    public void AcceptsExtentAtEnd()
+    {
+        DpcArchive archive = DpcArchive.Open(WriteFile(BuildNormal(rowCount: 1, firstCompressed: 64)));
+
+        Assert.Single(archive.Entries);
+    }
+
+    [Fact]
+    public void RejectsZeroBlocks()
+    {
+        InvalidDataException error = Assert.Throws<InvalidDataException>(() =>
+            DpcArchive.Open(WriteFile(BuildNormal(blockCount: 0))));
+
+        Assert.Contains("block count", error.Message);
+    }
+
+    [Fact]
+    public void RejectsTooManyBlocks()
+    {
+        InvalidDataException error = Assert.Throws<InvalidDataException>(() =>
+            DpcArchive.Open(WriteFile(BuildNormal(blockCount: 1025))));
+
+        Assert.Contains("block count", error.Message);
+    }
+
+    [Fact]
+    public void RejectsTooManyRows()
+    {
+        InvalidDataException error = Assert.Throws<InvalidDataException>(() =>
+            DpcArchive.Open(WriteFile(BuildNormal(rowCount: 0, declaredRowCount: 200_001))));
+
+        Assert.Contains("row count", error.Message);
     }
 
     [Fact]
@@ -141,6 +195,8 @@ public sealed class DpcArchiveTests : IDisposable
 
     private static byte[] BuildNormal(
         uint rowCount = 2,
+        uint? declaredRowCount = null,
+        uint blockCount = 1,
         byte type = 1,
         uint resourceBlockOffset = 300,
         uint resourceBlockSize = 64,
@@ -160,17 +216,21 @@ public sealed class DpcArchiveTests : IDisposable
         WriteU32(data, header + 17, 0);
         WriteU32(data, header + 21, 0);
 
-        WriteU32(data, BlockTable, 1);
-        WriteU32(data, BlockTable + 4 + 24, 128);
+        WriteU32(data, BlockTable, blockCount);
+        if (blockCount == 1)
+        {
+            WriteU32(data, BlockTable + 4 + 24, 128);
+        }
 
+        uint count = declaredRowCount ?? rowCount;
         WriteU32(data, ResourcesMap, 1);
         WriteU32(data, ResourcesMap + 4, 300);
-        WriteU32(data, ResourcesMap + 40, rowCount);
-        WriteU32(data, RowCountOffset, rowCount);
+        WriteU32(data, ResourcesMap + 40, count);
+        WriteU32(data, RowCountOffset, count);
 
         for (int i = 0; i < (int)rowCount; i++)
         {
-            int row = RowsOffset + i * 44;
+            int row = RowsOffset + i * DpcArchive.NormalEntrySize;
             WriteU64(data, row, 0x1111UL + (ulong)i);
             WriteU64(data, row + 8, 0x2222UL + (ulong)i);
             WriteU64(data, row + 16, 0x3333UL + (ulong)i);
