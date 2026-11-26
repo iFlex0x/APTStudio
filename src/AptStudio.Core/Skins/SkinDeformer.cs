@@ -144,9 +144,32 @@ public sealed class SkinDeformer
             bones.ToArray());
     }
 
-    public MeshGeometry Deform(IReadOnlyDictionary<int, Quaternion>? rotations)
+    public MeshGeometry Deform(IReadOnlyDictionary<int, Quaternion>? rotations) =>
+        DeformCore(rotations, false);
+
+    public MeshGeometry DeformAbsolute(IReadOnlyList<Quaternion>? rotations)
     {
-        Matrix4x4[] pose = BuildPose(rotations);
+        Dictionary<int, Quaternion>? map = null;
+        if (rotations is not null)
+        {
+            map = new Dictionary<int, Quaternion>();
+            for (int index = 0; index < rotations.Count; index++)
+            {
+                if (rotations[index] != Quaternion.Identity)
+                {
+                    map[index] = rotations[index];
+                }
+            }
+        }
+
+        return DeformCore(map, true);
+    }
+
+    private MeshGeometry DeformCore(
+        IReadOnlyDictionary<int, Quaternion>? rotations,
+        bool absolute)
+    {
+        Matrix4x4[] pose = BuildPose(rotations, absolute);
         Matrix4x4[] skinMatrices = new Matrix4x4[pose.Length];
         for (int index = 0; index < pose.Length; index++)
         {
@@ -230,7 +253,9 @@ public sealed class SkinDeformer
         return new MeshGeometry(positions, indices, min, max);
     }
 
-    private Matrix4x4[] BuildPose(IReadOnlyDictionary<int, Quaternion>? rotations)
+    private Matrix4x4[] BuildPose(
+        IReadOnlyDictionary<int, Quaternion>? rotations,
+        bool absolute)
     {
         Matrix4x4[] pose = new Matrix4x4[_skeleton.Bones.Count];
         byte[] state = new byte[pose.Length];
@@ -249,21 +274,30 @@ public sealed class SkinDeformer
 
             state[index] = 1;
             SkeletonBone bone = _skeleton.Bones[index];
-            Matrix4x4 world;
-            if (bone.ParentIndex < 0)
+            Matrix4x4 local = bone.ParentIndex < 0
+                ? bone.BindWorld
+                : bone.BindWorld * _bindInverse[bone.ParentIndex];
+            bool hasRotation = false;
+            Quaternion rotation = Quaternion.Identity;
+            if (rotations is not null
+                && rotations.TryGetValue(index, out rotation)
+                && rotation != Quaternion.Identity)
             {
-                world = bone.BindWorld;
+                hasRotation = true;
             }
-            else
+            if (absolute && hasRotation)
             {
-                Matrix4x4 local =
-                    bone.BindWorld * _bindInverse[bone.ParentIndex];
-                world = local * World(bone.ParentIndex);
+                Matrix4x4 replaced = Matrix4x4.CreateFromQuaternion(rotation);
+                replaced.M41 = local.M41;
+                replaced.M42 = local.M42;
+                replaced.M43 = local.M43;
+                local = replaced;
             }
 
-            if (rotations is not null
-                && rotations.TryGetValue(index, out Quaternion rotation)
-                && rotation != Quaternion.Identity)
+            Matrix4x4 world = bone.ParentIndex < 0
+                ? local
+                : local * World(bone.ParentIndex);
+            if (!absolute && hasRotation)
             {
                 world = Matrix4x4.CreateFromQuaternion(rotation) * world;
             }

@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Numerics;
+using AptStudio.Core.Animations;
 using AptStudio.Core.Assets;
 using AptStudio.Core.Games;
 using AptStudio.Core.Meshes;
@@ -24,14 +25,22 @@ internal sealed class PoseForm : Form
     private readonly CheckBox _wire = new();
     private readonly Button _reset = new();
     private readonly Label _status = new();
+    private readonly TextBox _animationBox = new();
+    private readonly Button _animationUse = new();
+    private readonly Button _animationPlay = new();
+    private readonly Label _frameLabel = new();
+    private readonly System.Windows.Forms.Timer _timer = new();
     private readonly TaskCompletionSource<bool> _ready = new();
     private SkinDeformer? _deformer;
     private SkeletonData? _skeleton;
+    private AnimationClipBinding? _binding;
     private CancellationTokenSource? _cancel;
     private int _selectedBone = -1;
+    private int _frame;
     private bool _suppress;
     private bool _loaded;
     private bool _loading;
+    private bool _animating;
 
     public PoseForm(
         GameProfile profile,
@@ -74,15 +83,17 @@ internal sealed class PoseForm : Form
         {
             Dock = DockStyle.Fill,
             ColumnCount = 1,
-            RowCount = 3,
+            RowCount = 4,
             BackColor = Theme.Background,
         };
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 26));
         root.Controls.Add(CreateBar(), 0, 0);
-        root.Controls.Add(content, 0, 1);
-        root.Controls.Add(_status, 0, 2);
+        root.Controls.Add(CreateAnimationBar(), 0, 1);
+        root.Controls.Add(content, 0, 2);
+        root.Controls.Add(_status, 0, 3);
         Controls.Add(root);
 
         _status.Text = "select a bone, set X/Y/Z | drag to orbit, right-drag to pan, wheel to zoom";
@@ -93,9 +104,13 @@ internal sealed class PoseForm : Form
         _status.ForeColor = Theme.Muted;
         _status.Padding = new Padding(8, 4, 8, 6);
 
+        _timer.Interval = 33;
+        _timer.Tick += (_, _) => AdvanceFrame();
         Shown += async (_, _) => await LoadAsync();
         FormClosed += (_, _) =>
         {
+            _timer.Stop();
+            _timer.Dispose();
             _cancel?.Cancel();
             _cancel?.Dispose();
         };
@@ -195,17 +210,7 @@ internal sealed class PoseForm : Form
     private void ConfigureToolbar()
     {
         _reset.Text = "Reset";
-        _reset.AutoSize = true;
-        _reset.FlatStyle = FlatStyle.Flat;
-        _reset.BackColor = Theme.Surface;
-        _reset.ForeColor = Theme.Text;
-        _reset.Padding = new Padding(10, 0, 10, 0);
-        _reset.MinimumSize = new Size(0, 24);
-        _reset.UseVisualStyleBackColor = false;
-        _reset.FlatAppearance.BorderSize = 0;
-        _reset.FlatAppearance.MouseOverBackColor = Theme.SelectionInactive;
-        _reset.FlatAppearance.MouseDownBackColor = Theme.Selection;
-        _reset.Margin = new Padding(0, 3, 10, 3);
+        StyleButton(_reset, new Padding(10, 0, 10, 0));
         _reset.Click += (_, _) => ResetPose();
 
         _wire.Text = "Wireframe";
@@ -240,6 +245,224 @@ internal sealed class PoseForm : Form
         bar.Controls.Add(_z);
         return bar;
     }
+
+    private Control CreateAnimationBar()
+    {
+        Label label = new()
+        {
+            Text = "Anim",
+            AutoSize = true,
+            ForeColor = Theme.Muted,
+            Margin = new Padding(0, 7, 4, 3),
+        };
+        _animationBox.Width = 150;
+        _animationBox.MaxLength = 18;
+        _animationBox.CharacterCasing = CharacterCasing.Upper;
+        _animationBox.BackColor = Theme.Surface;
+        _animationBox.ForeColor = Theme.Text;
+        _animationBox.BorderStyle = BorderStyle.FixedSingle;
+        _animationBox.Margin = new Padding(2, 4, 4, 3);
+        _animationBox.PlaceholderText = "Animation_Z hash";
+
+        _animationUse.Text = "Load";
+        StyleButton(_animationUse, new Padding(8, 0, 8, 0));
+        _animationUse.Click += async (_, _) => await UseAnimationAsync();
+
+        _animationPlay.Text = "Play";
+        _animationPlay.Enabled = false;
+        StyleButton(_animationPlay, new Padding(8, 0, 8, 0));
+        _animationPlay.Click += (_, _) => TogglePlay();
+
+        _frameLabel.Text = "frame -";
+        _frameLabel.AutoSize = true;
+        _frameLabel.ForeColor = Theme.Muted;
+        _frameLabel.Margin = new Padding(4, 7, 4, 3);
+
+        FlowLayoutPanel bar = new()
+        {
+            Dock = DockStyle.Top,
+            AutoSize = true,
+            BackColor = Theme.Background,
+            Padding = new Padding(6, 2, 6, 2),
+            WrapContents = false,
+        };
+        bar.Controls.Add(label);
+        bar.Controls.Add(_animationBox);
+        bar.Controls.Add(_animationUse);
+        bar.Controls.Add(_animationPlay);
+        bar.Controls.Add(_frameLabel);
+        return bar;
+    }
+
+    private static void StyleButton(Button button, Padding padding)
+    {
+        button.AutoSize = true;
+        button.FlatStyle = FlatStyle.Flat;
+        button.BackColor = Theme.Surface;
+        button.ForeColor = Theme.Text;
+        button.Padding = padding;
+        button.MinimumSize = new Size(0, 24);
+        button.UseVisualStyleBackColor = false;
+        button.FlatAppearance.BorderSize = 0;
+        button.FlatAppearance.MouseOverBackColor = Theme.SelectionInactive;
+        button.FlatAppearance.MouseDownBackColor = Theme.Selection;
+        button.Margin = new Padding(0, 3, 10, 3);
+    }
+
+    private async Task UseAnimationAsync()
+    {
+        if (_skeleton is null)
+        {
+            return;
+        }
+
+        if (!TryHash(_animationBox.Text, out ulong hash))
+        {
+            _status.Text = "animation hash must be 16 hex digits.";
+            return;
+        }
+
+        _animationUse.Enabled = false;
+        try
+        {
+            AnimationClip clip = await Task.Run(() => LoadClip(hash));
+            BindAnimation(clip);
+        }
+        catch (Exception ex) when (ex is InvalidDataException or IOException
+            or UnauthorizedAccessException)
+        {
+            _status.Text = ex.Message;
+        }
+        finally
+        {
+            _animationUse.Enabled = true;
+        }
+    }
+
+    private AnimationClip LoadClip(ulong hash)
+    {
+        AssetEntry? entry = _assets
+            .Where(row => row.ClassHash == AssetClass.Animation && row.NameHash == hash)
+            .GroupBy(row => (row.BodyArchivePath, row.Row.BodyOffset))
+            .Select(group => group
+                .OrderBy(row => row.ArchivePath, StringComparer.OrdinalIgnoreCase)
+                .First())
+            .FirstOrDefault()
+            ?? throw new InvalidDataException($"no Animation_Z row named 0x{hash:X16}.");
+        using FileStream stream = new(
+            entry.BodyArchivePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+        AnimationBody body = AnimationDecoder.ReadBody(stream, entry.BodyArchivePath, entry.Row);
+        return AnimationClipReader.Read(body.Data, body.Body);
+    }
+
+    private void BindAnimation(AnimationClip clip)
+    {
+        if (_skeleton is null)
+        {
+            return;
+        }
+
+        _binding = AnimationClipBinding.Create(clip, _skeleton);
+        _frame = 0;
+        _animationPlay.Enabled = clip.FrameCount > 1;
+        ApplyAnimation();
+    }
+
+    private void ApplyAnimation()
+    {
+        if (_deformer is null || _binding is null)
+        {
+            return;
+        }
+
+        _frame = Math.Clamp(_frame, 0, _binding.FrameCount - 1);
+        MeshGeometry mesh = _deformer.DeformAbsolute(_binding.Sample(_frame));
+        _view.SetPositions(mesh.Positions);
+        _frameLabel.Text = $"frame {_frame}/{_binding.FrameCount - 1}";
+        _status.Text =
+            $"{_deformer.Parts.Count:N0} parts | {_deformer.Bones.Count:N0} bones | " +
+            $"{_binding.MappedBones:N0} animated | frame {_frame} of {_binding.FrameCount - 1}";
+    }
+
+    private void AdvanceFrame()
+    {
+        if (!_animating || _binding is null)
+        {
+            return;
+        }
+
+        _frame = (_frame + 1) % _binding.FrameCount;
+        ApplyAnimation();
+    }
+
+    private void TogglePlay()
+    {
+        if (_binding is null)
+        {
+            return;
+        }
+
+        _animating = !_animating;
+        _animationPlay.Text = _animating ? "Stop" : "Play";
+        if (_animating)
+        {
+            if (_frame >= _binding.FrameCount - 1)
+            {
+                _frame = 0;
+            }
+
+            _timer.Start();
+        }
+        else
+        {
+            _timer.Stop();
+        }
+    }
+
+    private void ClearAnimation()
+    {
+        _animating = false;
+        _timer.Stop();
+        _animationPlay.Text = "Play";
+        _animationPlay.Enabled = false;
+        _binding = null;
+        _frame = 0;
+        _frameLabel.Text = "frame -";
+    }
+
+    internal bool AnimationForShot(ulong hash, int frame)
+    {
+        if (_skeleton is null || _deformer is null)
+        {
+            return false;
+        }
+
+        try
+        {
+            AnimationClip clip = LoadClip(hash);
+            BindAnimation(clip);
+            if (_binding is null)
+            {
+                return false;
+            }
+
+            _frame = Math.Clamp(frame, 0, _binding.FrameCount - 1);
+            ApplyAnimation();
+            return true;
+        }
+        catch (Exception ex) when (ex is InvalidDataException or IOException
+            or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    private static bool TryHash(string text, out ulong hash) =>
+        ulong.TryParse(
+            text.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? text[2..] : text,
+            NumberStyles.HexNumber,
+            CultureInfo.InvariantCulture,
+            out hash);
 
     private static Label AngleLabel(string text) => new()
     {
@@ -515,6 +738,12 @@ internal sealed class PoseForm : Form
             return;
         }
 
+        if (_binding is not null)
+        {
+            ApplyAnimation();
+            return;
+        }
+
         Dictionary<int, Quaternion> rotations = new();
         foreach ((int bone, (float x, float y, float z)) in _angles)
         {
@@ -539,6 +768,7 @@ internal sealed class PoseForm : Form
     private void ResetPose()
     {
         _angles.Clear();
+        ClearAnimation();
         _suppress = true;
         try
         {

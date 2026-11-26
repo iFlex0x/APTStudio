@@ -14,6 +14,8 @@ internal static class PoseScreenshotMode
         string? game = null;
         ulong? skin = null;
         ulong? bone = null;
+        ulong? animation = null;
+        int frame = 0;
         float x = 0f;
         float y = 0f;
         float z = 0f;
@@ -34,6 +36,22 @@ internal static class PoseScreenshotMode
                 && TryHash(args[index + 1], out ulong parsedBone))
             {
                 bone = parsedBone;
+                index++;
+            }
+            else if (args[index] == "--anim" && index + 1 < args.Length
+                && TryHash(args[index + 1], out ulong parsedAnimation))
+            {
+                animation = parsedAnimation;
+                index++;
+            }
+            else if (args[index] == "--frame" && index + 1 < args.Length
+                && int.TryParse(
+                    args[index + 1],
+                    NumberStyles.Integer,
+                    CultureInfo.InvariantCulture,
+                    out int parsedFrame))
+            {
+                frame = parsedFrame;
                 index++;
             }
             else if (args[index] == "--x" && index + 1 < args.Length
@@ -162,6 +180,17 @@ internal static class PoseScreenshotMode
                         File.WriteAllText(
                             output + ".log",
                             $"bone 0x{selected:X16} is not in this skin." + Environment.NewLine);
+                        return;
+                    }
+                }
+
+                if (animation is ulong clip)
+                {
+                    if (!form.AnimationForShot(clip, frame))
+                    {
+                        File.WriteAllText(
+                            output + ".log",
+                            $"animation 0x{clip:X16} could not drive this skin." + Environment.NewLine);
                         return;
                     }
                 }

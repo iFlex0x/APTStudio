@@ -86,6 +86,12 @@ internal static class Program
             return Animation(args[1], args[2]);
         }
 
+        if ((args.Length == 3 || args.Length == 4)
+            && string.Equals(args[0], "animclip", StringComparison.OrdinalIgnoreCase))
+        {
+            return AnimationClipCommand(args[1], args[2], args.Length == 4 ? args[3] : null);
+        }
+
         if ((args.Length == 2 || args.Length == 3)
             && string.Equals(args[0], "skeletons", StringComparison.OrdinalIgnoreCase))
         {
@@ -157,6 +163,7 @@ internal static class Program
         Console.Error.WriteLine("  aptstudio skins <gameRoot>");
         Console.Error.WriteLine("  aptstudio skin <gameRoot> <nameHash>");
         Console.Error.WriteLine("  aptstudio animation <gameRoot> <nameHash>");
+        Console.Error.WriteLine("  aptstudio animclip <gameRoot> <nameHash> [frame]");
         Console.Error.WriteLine("  aptstudio skeletons <gameRoot> [--rebuild]");
         Console.Error.WriteLine("  aptstudio skeleton <gameRoot> <nameHash>");
         Console.Error.WriteLine("  aptstudio audio <gameRoot>");
@@ -613,6 +620,83 @@ internal static class Program
                     Console.WriteLine(
                         $"  bone 0x{bone.NameHash:X16} bits {bone.BitOffset} +{bone.BitLength}");
                 }
+            }
+
+            return 0;
+        }
+        catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
+        {
+            Console.Error.WriteLine(ex.Message);
+            return 1;
+        }
+    }
+
+    private static int AnimationClipCommand(string gameRoot, string hashText, string? frameText)
+    {
+        if (!TryHash(hashText, out ulong nameHash))
+        {
+            Console.Error.WriteLine($"'{hashText}' is not a 64-bit hex hash.");
+            return 1;
+        }
+
+        int frame = 0;
+        if (frameText is not null
+            && !int.TryParse(frameText, NumberStyles.Integer, CultureInfo.InvariantCulture, out frame))
+        {
+            Console.Error.WriteLine($"'{frameText}' is not a frame number.");
+            return 1;
+        }
+
+        if (!GameProfile.TryDetect(gameRoot, out GameProfile? profile, out string? error) || profile is null)
+        {
+            Console.Error.WriteLine(error);
+            return 1;
+        }
+
+        try
+        {
+            AssetCatalog assets = AssetCatalog.Load(profile);
+            AssetEntry? entry = assets.Entries
+                .Where(row => row.ClassHash == AssetClass.Animation && row.NameHash == nameHash)
+                .GroupBy(row => (row.BodyArchivePath, row.Row.BodyOffset))
+                .Select(group => group
+                    .OrderBy(row => row.ArchivePath, StringComparer.OrdinalIgnoreCase)
+                    .First())
+                .FirstOrDefault();
+            if (entry is null)
+            {
+                Console.Error.WriteLine($"no Animation_Z row named 0x{nameHash:X16}.");
+                return 1;
+            }
+
+            using FileStream stream = new(
+                entry.BodyArchivePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            AnimationBody body = AnimationDecoder.ReadBody(stream, entry.BodyArchivePath, entry.Row);
+            AnimationClip clip = AnimationClipReader.Read(body.Data, body.Body);
+            int at = Math.Clamp(frame, 0, clip.FrameCount - 1);
+            Console.WriteLine(
+                $"animclip: 0x{nameHash:X16} {clip.Duration:0.###}s, keys {N(clip.KeyCount)}, groups {clip.GroupCount}, frames {N(clip.FrameCount)}, bones {N(clip.Bones.Count)}, unreadable {N(clip.UnreadableBones)}");
+            int shown = 0;
+            foreach (AnimationClipBone bone in clip.Bones)
+            {
+                IReadOnlyList<Quaternion> rotations = bone.Rotations;
+                Quaternion q = rotations[Math.Min(at, rotations.Count - 1)];
+                if (q == Quaternion.Identity)
+                {
+                    continue;
+                }
+
+                Console.WriteLine(
+                    $"  bone 0x{bone.NameHash:X16} B {bone.ValueBits} keys {N(rotations.Count)} frame {at}: ({q.X:F4},{q.Y:F4},{q.Z:F4},{q.W:F4})");
+                if (++shown == 8)
+                {
+                    break;
+                }
+            }
+
+            if (shown == 0)
+            {
+                Console.WriteLine("  all sampled rotations are identity.");
             }
 
             return 0;

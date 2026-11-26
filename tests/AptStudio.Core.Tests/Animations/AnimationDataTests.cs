@@ -15,7 +15,7 @@ public sealed class AnimationDataTests
         Assert.Equal(1f, data.Duration);
         Assert.Equal(30u, data.KeyCount);
         Assert.Equal(128u, data.PackedBits);
-        Assert.Equal(28, data.PackedStreamOffset);
+        Assert.Equal(30, data.PackedStreamOffset);
         Assert.Equal(2, data.Bones.Count);
         Assert.Equal(0xAAAA111122223333UL, data.Bones[0].NameHash);
         Assert.Equal(0u, data.Bones[0].BitOffset);

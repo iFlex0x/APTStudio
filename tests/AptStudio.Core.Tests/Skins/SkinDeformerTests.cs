@@ -39,6 +39,21 @@ public sealed class SkinDeformerTests
     }
 
     [Fact]
+    public void AbsoluteRotationReplacesTheBindLocalRotation()
+    {
+        SkinDeformer deformer = Build(out _);
+
+        MeshGeometry result = deformer.DeformAbsolute(
+        [
+            Quaternion.Identity,
+            Quaternion.CreateFromAxisAngle(Vector3.UnitZ, MathF.PI / 2f),
+        ]);
+
+        AssertVector(new Vector3(0.5f, 0f, 0f), result.Positions[0]);
+        AssertVector(new Vector3(1f, 1f, 0f), result.Positions[1]);
+    }
+
+    [Fact]
     public void MergesPartsWithIndexOffsets()
     {
         byte[] body = SkinTestData.BodyWithBones(

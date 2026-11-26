@@ -1,6 +1,6 @@
 # APTStudio
 
-Read-only asset explorer for Resonance: A Plague Tale Legacy. Indexes every row across the game's DPC archives, previews BC1 and BC3 textures, renders meshes in an orbitable software 3D view, reads material slots and skin parts, browses Wwise audio with playback and Ogg export, shows skeleton bone tables and bind poses, and poses skinned skins by rotating individual bones. Cross-links show which materials bind a texture, which skins use a mesh, and which skins name a skeleton. Animations are not decoded yet.
+Read-only asset explorer for Resonance: A Plague Tale Legacy. Indexes every row across the game's DPC archives, previews BC1 and BC3 textures, renders meshes in an orbitable software 3D view, reads material slots and skin parts, browses Wwise audio with playback and Ogg export, shows skeleton bone tables and bind poses, poses skinned skins by rotating individual bones or by playing a decoded animation clip. Cross-links show which materials bind a texture, which skins use a mesh, and which skins name a skeleton.
 
 ## build
 
@@ -28,6 +28,8 @@ dotnet run --project src/AptStudio.Cli -- materials <gameRoot>
 dotnet run --project src/AptStudio.Cli -- material <gameRoot> <nameHash>
 dotnet run --project src/AptStudio.Cli -- skins <gameRoot>
 dotnet run --project src/AptStudio.Cli -- skin <gameRoot> <nameHash>
+dotnet run --project src/AptStudio.Cli -- animation <gameRoot> <nameHash>
+dotnet run --project src/AptStudio.Cli -- animclip <gameRoot> <nameHash> [frame]
 dotnet run --project src/AptStudio.Cli -- skeletons <gameRoot> [--rebuild]
 dotnet run --project src/AptStudio.Cli -- skeleton <gameRoot> <nameHash>
 dotnet run --project src/AptStudio.Cli -- skelbind <gameRoot>

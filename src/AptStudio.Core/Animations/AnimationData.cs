@@ -101,20 +101,6 @@ public sealed record AnimationData(
     private static int FindPackedStream(byte[] body, int footer, uint packedBits)
     {
         long expected = footer - ((packedBits + 7L) / 8);
-        for (int delta = -8; delta <= 8; delta++)
-        {
-            long at = expected + delta;
-            if (at < 0 || at + 1 >= footer)
-            {
-                continue;
-            }
-
-            if (body[(int)at] == 0 && body[(int)at + 1] == 4)
-            {
-                return (int)at;
-            }
-        }
-
         return expected >= 0 && expected < footer ? (int)expected : -1;
     }
 

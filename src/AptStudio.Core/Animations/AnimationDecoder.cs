@@ -4,9 +4,14 @@ using K4os.Compression.LZ4;
 
 namespace AptStudio.Core.Animations;
 
+public sealed record AnimationBody(AnimationData Data, byte[] Body);
+
 public static class AnimationDecoder
 {
-    public static AnimationData Read(Stream stream, string bodyArchivePath, DpcEntry row)
+    public static AnimationData Read(Stream stream, string bodyArchivePath, DpcEntry row) =>
+        ReadBody(stream, bodyArchivePath, row).Data;
+
+    public static AnimationBody ReadBody(Stream stream, string bodyArchivePath, DpcEntry row)
     {
         ArgumentNullException.ThrowIfNull(stream);
         ArgumentNullException.ThrowIfNull(row);
@@ -77,7 +82,7 @@ public static class AnimationDecoder
         }
 
         byte[] link = ReadExactly(stream, row.BodyOffset + AnimationHead.HeaderSize, (int)head.LinkSize, source);
-        return AnimationData.Parse(head, body, link, source);
+        return new AnimationBody(AnimationData.Parse(head, body, link, source), body);
     }
 
     private static byte[] ReadExactly(Stream stream, long offset, int count, string source)
