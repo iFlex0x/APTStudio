@@ -4,7 +4,7 @@ using AptStudio.Core.Textures;
 
 namespace AptStudio.Core.Links;
 
-public sealed record SkinSkeletonUse(AssetEntry Row, ulong SkeletonRoot)
+public sealed record SkinSkeletonUse(AssetEntry Row, ulong SkeletonRoot, uint Kind)
 {
     public ulong NameHash => Row.NameHash;
 
@@ -76,7 +76,7 @@ public sealed record SkinSkeletonIndex(
                     }
 
                     SkinBinding binding = SkinBinding.Read(stream, row.BodyArchivePath, row.Row);
-                    SkinSkeletonUse use = new(row, binding.SkeletonRoot);
+                    SkinSkeletonUse use = new(row, binding.SkeletonRoot, binding.Kind);
                     entries.Add(use);
                     if (!binding.HasSkeleton)
                     {

@@ -4,20 +4,15 @@ using AptStudio.Core.Containers;
 namespace AptStudio.Core.Skins;
 
 public sealed record SkinBinding(
-    ulong BlockHash,
-    uint EntryCount,
+    uint Kind,
     IReadOnlyList<ulong> Entries,
-    ulong SkeletonRoot,
-    uint LinkSize)
+    ulong SkeletonRoot)
 {
     public const int MaxEntries = 4096;
     public const uint MinLinkSize = 0x18;
+    public const uint MaxLinkSize = 4096;
 
     public bool HasSkeleton => SkeletonRoot != 0;
-
-    public IReadOnlyList<ulong> MeshEntries => HasSkeleton
-        ? Entries.Skip(1).ToArray()
-        : Entries;
 
     public static SkinBinding Read(Stream stream, string archivePath, DpcEntry row)
     {
@@ -38,6 +33,13 @@ public sealed record SkinBinding(
                 $"{source}: body name 0x{head.NameHash:X16} != row name 0x{row.NameHash:X16}.");
         }
 
+        if (head.LinkSize is < MinLinkSize or > MaxLinkSize
+            || SkinHead.HeaderSize + head.LinkSize > row.CompressedSize)
+        {
+            throw new InvalidDataException(
+                $"{source}: link size {head.LinkSize} does not fit in the row.");
+        }
+
         byte[] block = ReadExactly(
             stream,
             row.BodyOffset + SkinHead.HeaderSize,
@@ -48,10 +50,17 @@ public sealed record SkinBinding(
 
     public static SkinBinding Parse(ReadOnlySpan<byte> block, uint linkSize, string source)
     {
-        if (linkSize < MinLinkSize || block.Length < linkSize)
+        if (linkSize is < MinLinkSize or > MaxLinkSize || block.Length < linkSize)
         {
             throw new InvalidDataException(
-                $"{source}: skin link block is {block.Length} bytes, need at least {MinLinkSize}.");
+                $"{source}: skin link block is {block.Length} bytes, expected {linkSize}.");
+        }
+
+        uint kind = BinaryPrimitives.ReadUInt32LittleEndian(block[0x08..]);
+        if (kind != 6)
+        {
+            throw new InvalidDataException(
+                $"{source}: skin link kind {kind} is not 6.");
         }
 
         uint entryCount = BinaryPrimitives.ReadUInt32LittleEndian(block[0x0C..]);
@@ -76,12 +85,7 @@ public sealed record SkinBinding(
                 $"{source}: skeleton root 0x{root:X16} is not the first link entry.");
         }
 
-        return new SkinBinding(
-            BinaryPrimitives.ReadUInt64LittleEndian(block),
-            entryCount,
-            entries,
-            root,
-            linkSize);
+        return new SkinBinding(kind, entries, root);
     }
 
     private static byte[] ReadExactly(Stream stream, long offset, int count, string source)

@@ -115,4 +115,68 @@ public sealed class SkeletonDataTests
         Assert.Equal(2, data.Bones.Count);
         Assert.Equal(2f, data.Bones[1].Position.X);
     }
+
+    [Fact]
+    public void DecoderRejectsBadHitFields()
+    {
+        byte[] body = SkeletonTestData.Body(new TestBone(0x11));
+        byte[] obj = SkeletonTestData.Object(body);
+        SkeletonHit hit = SkeletonTestData.Hit(obj) with { NameHash = 0x999 };
+
+        Assert.Throws<InvalidDataException>(
+            () => SkeletonDecoder.Read(new MemoryStream(obj), "test", hit));
+    }
+
+    [Fact]
+    public void DecoderRejectsFrameMismatch()
+    {
+        byte[] body = SkeletonTestData.Body(new TestBone(0x11));
+        byte[] obj = SkeletonTestData.Object(body);
+        int frame = SkeletonHead.HeaderSize + (int)SkeletonTestData.LinkSize
+            + SkeletonHead.ExtraSize;
+        BinaryPrimitives.WriteUInt32LittleEndian(obj.AsSpan(frame), 1);
+
+        Assert.Throws<InvalidDataException>(
+            () => SkeletonDecoder.Read(
+                new MemoryStream(obj), "test", SkeletonTestData.Hit(obj)));
+    }
+
+    [Fact]
+    public void DecoderRejectsShortRead()
+    {
+        byte[] body = SkeletonTestData.Body(new TestBone(0x11));
+        byte[] obj = SkeletonTestData.Object(body);
+
+        Assert.Throws<InvalidDataException>(
+            () => SkeletonDecoder.Read(
+                new MemoryStream(obj.AsSpan(0, obj.Length - 4).ToArray()),
+                "test",
+                SkeletonTestData.Hit(obj)));
+    }
+
+    [Fact]
+    public void DecoderRejectsBadLz4()
+    {
+        byte[] body = SkeletonTestData.Body(new TestBone(0x11));
+        byte[] obj = SkeletonTestData.Object(body);
+        int block = SkeletonHead.HeaderSize + (int)SkeletonTestData.LinkSize
+            + SkeletonHead.ExtraSize + 8;
+        obj.AsSpan(block).Fill(0xFF);
+
+        Assert.Throws<InvalidDataException>(
+            () => SkeletonDecoder.Read(
+                new MemoryStream(obj), "test", SkeletonTestData.Hit(obj)));
+    }
+
+    [Fact]
+    public void DecoderRejectsUnmeasuredStorage()
+    {
+        byte[] body = SkeletonTestData.Body(new TestBone(0x11));
+        byte[] obj = SkeletonTestData.Object(body);
+        obj[0x32] = 0;
+
+        Assert.Throws<InvalidDataException>(
+            () => SkeletonDecoder.Read(
+                new MemoryStream(obj), "test", SkeletonTestData.Hit(obj)));
+    }
 }

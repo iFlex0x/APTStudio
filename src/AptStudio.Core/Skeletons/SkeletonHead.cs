@@ -62,7 +62,8 @@ public sealed record SkeletonHead(
             throw new InvalidDataException($"{source}: link size {linkSize} is too large.");
         }
 
-        if (bodySize is 0 or > MaxBodySize || storedSize <= 8 || storedSize > bodySize)
+        uint maxStored = bodySize + bodySize / 255 + 16;
+        if (bodySize is 0 or > MaxBodySize || storedSize <= 8 || storedSize > maxStored)
         {
             throw new InvalidDataException(
                 $"{source}: body {bodySize} and stored {storedSize} sizes are not valid.");

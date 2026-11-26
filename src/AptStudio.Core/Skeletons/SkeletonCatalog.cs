@@ -10,8 +10,6 @@ public sealed record SkeletonEntry(string ArchivePath, SkeletonHit Hit)
     public ulong LinkHash => Hit.LinkHash;
 
     public long Offset => Hit.Offset;
-
-    public uint TotalSize => Hit.TotalSize;
 }
 
 public sealed record SkeletonArchive(string Path, int Count);
@@ -24,32 +22,6 @@ public sealed record SkeletonCatalog(
     int Cached)
 {
     public int UniqueNameCount { get; } = Entries.Select(entry => entry.NameHash).Distinct().Count();
-
-    public SkeletonEntry? Find(ulong nameHash, string? preferArchive = null)
-    {
-        if (preferArchive is not null)
-        {
-            foreach (SkeletonEntry entry in Entries)
-            {
-                if (entry.NameHash == nameHash
-                    && string.Equals(
-                        entry.ArchivePath, preferArchive, StringComparison.OrdinalIgnoreCase))
-                {
-                    return entry;
-                }
-            }
-        }
-
-        foreach (SkeletonEntry entry in Entries)
-        {
-            if (entry.NameHash == nameHash)
-            {
-                return entry;
-            }
-        }
-
-        return null;
-    }
 
     public static SkeletonCatalog Load(
         GameProfile profile,

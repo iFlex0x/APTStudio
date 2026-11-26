@@ -7,8 +7,8 @@ using AptStudio.Core.Audio;
 using AptStudio.Core.Games;
 using AptStudio.Core.Links;
 using AptStudio.Core.Materials;
-using AptStudio.Core.Skins;
 using AptStudio.Core.Meshes;
+using AptStudio.Core.Skins;
 using AptStudio.Core.Textures;
 
 namespace AptStudio.Desktop;
@@ -91,6 +91,7 @@ internal sealed class MainForm : Form
     private bool _columnsAreAudio;
     private MaterialTextureIndex? _materialTextures;
     private SkinLinkIndex? _skinLinks;
+    private SkeletonForm? _skeletonForm;
     private bool _materialTexturesLoading;
     private bool _skinLinksLoading;
     private string _assetStatus = "No game folder selected.";
@@ -2018,8 +2019,17 @@ internal sealed class MainForm : Form
             return;
         }
 
+        if (_skeletonForm is { IsDisposed: false } open)
+        {
+            open.SelectSkeleton(nameHash);
+            open.Activate();
+            return;
+        }
+
         SkeletonForm form = new(_profile, _entries, nameHash);
         form.SkinRequested += SelectSkin;
+        form.FormClosed += (_, _) => _skeletonForm = null;
+        _skeletonForm = form;
         form.Show(this);
     }
 
@@ -2052,7 +2062,7 @@ internal sealed class MainForm : Form
 
         try
         {
-            (SkinData skin, SkinBinding binding, SkinPartRow[] rows) = await Task.Run(() =>
+            (SkinData skin, SkinBinding? binding, SkinPartRow[] rows) = await Task.Run(() =>
             {
                 Dictionary<ulong, int?> counts = new();
                 int? Verts(ulong mesh)
@@ -2089,8 +2099,15 @@ internal sealed class MainForm : Form
                     entry.BodyArchivePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
                 SkinData data = SkinDecoder.Read(
                     stream, entry.BodyArchivePath, entry.Row, Verts);
-                SkinBinding binding = SkinBinding.Read(
-                    stream, entry.BodyArchivePath, entry.Row);
+                SkinBinding? binding = null;
+                try
+                {
+                    binding = SkinBinding.Read(stream, entry.BodyArchivePath, entry.Row);
+                }
+                catch (InvalidDataException)
+                {
+                }
+
                 SkinPartRow[] parts = data.Parts
                     .Select(part => new SkinPartRow(
                         part.Index,
@@ -2109,12 +2126,16 @@ internal sealed class MainForm : Form
                 return;
             }
 
-            string skeleton = binding.HasSkeleton
+            string skeleton = binding is { HasSkeleton: true }
                 ? $"skeleton 0x{binding.SkeletonRoot:X16}"
                 : "no skeleton";
             string subtitle =
                 $"v{skin.Head.Version} | {N(skin.MeshLinks.Length)} meshes | {N(skin.Parts.Length)} parts | {N(skin.Bones.Length)} bones | {skeleton} | {Path.GetFileName(entry.ArchivePath)}";
-            _skinView.SetSkin($"Skin_Z 0x{entry.NameHash:X16}", subtitle, rows, binding.SkeletonRoot);
+            _skinView.SetSkin(
+                $"Skin_Z 0x{entry.NameHash:X16}",
+                subtitle,
+                rows,
+                binding?.SkeletonRoot ?? 0);
             _infoLabel.Text =
                 $"Skin_Z | 0x{entry.NameHash:X16} | {N(skin.SkinnedParts)} skinned parts | {N(rows.Sum(row => row.Vertices))} verts | {Path.GetFileName(entry.ArchivePath)}";
             _previewReady.TrySetResult(true);

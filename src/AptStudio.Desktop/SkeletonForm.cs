@@ -3,6 +3,7 @@ using AptStudio.Core.Assets;
 using AptStudio.Core.Games;
 using AptStudio.Core.Links;
 using AptStudio.Core.Skeletons;
+using AptStudio.Core.Textures;
 
 namespace AptStudio.Desktop;
 
@@ -14,6 +15,7 @@ internal sealed class SkeletonForm : Form
     private readonly TextBox _filter = new();
     private readonly Label _count = new();
     private readonly Label _status = new();
+    private readonly Button _back = new();
     private readonly Button _used = new();
     private readonly DataGridView _grid = new();
     private readonly SkeletonView _view = new();
@@ -28,6 +30,8 @@ internal sealed class SkeletonForm : Form
     private Task? _indexTask;
     private Task? _decodeTask;
     private CancellationTokenSource? _decodeCancel;
+    private CancellationTokenSource? _loadCancel;
+    private ulong? _pendingName;
     private bool _screenshotMode;
     private bool _loading;
 
@@ -53,7 +57,12 @@ internal sealed class SkeletonForm : Form
                 Close();
             }
         };
-        DpiChanged += (_, _) => _view.SetDpiScale(DeviceDpi / 96f);
+        DpiChanged += (_, _) => SetDpiScale(DeviceDpi / 96f);
+        FormClosing += (_, _) =>
+        {
+            _loadCancel?.Cancel();
+            _decodeCancel?.Cancel();
+        };
 
         _filter.BorderStyle = BorderStyle.FixedSingle;
         _filter.Width = 250;
@@ -77,6 +86,21 @@ internal sealed class SkeletonForm : Form
         _count.Margin = new Padding(0, 10, 8, 0);
         _count.Text = "0 skeletons";
 
+        _back.Text = "Back";
+        _back.AutoSize = true;
+        _back.FlatStyle = FlatStyle.Flat;
+        _back.BackColor = Theme.Surface;
+        _back.ForeColor = Theme.Text;
+        _back.Padding = new Padding(8, 0, 8, 0);
+        _back.Margin = new Padding(0, 5, 8, 0);
+        _back.MinimumSize = new Size(0, 24);
+        _back.UseVisualStyleBackColor = false;
+        _back.FlatAppearance.BorderSize = 0;
+        _back.FlatAppearance.MouseOverBackColor = Theme.SelectionInactive;
+        _back.FlatAppearance.MouseDownBackColor = Theme.Selection;
+        _back.Visible = false;
+        _back.Click += (_, _) => CloseLinks();
+
         _used.Text = "Used by 0";
         _used.AutoSize = true;
         _used.FlatStyle = FlatStyle.Flat;
@@ -99,7 +123,7 @@ internal sealed class SkeletonForm : Form
             WrapContents = false,
             BackColor = Theme.Surface,
         };
-        left.Controls.AddRange([_filter, _count, _used]);
+        left.Controls.AddRange([_back, _filter, _count, _used]);
 
         _status.AutoSize = true;
         _status.ForeColor = Theme.Muted;
@@ -134,11 +158,7 @@ internal sealed class SkeletonForm : Form
         _view.Dock = DockStyle.Fill;
         _links.Dock = DockStyle.Fill;
         _links.Visible = false;
-        _links.BackRequested += () =>
-        {
-            _links.Visible = false;
-            _view.Visible = true;
-        };
+        _links.BackRequested += CloseLinks;
         _links.LinkActivated += row =>
         {
             SkinRequested?.Invoke(row.Hash);
@@ -170,8 +190,6 @@ internal sealed class SkeletonForm : Form
 
     public event Action<ulong>? SkinRequested;
 
-    public string StatusText => _status.Text;
-
     protected override bool ShowWithoutActivation => _screenshotMode || base.ShowWithoutActivation;
 
     protected override void Dispose(bool disposing)
@@ -179,6 +197,7 @@ internal sealed class SkeletonForm : Form
         if (disposing)
         {
             _decodeCancel?.Dispose();
+            _loadCancel?.Dispose();
             _filterTimer.Dispose();
         }
 
@@ -196,9 +215,9 @@ internal sealed class SkeletonForm : Form
     internal async Task LoadForShotAsync(ulong? nameHash)
     {
         await StartAsync();
-        if (nameHash is ulong hash)
+        if (nameHash is ulong hash && !SelectName(hash))
         {
-            SelectName(hash);
+            ShowMissing(hash);
         }
 
         if (_decodeTask is not null)
@@ -210,6 +229,25 @@ internal sealed class SkeletonForm : Form
         {
             await _indexTask;
             UpdateUsedButton();
+        }
+    }
+
+    internal void SelectSkeleton(ulong? nameHash)
+    {
+        if (nameHash is not ulong hash)
+        {
+            return;
+        }
+
+        if (_loadTask is null || _grid.Rows.Count == 0)
+        {
+            _pendingName = hash;
+            return;
+        }
+
+        if (!SelectName(hash))
+        {
+            ShowMissing(hash);
         }
     }
 
@@ -231,7 +269,6 @@ internal sealed class SkeletonForm : Form
         {
             Scale(new SizeF(scale, scale));
             SetDpiScale(scale);
-            _view.SetDpiScale(scale);
         }
     }
 
@@ -244,7 +281,7 @@ internal sealed class SkeletonForm : Form
 
         _grid.RowTemplate.Height = (int)Math.Round(20 * scale);
         _grid.ColumnHeadersHeight = (int)Math.Round(22 * scale);
-        _grid.ColumnHeadersDefaultCellStyle.Font = new Font("Segoe UI Semibold", 8.5f * scale);
+        _grid.ColumnHeadersDefaultCellStyle.Font = new Font("Segoe UI Semibold", 8f * scale);
         foreach (DataGridViewColumn column in _grid.Columns)
         {
             if (column.Tag is int width)
@@ -252,6 +289,9 @@ internal sealed class SkeletonForm : Form
                 column.Width = (int)Math.Round(width * scale);
             }
         }
+
+        _view.SetDpiScale(scale);
+        _links.SetDpiScale(scale);
     }
 
     private async Task StartAsync()
@@ -270,9 +310,25 @@ internal sealed class SkeletonForm : Form
     {
         _loading = true;
         _status.Text = "scanning skeletons...";
+        _loadCancel = new CancellationTokenSource();
         try
         {
-            SkeletonCatalog catalog = await Task.Run(() => SkeletonCatalog.Load(_profile));
+            Progress<CatalogProgress> progress = new(value =>
+            {
+                if (!IsDisposed)
+                {
+                    _status.Text =
+                        $"scanning {value.Index:N0}/{value.Total:N0} {Path.GetFileName(value.ArchivePath)}";
+                }
+            });
+            SkeletonCatalog catalog = await Task.Run(
+                () => SkeletonCatalog.Load(_profile, false, progress, _loadCancel.Token),
+                _loadCancel.Token);
+            if (IsDisposed)
+            {
+                return;
+            }
+
             _entries = catalog.Entries
                 .OrderBy(entry => entry.NameHash)
                 .ThenBy(entry => entry.ArchivePath, StringComparer.OrdinalIgnoreCase)
@@ -284,17 +340,25 @@ internal sealed class SkeletonForm : Form
                 $"{_entries.Count:N0} objects | {catalog.UniqueNameCount:N0} names | {catalog.Archives.Count:N0} archives | scanned {catalog.Scanned:N0}, cached {catalog.Cached:N0}";
             _loading = false;
             ApplyFilter();
-            if (_initialName is ulong initial)
+            ulong? initial = _pendingName ?? _initialName;
+            _pendingName = null;
+            if (initial is ulong hash && !SelectName(hash))
             {
-                SelectName(initial);
+                ShowMissing(hash);
             }
 
             _indexTask = LoadIndexAsync();
         }
+        catch (OperationCanceledException)
+        {
+        }
         catch (Exception ex) when (ex is InvalidDataException or IOException
             or UnauthorizedAccessException)
         {
-            _status.Text = ex.Message;
+            if (!IsDisposed)
+            {
+                _status.Text = ex.Message;
+            }
         }
         finally
         {
@@ -306,13 +370,38 @@ internal sealed class SkeletonForm : Form
     {
         try
         {
-            _skinIndex = await Task.Run(() => SkinSkeletonIndex.Load(_assets));
+            Progress<CatalogProgress> progress = new(value =>
+            {
+                if (!IsDisposed)
+                {
+                    _status.Text = $"indexing skins {value.Index:N0}/{value.Total:N0}";
+                }
+            });
+            CancellationToken token = _loadCancel?.Token ?? CancellationToken.None;
+            _skinIndex = await Task.Run(
+                () => SkinSkeletonIndex.Load(_assets, progress, token), token);
+            if (IsDisposed)
+            {
+                return;
+            }
+
             UpdateUsedButton();
+            if (_status.Text.StartsWith("indexing", StringComparison.Ordinal))
+            {
+                _status.Text =
+                    $"{_skinIndex.BoundCount:N0} bound | {_skinIndex.NoSkeleton:N0} none | {_skinIndex.Failures.Count:N0} failed";
+            }
+        }
+        catch (OperationCanceledException)
+        {
         }
         catch (Exception ex) when (ex is InvalidDataException or IOException
             or UnauthorizedAccessException)
         {
-            _status.Text = ex.Message;
+            if (!IsDisposed)
+            {
+                _status.Text = ex.Message;
+            }
         }
     }
 
@@ -324,6 +413,11 @@ internal sealed class SkeletonForm : Form
         }
 
         string query = _filter.Text.Trim();
+        if (query.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+        {
+            query = query[2..];
+        }
+
         IEnumerable<SkeletonEntry> rows = _entries;
         if (query.Length > 0)
         {
@@ -362,7 +456,7 @@ internal sealed class SkeletonForm : Form
         }
     }
 
-    private void SelectName(ulong nameHash)
+    private bool SelectName(ulong nameHash)
     {
         for (int index = 0; index < _grid.Rows.Count; index++)
         {
@@ -372,9 +466,25 @@ internal sealed class SkeletonForm : Form
                 _grid.CurrentCell = _grid.Rows[index].Cells[0];
                 _grid.Rows[index].Selected = true;
                 _grid.FirstDisplayedScrollingRowIndex = index;
-                return;
+                return true;
             }
         }
+
+        return false;
+    }
+
+    private void ShowMissing(ulong nameHash)
+    {
+        _decodeCancel?.Cancel();
+        _decodeCancel?.Dispose();
+        _decodeCancel = null;
+        _decodeTask = null;
+        _grid.ClearSelection();
+        _grid.CurrentCell = null;
+        _view.SetMessage("Skeleton not found", $"0x{nameHash:X16} is not in the catalog.");
+        _status.Text = $"skeleton 0x{nameHash:X16} not found";
+        _used.Text = "Used by 0";
+        _used.Enabled = false;
     }
 
     private SkeletonEntry? Selected()
@@ -399,6 +509,11 @@ internal sealed class SkeletonForm : Form
             return;
         }
 
+        if (_links.Visible)
+        {
+            CloseLinks();
+        }
+
         _decodeCancel?.Cancel();
         _decodeCancel?.Dispose();
         CancellationTokenSource cancel = new();
@@ -409,9 +524,8 @@ internal sealed class SkeletonForm : Form
 
     private async Task DecodeAsync(SkeletonEntry entry, CancellationTokenSource cancel)
     {
-        _view.SetMessage(
-            $"Skel_Z 0x{entry.NameHash:X16}",
-            "Loading...");
+        string title = $"Skel_Z 0x{entry.NameHash:X16}";
+        _view.SetMessage(title, "Loading...");
         try
         {
             SkeletonData data = await Task.Run(() =>
@@ -428,7 +542,7 @@ internal sealed class SkeletonForm : Form
 
             int copies = _copies.GetValueOrDefault(entry.NameHash);
             _view.SetSkeleton(
-                $"Skel_Z 0x{entry.NameHash:X16}",
+                title,
                 $"{Path.GetFileName(entry.ArchivePath)} | offset {entry.Offset:N0} | v{data.Head.Version} | {data.Bones.Count:N0} bones | tail {data.TailLength:N0} bytes | {copies:N0} copies",
                 data);
             _status.Text =
@@ -443,6 +557,7 @@ internal sealed class SkeletonForm : Form
         {
             if (!IsDisposed && !cancel.IsCancellationRequested)
             {
+                _view.SetMessage(title, "Could not read this skeleton.");
                 _status.Text = ex.Message;
             }
         }
@@ -487,6 +602,14 @@ internal sealed class SkeletonForm : Form
             rows);
         _view.Visible = false;
         _links.Visible = true;
+        _back.Visible = true;
+    }
+
+    private void CloseLinks()
+    {
+        _links.Visible = false;
+        _view.Visible = true;
+        _back.Visible = false;
     }
 
     private void ConfigureGrid()
@@ -516,7 +639,7 @@ internal sealed class SkeletonForm : Form
             ForeColor = Theme.Text,
             SelectionBackColor = Theme.GridHeader,
             SelectionForeColor = Theme.Text,
-            Font = new Font("Segoe UI Semibold", 8.5f),
+            Font = new Font("Segoe UI Semibold", 8f),
             Padding = new Padding(4, 0, 4, 0),
             Alignment = DataGridViewContentAlignment.MiddleLeft,
         };
@@ -536,12 +659,12 @@ internal sealed class SkeletonForm : Form
             SelectionForeColor = Color.White,
         };
 
-        AddColumn("Name", 146, true);
-        AddColumn("Archive", 94, false);
-        AddColumn("Offset", 60, false, true);
-        AddColumn("Body", 54, false, true);
+        AddColumn("Name", 144, true);
+        AddColumn("Archive", 78, false);
+        AddColumn("Offset", 72, false, true);
+        AddColumn("Body", 50, false, true);
         AddColumn("Stored", 54, false, true);
-        AddColumn("Copies", 58, false, true);
+        AddColumn("Copies", 56, false, true);
     }
 
     private void AddColumn(string header, int width, bool mono, bool right = false)

@@ -509,10 +509,19 @@ internal static class Program
                     $"{Path.GetFileName(entry.ArchivePath)} 0x{skin.Head.NameHash:X16} offset {entry.Row.Offset}{external}");
                 Console.WriteLine(
                     $"  version {skin.Head.Version}, {skin.Head.Storage}, body {N(skin.Head.BodySize)}, stored {N(skin.Head.StoredSize)}, meshes {skin.MeshLinks.Length}, parts {skin.Parts.Length}, bones {skin.Bones.Length}");
-                SkinBinding binding = SkinBinding.Read(stream, entry.BodyArchivePath, entry.Row);
-                Console.WriteLine(binding.HasSkeleton
-                    ? $"  skeleton 0x{binding.SkeletonRoot:X16}"
-                    : "  skeleton none");
+                SkinBinding? binding = null;
+                try
+                {
+                    binding = SkinBinding.Read(stream, entry.BodyArchivePath, entry.Row);
+                }
+                catch (InvalidDataException)
+                {
+                }
+
+                string skeleton = binding is null
+                    ? "unreadable"
+                    : binding.HasSkeleton ? $"0x{binding.SkeletonRoot:X16}" : "none";
+                Console.WriteLine($"  skeleton {skeleton}");
                 foreach (SkinPart part in skin.Parts)
                 {
                     string packets = part.PacketsParsed
@@ -660,6 +669,12 @@ internal static class Program
             watch.Stop();
             Console.WriteLine(
                 $"skin skeletons: {N(skins.Entries.Count)} bodies, {N(skins.BoundCount)} bound, {N(skins.NoSkeleton)} none, {N(skins.BySkeleton.Count)} skeletons used, {skins.Failures.Count} failed, {N(watch.ElapsedMilliseconds)} ms");
+            Console.WriteLine(
+                "  kinds: "
+                + string.Join(", ", skins.Entries
+                    .GroupBy(use => use.Kind)
+                    .OrderByDescending(group => group.Count())
+                    .Select(group => $"{group.Key}->{N(group.Count())}")));
             foreach (KeyValuePair<ulong, IReadOnlyList<SkinSkeletonUse>> pair in skins.BySkeleton
                 .OrderByDescending(pair => pair.Value.Count)
                 .ThenBy(pair => pair.Key)

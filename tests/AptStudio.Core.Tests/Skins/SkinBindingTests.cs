@@ -7,17 +7,16 @@ namespace AptStudio.Core.Tests.Skins;
 public sealed class SkinBindingTests
 {
     [Fact]
-    public void ReadsSkeletonRootAndMeshes()
+    public void ReadsSkeletonRootAndEntries()
     {
         byte[] block = Block(0x9999, [0xAA, 0xBB, 0xCC], 0xAA);
 
         SkinBinding binding = SkinBinding.Parse(block, (uint)block.Length, "test");
 
-        Assert.Equal(0x9999UL, binding.BlockHash);
-        Assert.Equal(3u, binding.EntryCount);
+        Assert.Equal(6u, binding.Kind);
         Assert.True(binding.HasSkeleton);
         Assert.Equal(0xAAUL, binding.SkeletonRoot);
-        Assert.Equal([0xBBUL, 0xCCUL], binding.MeshEntries);
+        Assert.Equal([0xAAUL, 0xBBUL, 0xCCUL], binding.Entries);
     }
 
     [Fact]
@@ -29,7 +28,7 @@ public sealed class SkinBindingTests
 
         Assert.False(binding.HasSkeleton);
         Assert.Equal(0UL, binding.SkeletonRoot);
-        Assert.Equal([0xCCUL], binding.MeshEntries);
+        Assert.Equal([0xCCUL], binding.Entries);
     }
 
     [Fact]
@@ -60,6 +59,17 @@ public sealed class SkinBindingTests
     }
 
     [Fact]
+    public void RejectsWrongKind()
+    {
+        byte[] block = Block(0x9999, [0xAA], 0xAA);
+        BinaryPrimitives.WriteUInt32LittleEndian(block.AsSpan(0x08), 7);
+
+        InvalidDataException error = Assert.Throws<InvalidDataException>(
+            () => SkinBinding.Parse(block, (uint)block.Length, "test"));
+        Assert.Contains("kind 7", error.Message);
+    }
+
+    [Fact]
     public void ReadsFromSkinHead()
     {
         byte[] block = Block(0x9999, [0xAA, 0xBB], 0xAA);
@@ -80,9 +90,9 @@ public sealed class SkinBindingTests
 
         SkinBinding binding = SkinBinding.Read(new MemoryStream(bytes), "test", row);
 
-        Assert.Equal(0x9999UL, binding.BlockHash);
+        Assert.Equal(6u, binding.Kind);
         Assert.Equal(0xAAUL, binding.SkeletonRoot);
-        Assert.Equal([0xBBUL], binding.MeshEntries);
+        Assert.Equal([0xAAUL, 0xBBUL], binding.Entries);
     }
 
     private static byte[] Block(ulong blockHash, ulong[] entries, ulong root)

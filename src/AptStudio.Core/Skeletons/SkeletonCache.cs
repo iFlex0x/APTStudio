@@ -35,6 +35,8 @@ public static class SkeletonCache
         string fullPath = Path.GetFullPath(archivePath);
         string cachePath = CachePath(cacheRoot ?? DefaultRoot, fullPath);
         FileInfo before = new(fullPath);
+        long beforeLength = before.Length;
+        DateTime beforeWrite = before.LastWriteTimeUtc;
         if (!rebuild && TryRead(cachePath, fullPath, before, out IReadOnlyList<SkeletonHit> cached))
         {
             fromCache = true;
@@ -43,7 +45,7 @@ public static class SkeletonCache
 
         IReadOnlyList<SkeletonHit> hits = SkeletonScanner.Scan(fullPath, cancellationToken);
         FileInfo after = new(fullPath);
-        if (before.Length == after.Length && before.LastWriteTimeUtc == after.LastWriteTimeUtc)
+        if (beforeLength == after.Length && beforeWrite == after.LastWriteTimeUtc)
         {
             try
             {
@@ -121,18 +123,28 @@ public static class SkeletonCache
             for (int index = 0; index < count; index++)
             {
                 ReadOnlySpan<byte> record = payload.Slice(index * RecordSize, RecordSize);
+                long offset = BinaryPrimitives.ReadInt64LittleEndian(record);
+                uint bodySize = BinaryPrimitives.ReadUInt32LittleEndian(record[24..]);
+                uint storedSize = BinaryPrimitives.ReadUInt32LittleEndian(record[28..]);
+                uint linkSize = BinaryPrimitives.ReadUInt32LittleEndian(record[32..]);
+                long total = SkeletonHead.HeaderSize + (long)linkSize
+                    + SkeletonHead.ExtraSize + storedSize;
+                if (offset < 0 || bodySize is 0 or > SkeletonHead.MaxBodySize
+                    || storedSize <= 8 || linkSize > SkeletonHead.MaxLinkSize
+                    || total > uint.MaxValue || offset + total > archive.Length)
+                {
+                    return false;
+                }
+
                 rows.Add(new SkeletonHit(
-                    BinaryPrimitives.ReadInt64LittleEndian(record),
+                    offset,
                     BinaryPrimitives.ReadUInt64LittleEndian(record[8..]),
                     BinaryPrimitives.ReadUInt64LittleEndian(record[16..]),
-                    BinaryPrimitives.ReadUInt32LittleEndian(record[24..]),
-                    BinaryPrimitives.ReadUInt32LittleEndian(record[28..]),
-                    BinaryPrimitives.ReadUInt32LittleEndian(record[32..]),
+                    bodySize,
+                    storedSize,
+                    linkSize,
                     BinaryPrimitives.ReadUInt16LittleEndian(record[36..]),
-                    (uint)(SkeletonHead.HeaderSize
-                        + BinaryPrimitives.ReadUInt32LittleEndian(record[32..])
-                        + SkeletonHead.ExtraSize
-                        + BinaryPrimitives.ReadUInt32LittleEndian(record[28..]))));
+                    (uint)total));
             }
 
             hits = rows;
@@ -176,7 +188,7 @@ public static class SkeletonCache
         SHA256.HashData(payload).CopyTo(bytes, at + 28 + payload.Length);
 
         Directory.CreateDirectory(Path.GetDirectoryName(cachePath)!);
-        string temp = cachePath + "." + Environment.ProcessId + ".tmp";
+        string temp = cachePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
         File.WriteAllBytes(temp, bytes);
         File.Move(temp, cachePath, true);
     }

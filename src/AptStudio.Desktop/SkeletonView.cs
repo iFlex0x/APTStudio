@@ -117,7 +117,7 @@ internal sealed class SkeletonView : Panel
         _title.Font = new Font("Segoe UI Semibold", 9.5f * scale);
         _bones.RowTemplate.Height = (int)Math.Round(20 * scale);
         _bones.ColumnHeadersHeight = (int)Math.Round(22 * scale);
-        _bones.ColumnHeadersDefaultCellStyle.Font = new Font("Segoe UI Semibold", 8.5f * scale);
+        _bones.ColumnHeadersDefaultCellStyle.Font = new Font("Segoe UI Semibold", 8f * scale);
         foreach (DataGridViewColumn column in _bones.Columns)
         {
             if (column.Tag is int width)
@@ -135,7 +135,7 @@ internal sealed class SkeletonView : Panel
         if (_split.Width > 240)
         {
             _split.SplitterDistance = Math.Clamp(
-                _split.Width * 11 / 20, 120, _split.Width - 120);
+                _split.Width * 29 / 50, 120, _split.Width - 120);
         }
     }
 
@@ -166,7 +166,7 @@ internal sealed class SkeletonView : Panel
             ForeColor = Theme.Text,
             SelectionBackColor = Theme.GridHeader,
             SelectionForeColor = Theme.Text,
-            Font = new Font("Segoe UI Semibold", 8.5f),
+            Font = new Font("Segoe UI Semibold", 8f),
             Padding = new Padding(4, 0, 4, 0),
             Alignment = DataGridViewContentAlignment.MiddleLeft,
         };
@@ -186,12 +186,12 @@ internal sealed class SkeletonView : Panel
             SelectionForeColor = Color.White,
         };
 
-        AddColumn("Bone", 146, true);
-        AddColumn("Parent", 46, false, true);
-        AddColumn("First", 42, false, true);
-        AddColumn("X", 48, false, true);
-        AddColumn("Y", 48, false, true);
-        AddColumn("Z", 48, false, true);
+        AddColumn("Bone", 138, true);
+        AddColumn("Parent", 52, false, true);
+        AddColumn("First", 44, false, true);
+        AddColumn("X", 46, false, true);
+        AddColumn("Y", 46, false, true);
+        AddColumn("Z", 50, false, true);
     }
 
     private void AddColumn(string header, int width, bool mono, bool right = false)
@@ -341,9 +341,16 @@ internal sealed class SkeletonCanvas : Control
 
         TextRenderer.DrawText(
             g,
-            $"0x{_name:X16}  {_bones.Count:N0} bones  drag to turn, wheel to zoom",
+            $"0x{_name:X16} | {_bones.Count:N0} bones",
             Font,
             new Rectangle(8, 6, ClientSize.Width - 16, 20),
+            Theme.Muted,
+            TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
+        TextRenderer.DrawText(
+            g,
+            "drag to turn, wheel to zoom",
+            Font,
+            new Rectangle(8, 24, ClientSize.Width - 16, 20),
             Theme.Muted,
             TextFormatFlags.Left | TextFormatFlags.VerticalCenter);
     }

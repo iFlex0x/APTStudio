@@ -16,11 +16,19 @@ public sealed class SkeletonViewTests
             ?? throw new InvalidOperationException("No grid in the tree.");
 
         Assert.Equal(
-            [146, 46, 42, 48, 48, 48],
+            [138, 52, 44, 46, 46, 50],
             grid.Columns.Cast<DataGridViewColumn>().Select(column => column.Width).ToArray());
         Font font = Assert.IsType<Font>(grid.Columns[0].DefaultCellStyle.Font);
         Assert.Equal("Consolas", font.Name);
         Assert.True(grid.Columns.Cast<DataGridViewColumn>().Sum(column => column.Width) <= 520);
+        foreach (DataGridViewColumn column in grid.Columns)
+        {
+            int text = TextRenderer.MeasureText(
+                column.HeaderText, grid.ColumnHeadersDefaultCellStyle.Font).Width;
+            Assert.True(
+                text <= column.Width - 8,
+                $"{column.HeaderText} is {text} px, column is {column.Width}");
+        }
     }
 
     [Fact]
