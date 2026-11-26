@@ -36,6 +36,24 @@ public sealed class SkinDataTests
     }
 
     [Fact]
+    public void ReadsBoneTablePastLookalikeCount()
+    {
+        // three slots in order make the middle slot's index look like a one-bone table
+        byte[] body = SkinTestData.Body(
+            new TestPart(1, 16, 0xAA, new[] { 1UL }, SkinTestData.Weights16(1)),
+            new TestPart(1, 16, 0xBB, new[] { 2UL }, SkinTestData.Weights16(1)),
+            new TestPart(1, 16, 0xCC, new[] { 3UL }, SkinTestData.Weights16(1)));
+        SkinData skin = SkinData.Parse(
+            SkinHead.Parse(SkinTestData.Header(1), "test"), body, "test", _ => 1);
+
+        Assert.Equal(3, skin.Bones.Length);
+        Assert.Equal(new[] { 0, 1, 2 }, skin.Bones.Select(bone => bone.Index));
+        Assert.Equal(
+            new ulong[] { 0x2000, 0x2001, 0x2002 },
+            skin.Bones.Select(bone => bone.NameHash));
+    }
+
+    [Fact]
     public void ReadsFourInfluences()
     {
         byte[] body = SkinTestData.Body(

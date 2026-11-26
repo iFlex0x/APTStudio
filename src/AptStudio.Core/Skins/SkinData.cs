@@ -27,6 +27,7 @@ public sealed class SkinData
     private const int MaxParts = 1000;
     private const int MaxPackets = 64;
     private const int MaxBones = 4000;
+    private const int MaxBoneSlot = 4096;
     private const int MaxVertexCount = 500_000;
     private const uint VertexFlags = 0x00200102;
 
@@ -283,12 +284,13 @@ public sealed class SkinData
 
     private static SkinBone[] ReadBones(byte[] body, int from)
     {
-        for (int count = 1; count <= MaxBones; count++)
+        // the table ends at the body end; a bone slot can look like a smaller count
+        for (int count = MaxBones; count >= 1; count--)
         {
             int start = body.Length - 4 - count * 12;
             if (start < from)
             {
-                break;
+                continue;
             }
 
             if (BinaryPrimitives.ReadInt32LittleEndian(body.AsSpan(start)) != count)
@@ -297,15 +299,26 @@ public sealed class SkinData
             }
 
             SkinBone[] bones = new SkinBone[count];
+            HashSet<int> slots = new(count);
+            bool valid = true;
             for (int i = 0; i < count; i++)
             {
                 int at = start + 4 + i * 12;
-                bones[i] = new SkinBone(
-                    BinaryPrimitives.ReadUInt64LittleEndian(body.AsSpan(at)),
-                    BinaryPrimitives.ReadInt32LittleEndian(body.AsSpan(at + 8)));
+                ulong name = BinaryPrimitives.ReadUInt64LittleEndian(body.AsSpan(at));
+                int slot = BinaryPrimitives.ReadInt32LittleEndian(body.AsSpan(at + 8));
+                if (name == 0 || slot < 0 || slot >= MaxBoneSlot || !slots.Add(slot))
+                {
+                    valid = false;
+                    break;
+                }
+
+                bones[i] = new SkinBone(name, slot);
             }
 
-            return bones;
+            if (valid)
+            {
+                return bones;
+            }
         }
 
         return Array.Empty<SkinBone>();
