@@ -26,6 +26,8 @@ internal static class ScreenshotMode
         bool openMesh = false;
         bool audio = false;
         bool audioPlay = false;
+        bool links = false;
+        bool openLink = false;
         for (int i = 2; i < args.Length; i++)
         {
             if (args[i] == "--game" && i + 1 < args.Length)
@@ -70,6 +72,15 @@ internal static class ScreenshotMode
             else if (args[i] == "--openmesh")
             {
                 openMesh = true;
+            }
+            else if (args[i] == "--links")
+            {
+                links = true;
+            }
+            else if (args[i] == "--openlink")
+            {
+                links = true;
+                openLink = true;
             }
             else if (args[i] == "--audio")
             {
@@ -198,6 +209,17 @@ internal static class ScreenshotMode
                 if (openMesh)
                 {
                     form.OpenMeshForShot();
+                    await form.WaitForPreviewAsync();
+                }
+
+                if (links)
+                {
+                    await form.LinksForShotAsync();
+                }
+
+                if (openLink)
+                {
+                    await form.OpenLinkForShotAsync();
                     await form.WaitForPreviewAsync();
                 }
 
