@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Runtime.InteropServices;
 using AptStudio.Core.Assets;
 using AptStudio.Core.Games;
+using AptStudio.Core.Materials;
 using AptStudio.Core.Meshes;
 using AptStudio.Core.Textures;
 
@@ -32,6 +33,7 @@ internal sealed class MainForm : Form
     private readonly TextureGrid _grid = new();
     private readonly PreviewControl _preview = new();
     private readonly MeshView _meshView = new();
+    private readonly MaterialView _materialPanel = new();
     private readonly DarkComboBox _typeCombo = new();
     private readonly DarkComboBox _formatCombo = new();
     private readonly DarkComboBox _mipCombo = new();
@@ -52,16 +54,24 @@ internal sealed class MainForm : Form
     private readonly System.Windows.Forms.Timer _filterTimer = new() { Interval = 150 };
 
     private IReadOnlyList<AssetEntry> _entries = Array.Empty<AssetEntry>();
+    private IReadOnlyList<MaterialRow> _materials = Array.Empty<MaterialRow>();
+    private Dictionary<ulong, AssetEntry> _bitmapByHash = new();
     private int[] _view = Array.Empty<int>();
     private GameProfile? _profile;
     private CancellationTokenSource? _scanCancel;
     private CancellationTokenSource? _previewCancel;
     private CancellationTokenSource? _exportCancel;
+    private CancellationTokenSource? _materialCancel;
     private bool _suppressFilters;
     private bool _suppressMip;
     private bool _updatingView;
     private bool _scanning;
     private bool _exporting;
+    private bool _materialsLoaded;
+    private bool _materialsLoading;
+    private bool _viewIsMaterials;
+    private string _assetStatus = "No game folder selected.";
+    private string _materialStatus = "";
     private bool _screenshotMode;
     private float _shotScale = 1f;
     private TaskCompletionSource<bool> _previewReady = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -103,6 +113,8 @@ internal sealed class MainForm : Form
         };
         _actualButton.Click += (_, _) => _preview.ActualSize();
         _wireframeCheck.CheckedChanged += (_, _) => _meshView.SetWireframe(_wireframeCheck.Checked);
+        _materialPanel.SlotSelected += hash => _ = ShowSlotTextureAsync(hash);
+        _materialPanel.TextureRequested += OpenTexture;
         _clearButton.Click += (_, _) => ClearFilters();
         _typeCombo.SelectedIndexChanged += (_, _) =>
         {
@@ -354,10 +366,13 @@ internal sealed class MainForm : Form
         _preview.Dock = DockStyle.Fill;
         _meshView.Dock = DockStyle.Fill;
         _meshView.Visible = false;
+        _materialPanel.Dock = DockStyle.Fill;
+        _materialPanel.Visible = false;
 
         Panel panel = new() { Dock = DockStyle.Fill, BackColor = Theme.Background };
         panel.Controls.Add(_preview);
         panel.Controls.Add(_meshView);
+        panel.Controls.Add(_materialPanel);
         panel.Controls.Add(_infoLabel);
         panel.Controls.Add(bar);
         return panel;
@@ -435,7 +450,7 @@ internal sealed class MainForm : Form
 
         AddColumn("Type", 110, SortColumn.Type);
         AddColumn("Hash", 140, SortColumn.Hash, mono: true);
-        AddColumn("Format", 80, SortColumn.Format);
+        AddColumn("Format", 130, SortColumn.Format);
         AddColumn("Size", 90, SortColumn.Size, right: true);
         AddColumn("Mips", 50, SortColumn.Mips, right: true);
         AddColumn("Surf", 48, SortColumn.Surfaces, right: true);
@@ -529,7 +544,7 @@ internal sealed class MainForm : Form
     private void ScaleGrid()
     {
         float scale = DeviceDpi / 96f * _shotScale;
-        int[] widths = [110, 140, 80, 90, 50, 48, 64, 155];
+        int[] widths = [110, 140, 130, 90, 50, 48, 64, 155];
         for (int i = 0; i < _grid.Columns.Count && i < widths.Length; i++)
         {
             _grid.Columns[i].Width = (int)Math.Round(widths[i] * scale);
@@ -556,6 +571,7 @@ internal sealed class MainForm : Form
     {
         ConfigureSplit();
         ScaleGrid();
+        _materialPanel.SetDpiScale(DeviceDpi / 96f);
         if (_entries.Count > 0 && !_scanning)
         {
             ApplyFilter(false);
@@ -638,6 +654,24 @@ internal sealed class MainForm : Form
             return;
         }
 
+        if (_viewIsMaterials)
+        {
+            MaterialRow row = _materials[_view[e.RowIndex]];
+            e.Value = e.ColumnIndex switch
+            {
+                0 => row.ClassName,
+                1 => row.NameHash.ToString("X16"),
+                2 => row.Code,
+                3 => row.SlotCount.ToString(CultureInfo.InvariantCulture),
+                4 => "-",
+                5 => "-",
+                6 => row.Storage == MaterialStorage.Raw ? "raw" : "lz4",
+                7 => Path.GetFileName(row.Entry.ArchivePath),
+                _ => null,
+            };
+            return;
+        }
+
         AssetEntry entry = _entries[_view[e.RowIndex]];
         BitmapHead? head = entry.Bitmap;
         e.Value = e.ColumnIndex switch
@@ -658,8 +692,21 @@ internal sealed class MainForm : Form
 
     private void ApplyFilter(bool selectFirst)
     {
+        FilterItem? type = _typeCombo.SelectedItem as FilterItem;
+        bool materials = type?.Materials == true;
+        if (materials != _viewIsMaterials)
+        {
+            _formatCombo.Enabled = !materials;
+            _previewableCheck.Enabled = !materials;
+            _statusLabel.Text = materials
+                ? _materialsLoaded
+                    ? _materialStatus
+                    : _materialsLoading ? "Scanning materials..." : "Material_Z not scanned."
+                : _assetStatus;
+        }
+
         int keep = -1;
-        if (_grid.SelectedRows.Count > 0)
+        if (materials == _viewIsMaterials && _grid.SelectedRows.Count > 0)
         {
             int selected = _grid.SelectedRows[0].Index;
             if (selected >= 0 && selected < _view.Length)
@@ -668,11 +715,37 @@ internal sealed class MainForm : Form
             }
         }
 
+        string query = NormalizeQuery(_filterText.Text);
+        _viewIsMaterials = materials;
+        if (materials)
+        {
+            if (!_materialsLoaded)
+            {
+                _ = LoadMaterialsAsync();
+                SetView(Array.Empty<int>(), -1, false);
+                ShowMessageMode();
+                _preview.ShowMessage(
+                    _materialsLoading ? "Scanning materials..." : "Select Material_Z to scan.",
+                    false);
+                return;
+            }
+
+            IEnumerable<int> materialIndices = Enumerable.Range(0, _materials.Count);
+            if (query.Length > 0)
+            {
+                materialIndices = materialIndices.Where(
+                    index => MatchesMaterial(_materials[index], query));
+            }
+
+            int[] materialView = materialIndices.ToArray();
+            Array.Sort(materialView, CompareMaterials);
+            SetView(materialView, keep, selectFirst);
+            return;
+        }
+
         IEnumerable<int> indices = Enumerable.Range(0, _entries.Count);
-        FilterItem? type = _typeCombo.SelectedItem as FilterItem;
         FilterItem? format = _formatCombo.SelectedItem as FilterItem;
         bool previewable = _previewableCheck.Checked;
-        string query = NormalizeQuery(_filterText.Text);
 
         if (type?.Class is not null)
         {
@@ -741,6 +814,46 @@ internal sealed class MainForm : Form
         return result != 0 ? result : a.CompareTo(b);
     }
 
+    private int CompareMaterials(int a, int b)
+    {
+        MaterialRow left = _materials[a];
+        MaterialRow right = _materials[b];
+        int result = _sortColumn switch
+        {
+            SortColumn.Type => StringComparer.OrdinalIgnoreCase.Compare(
+                left.ClassName, right.ClassName),
+            SortColumn.Hash => left.NameHash.CompareTo(right.NameHash),
+            SortColumn.Format => StringComparer.OrdinalIgnoreCase.Compare(
+                left.Code, right.Code),
+            SortColumn.Size => left.SlotCount.CompareTo(right.SlotCount),
+            SortColumn.Mips => 0,
+            SortColumn.Surfaces => 0,
+            SortColumn.Storage => left.Storage.CompareTo(right.Storage),
+            SortColumn.Archive => StringComparer.OrdinalIgnoreCase.Compare(
+                Path.GetFileName(left.Entry.ArchivePath),
+                Path.GetFileName(right.Entry.ArchivePath)),
+            _ => 0,
+        };
+        if (!_sortAscending)
+        {
+            result = -result;
+        }
+
+        if (result != 0)
+        {
+            return result;
+        }
+
+        result = left.NameHash.CompareTo(right.NameHash);
+        if (result != 0)
+        {
+            return result;
+        }
+
+        result = string.CompareOrdinal(left.Entry.ArchivePath, right.Entry.ArchivePath);
+        return result != 0 ? result : a.CompareTo(b);
+    }
+
     private static long PixelCount(AssetEntry entry) =>
         entry.Bitmap is null ? 0 : (long)entry.Bitmap.Width * entry.Bitmap.Height;
 
@@ -757,6 +870,12 @@ internal sealed class MainForm : Form
         || (entry.Bitmap is not null
             && entry.Bitmap.Format.DisplayName.Contains(query, StringComparison.OrdinalIgnoreCase));
 
+    private static bool MatchesMaterial(MaterialRow row, string query) =>
+        row.NameHash.ToString("X16").Contains(query, StringComparison.OrdinalIgnoreCase)
+        || row.ClassName.Contains(query, StringComparison.OrdinalIgnoreCase)
+        || row.Code.Contains(query, StringComparison.OrdinalIgnoreCase)
+        || Path.GetFileName(row.Entry.ArchivePath).Contains(query, StringComparison.OrdinalIgnoreCase);
+
     private void SetView(int[] view, int keep, bool selectFirst)
     {
         _updatingView = true;
@@ -765,7 +884,7 @@ internal sealed class MainForm : Form
             _view = view;
             _grid.RowCount = 0;
             _grid.RowCount = view.Length;
-            _countLabel.Text = $"{view.Length:N0} of {_entries.Count:N0}";
+            _countLabel.Text = $"{view.Length:N0} of {ActiveCount:N0}";
         }
         finally
         {
@@ -802,7 +921,9 @@ internal sealed class MainForm : Form
             UpdateExportEnabled();
             ShowMessageMode();
             _preview.ShowMessage(
-                _entries.Count == 0 ? "No assets in this game folder." : "Select an asset.",
+                ActiveCount == 0
+                    ? _viewIsMaterials ? "No materials to show." : "No assets in this game folder."
+                    : "Select an asset.",
                 false);
             _infoLabel.Text = "";
             _suppressMip = true;
@@ -840,6 +961,22 @@ internal sealed class MainForm : Form
         ApplyFilter(true);
     }
 
+    private int ActiveCount => _viewIsMaterials ? _materials.Count : _entries.Count;
+
+    private MaterialRow? SelectedMaterial()
+    {
+        DataGridViewRow? row = _grid.CurrentRow;
+        if (row is null || !row.Selected)
+        {
+            row = _grid.SelectedRows.Count > 0 ? _grid.SelectedRows[0] : null;
+        }
+
+        return row is not null && row.Index >= 0 && row.Index < _view.Length
+            && _materials.Count > _view[row.Index]
+            ? _materials[_view[row.Index]]
+            : null;
+    }
+
     private AssetEntry? SelectedEntry()
     {
         DataGridViewRow? row = _grid.CurrentRow;
@@ -854,25 +991,45 @@ internal sealed class MainForm : Form
     }
 
     private List<AssetEntry> SelectedEntries() =>
-        _grid.SelectedRows
-            .Cast<DataGridViewRow>()
-            .OrderBy(row => row.Index)
-            .Where(row => row.Index >= 0 && row.Index < _view.Length)
-            .Select(row => _entries[_view[row.Index]])
-            .ToList();
+        _viewIsMaterials
+            ? new List<AssetEntry>()
+            : _grid.SelectedRows
+                .Cast<DataGridViewRow>()
+                .OrderBy(row => row.Index)
+                .Where(row => row.Index >= 0 && row.Index < _view.Length)
+                .Select(row => _entries[_view[row.Index]])
+                .ToList();
+
+    private void ShowNoSelection()
+    {
+        CancelPreview();
+        ShowMessageMode();
+        _selectionTimer.Stop();
+        _selectionLabel.Text = "0 selected";
+        UpdateExportEnabled();
+        _preview.ShowMessage("Select an asset.", false);
+        _infoLabel.Text = "";
+    }
 
     private async Task PreviewSelectionAsync(bool keepMip)
     {
+        if (_viewIsMaterials)
+        {
+            MaterialRow? material = SelectedMaterial();
+            if (material is null)
+            {
+                ShowNoSelection();
+                return;
+            }
+
+            await PreviewMaterialAsync(material);
+            return;
+        }
+
         AssetEntry? entry = SelectedEntry();
         if (entry is null)
         {
-            CancelPreview();
-            ShowMessageMode();
-            _selectionTimer.Stop();
-            _selectionLabel.Text = "0 selected";
-            UpdateExportEnabled();
-            _preview.ShowMessage("Select an asset.", false);
-            _infoLabel.Text = "";
+            ShowNoSelection();
             return;
         }
 
@@ -912,6 +1069,7 @@ internal sealed class MainForm : Form
     private void ShowTextureMode()
     {
         _meshView.Visible = false;
+        _materialPanel.Visible = false;
         _preview.Visible = true;
         _mipCombo.Visible = true;
         _channelCombo.Visible = true;
@@ -925,6 +1083,7 @@ internal sealed class MainForm : Form
     private void ShowMeshMode()
     {
         _preview.Visible = false;
+        _materialPanel.Visible = false;
         _meshView.Visible = true;
         _mipCombo.Visible = false;
         _channelCombo.Visible = false;
@@ -936,9 +1095,24 @@ internal sealed class MainForm : Form
         _zoomLabel.Text = "";
     }
 
+    private void ShowMaterialMode()
+    {
+        _preview.Visible = false;
+        _meshView.Visible = false;
+        _materialPanel.Visible = true;
+        _mipCombo.Visible = false;
+        _channelCombo.Visible = false;
+        _zoomLabel.Visible = false;
+        _actualButton.Visible = false;
+        _fitButton.Visible = false;
+        _wireframeCheck.Visible = false;
+        _zoomLabel.Text = "";
+    }
+
     private void ShowMessageMode()
     {
         _meshView.Visible = false;
+        _materialPanel.Visible = false;
         _preview.Visible = true;
         _mipCombo.Visible = false;
         _channelCombo.Visible = false;
@@ -1080,6 +1254,291 @@ internal sealed class MainForm : Form
         _previewCancel = null;
     }
 
+    private async Task LoadMaterialsAsync()
+    {
+        if (_materialsLoaded || _materialsLoading || _profile is null)
+        {
+            return;
+        }
+
+        _materialsLoading = true;
+        _materialCancel?.Cancel();
+        _materialCancel?.Dispose();
+        CancellationTokenSource cancel = new();
+        _materialCancel = cancel;
+        GameProfile profile = _profile;
+        Stopwatch watch = Stopwatch.StartNew();
+        _statusLabel.Text = "Scanning materials...";
+        _statusLabel.ToolTipText = "";
+        IProgress<CatalogProgress> progress = new Progress<CatalogProgress>(item =>
+        {
+            if (!IsDisposed && cancel == _materialCancel)
+            {
+                _statusLabel.Text =
+                    $"Scanning materials {Path.GetFileName(item.ArchivePath)} {item.Index}/{item.Total}";
+            }
+        });
+
+        try
+        {
+            (MaterialCatalog Catalog, List<MaterialRow> Rows) result = await Task.Run(() =>
+            {
+                MaterialCatalog catalog = MaterialCatalog.Load(
+                    profile, false, progress, cancel.Token);
+                List<MaterialRow> rows = new(catalog.Entries.Count);
+                foreach (IGrouping<string, MaterialEntry> group in catalog.Entries
+                    .GroupBy(entry => entry.ArchivePath))
+                {
+                    cancel.Token.ThrowIfCancellationRequested();
+                    using FileStream stream = new(
+                        group.Key, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                    foreach (MaterialEntry entry in group)
+                    {
+                        cancel.Token.ThrowIfCancellationRequested();
+                        try
+                        {
+                            MaterialData data = MaterialDecoder.Read(
+                                stream, entry.ArchivePath, entry.Hit);
+                            rows.Add(new MaterialRow(
+                                entry, data.Code, data.Slots.Count, data.Head.Storage));
+                        }
+                        catch (InvalidDataException)
+                        {
+                            rows.Add(new MaterialRow(
+                                entry, "(failed)", 0, MaterialStorage.Lz4, true));
+                        }
+                    }
+                }
+
+                return (catalog, rows);
+            }, cancel.Token);
+
+            if (IsDisposed || cancel != _materialCancel)
+            {
+                return;
+            }
+
+            watch.Stop();
+            _materials = result.Rows;
+            _materialsLoaded = true;
+            UpdateMaterialFilterLabel();
+            int failed = result.Rows.Count(row => row.Failed);
+            int slots = result.Rows.Sum(row => row.SlotCount);
+            _materialStatus =
+                $"{N(result.Rows.Count)} materials | {N(slots)} slots | {N(result.Catalog.Archives.Count)} archives | {N(failed)} failed | scanned {N(result.Catalog.Scanned)}, cached {N(result.Catalog.Cached)} | {watch.ElapsedMilliseconds} ms";
+            _statusLabel.Text = _materialStatus;
+            if (result.Catalog.Failures.Count > 0)
+            {
+                _statusLabel.ToolTipText = string.Join(
+                    Environment.NewLine,
+                    result.Catalog.Failures.Select(failure => failure.Message).Take(20));
+            }
+
+            ApplyFilter(true);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            if (!IsDisposed && cancel == _materialCancel)
+            {
+                _statusLabel.Text = ex.Message;
+            }
+        }
+        finally
+        {
+            _materialsLoading = false;
+        }
+    }
+
+    private void UpdateMaterialFilterLabel()
+    {
+        for (int index = 0; index < _typeCombo.Items.Count; index++)
+        {
+            if (_typeCombo.Items[index] is not FilterItem item || !item.Materials)
+            {
+                continue;
+            }
+
+            bool selected = _typeCombo.SelectedIndex == index;
+            _suppressFilters = true;
+            try
+            {
+                _typeCombo.Items[index] = new FilterItem(
+                    $"Material_Z ({_materials.Count:N0})", AssetClass.Material, null, true);
+                if (selected)
+                {
+                    _typeCombo.SelectedIndex = index;
+                }
+            }
+            finally
+            {
+                _suppressFilters = false;
+            }
+
+            return;
+        }
+    }
+
+    private async Task PreviewMaterialAsync(MaterialRow row)
+    {
+        CancelPreview();
+        CancellationTokenSource cancel = new();
+        _previewCancel = cancel;
+        ShowMaterialMode();
+        _materialPanel.ShowPreviewMessage("Loading material...", false);
+        _infoLabel.Text =
+            $"{row.ClassName} | 0x{row.NameHash:X16} | {Path.GetFileName(row.Entry.ArchivePath)}";
+
+        try
+        {
+            (MaterialData Data, List<MaterialSlotRow> Slots) result = await Task.Run(() =>
+            {
+                using FileStream stream = new(
+                    row.Entry.ArchivePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                MaterialData data = MaterialDecoder.Read(
+                    stream, row.Entry.ArchivePath, row.Entry.Hit);
+                List<MaterialSlotRow> slots = new(data.Slots.Count);
+                foreach (MaterialSlot slot in data.Slots)
+                {
+                    string texture = "missing";
+                    string archive = "-";
+                    if (_bitmapByHash.TryGetValue(slot.TextureHash, out AssetEntry? bitmap))
+                    {
+                        texture = $"0x{slot.TextureHash:X16}";
+                        archive = Path.GetFileName(bitmap.ArchivePath);
+                    }
+
+                    slots.Add(new MaterialSlotRow(
+                        slot.Index,
+                        slot.Role.Authoring,
+                        slot.Role.Binding,
+                        slot.TextureHash,
+                        texture,
+                        archive));
+                }
+
+                return (data, slots);
+            }, cancel.Token);
+
+            if (IsDisposed || cancel != _previewCancel)
+            {
+                return;
+            }
+
+            _materialPanel.SetMaterial(
+                $"{result.Data.Code} | {row.ClassName}",
+                $"0x{row.NameHash:X16} | {Path.GetFileName(row.Entry.ArchivePath)} | {result.Data.Slots.Count} slots",
+                result.Slots);
+            _infoLabel.Text =
+                $"{result.Data.Code} | {row.ClassName} | {Path.GetFileName(row.Entry.ArchivePath)}";
+            if (result.Data.Slots.Count > 0)
+            {
+                await ShowSlotTextureAsync(result.Data.Slots[0].TextureHash);
+            }
+            else
+            {
+                _materialPanel.ShowPreviewMessage("Material has no texture slots.", false);
+                _previewReady.TrySetResult(true);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex) when (ex is InvalidDataException or IOException
+            or UnauthorizedAccessException)
+        {
+            if (!IsDisposed && cancel == _previewCancel)
+            {
+                _materialPanel.ShowPreviewMessage(ex.Message, true);
+                _previewReady.TrySetResult(true);
+            }
+        }
+    }
+
+    private async Task ShowSlotTextureAsync(ulong hash)
+    {
+        if (!_bitmapByHash.TryGetValue(hash, out AssetEntry? entry) || entry.Texture is null)
+        {
+            _materialPanel.ShowPreviewMessage(
+                $"Texture 0x{hash:X16} is not in the asset catalog.", true);
+            return;
+        }
+
+        CancelPreview();
+        CancellationTokenSource cancel = new();
+        _previewCancel = cancel;
+        _materialPanel.ShowPreviewMessage("Loading texture...", false);
+
+        try
+        {
+            (Bitmap Bitmap, int Width, int Height, string Format, int Mips) result =
+                await Task.Run(() =>
+                {
+                    using FileStream stream = new(
+                        entry.BodyArchivePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                    DecodedTexture image = TextureDecoder.DecodeMip(stream, entry.Texture, 0);
+                    return (
+                        PreviewBitmap.Create(image),
+                        image.Width,
+                        image.Height,
+                        entry.Bitmap!.Format.DisplayName,
+                        entry.Bitmap.MipCount);
+                }, cancel.Token);
+
+            if (IsDisposed || cancel != _previewCancel)
+            {
+                result.Bitmap.Dispose();
+                return;
+            }
+
+            _materialPanel.SetPreview(
+                result.Bitmap,
+                $"{result.Width:N0}x{result.Height:N0} | {result.Format} | {result.Mips} mips | {Path.GetFileName(entry.ArchivePath)}");
+            _previewReady.TrySetResult(true);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex) when (ex is InvalidDataException or NotSupportedException
+            or IOException or UnauthorizedAccessException)
+        {
+            if (!IsDisposed && cancel == _previewCancel)
+            {
+                _materialPanel.ShowPreviewMessage(ex.Message, true);
+                _previewReady.TrySetResult(true);
+            }
+        }
+    }
+
+    private void OpenTexture(ulong hash)
+    {
+        if (!_bitmapByHash.ContainsKey(hash))
+        {
+            _statusLabel.Text = $"Texture 0x{hash:X16} is not in the asset catalog.";
+            return;
+        }
+
+        _suppressFilters = true;
+        try
+        {
+            if (_typeCombo.Items.Count > 0)
+            {
+                _typeCombo.SelectedIndex = 0;
+            }
+
+            _filterText.Text = hash.ToString("X16");
+        }
+        finally
+        {
+            _suppressFilters = false;
+        }
+
+        _filterTimer.Stop();
+        ApplyFilter(true);
+    }
+
     private async Task ExportSelectedAsync()
     {
         if (_exporting)
@@ -1215,16 +1674,18 @@ internal sealed class MainForm : Form
 
     private void CopyHash()
     {
-        AssetEntry? entry = SelectedEntry();
-        if (entry is null)
+        ulong? hash = _viewIsMaterials
+            ? SelectedMaterial()?.NameHash
+            : SelectedEntry()?.NameHash;
+        if (hash is not ulong value)
         {
             return;
         }
 
         try
         {
-            Clipboard.SetText(entry.NameHash.ToString("X16"));
-            _statusLabel.Text = $"Copied 0x{entry.NameHash:X16}.";
+            Clipboard.SetText(value.ToString("X16"));
+            _statusLabel.Text = $"Copied 0x{value:X16}.";
         }
         catch (ExternalException)
         {
@@ -1273,6 +1734,14 @@ internal sealed class MainForm : Form
         _scanCancel?.Dispose();
         CancellationTokenSource cancel = new();
         _scanCancel = cancel;
+        _materialCancel?.Cancel();
+        _materialCancel?.Dispose();
+        _materialCancel = null;
+        _materials = Array.Empty<MaterialRow>();
+        _materialsLoaded = false;
+        _materialsLoading = false;
+        _viewIsMaterials = false;
+        _materialPanel.Reset();
         SetScanning(true);
         _statusLabel.Text = "Scanning...";
         _statusLabel.ToolTipText = "";
@@ -1306,11 +1775,18 @@ internal sealed class MainForm : Form
             }
 
             _entries = catalog.Entries;
+            _bitmapByHash = catalog.Entries
+                .Where(entry => entry.IsBitmap && entry.Texture is not null)
+                .GroupBy(entry => entry.NameHash)
+                .ToDictionary(
+                    group => group.Key,
+                    group => group.OrderByDescending(entry => entry.IsPreviewable).First());
             RebuildOptions(catalog);
             SetScanning(false);
             ApplyFilter(true);
-            _statusLabel.Text =
+            _assetStatus =
                 $"{N(_entries.Count)} assets | {N(catalog.BitmapCount)} textures | {N(catalog.PreviewableCount)} previewable | {N(catalog.Archives.Count)} archives | {N(catalog.BodyErrorCount)} body errors | {catalog.Failures.Count} failed | {watch.ElapsedMilliseconds} ms";
+            _statusLabel.Text = _assetStatus;
             List<string> problems = catalog.Failures.Select(failure => failure.Message)
                 .Concat(catalog.Entries
                     .Where(entry => entry.BodyError is not null)
@@ -1357,6 +1833,9 @@ internal sealed class MainForm : Form
                     $"{group.Name} ({group.Count:N0})", group.Hash, null));
             }
 
+            _typeCombo.Items.Add(new FilterItem(
+                "Material_Z (not scanned)", AssetClass.Material, null, true));
+
             _typeCombo.SelectedIndex = 0;
 
             _formatCombo.Items.Clear();
@@ -1397,7 +1876,7 @@ internal sealed class MainForm : Form
     private void UpdateExportEnabled()
     {
         _exportButton.Enabled =
-            !_exporting && !_scanning && _grid.SelectedRows.Count > 0;
+            !_exporting && !_scanning && !_viewIsMaterials && _grid.SelectedRows.Count > 0;
     }
 
     private void UpdateZoomLabel()
@@ -1454,6 +1933,9 @@ internal sealed class MainForm : Form
         _scanCancel?.Cancel();
         _scanCancel?.Dispose();
         _scanCancel = null;
+        _materialCancel?.Cancel();
+        _materialCancel?.Dispose();
+        _materialCancel = null;
         CancelPreview();
         _exportCancel?.Cancel();
         _exportCancel?.Dispose();
@@ -1506,6 +1988,8 @@ internal sealed class MainForm : Form
         _preview.Font = _grid.Font;
         _preview.SetDpiScale(scale);
         _meshView.Font = _grid.Font;
+        _materialPanel.Font = _grid.Font;
+        _materialPanel.SetDpiScale(scale);
         _infoLabel.Font = _grid.Font;
         _zoomLabel.Font = _grid.Font;
         _statusLabel.Font = _grid.Font;
@@ -1517,6 +2001,49 @@ internal sealed class MainForm : Form
         _previewReady = new TaskCompletionSource<bool>(
             TaskCreationOptions.RunContinuationsAsynchronously);
         return LoadGameAsync(root);
+    }
+
+    internal async Task MaterialsForShotAsync()
+    {
+        _previewReady = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        for (int index = 0; index < _typeCombo.Items.Count; index++)
+        {
+            if (_typeCombo.Items[index] is FilterItem item && item.Materials)
+            {
+                _suppressFilters = true;
+                _typeCombo.SelectedIndex = index;
+                _suppressFilters = false;
+                ApplyFilter(true);
+                _previewReady = new TaskCompletionSource<bool>(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+                await WaitForPreviewAsync();
+                return;
+            }
+        }
+
+        _previewReady.TrySetResult(true);
+    }
+
+    internal void SlotForShot(int index)
+    {
+        _previewReady = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        _materialPanel.SelectSlot(index);
+    }
+
+    internal void OpenTextureForShot()
+    {
+        _previewReady = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        if (_materialPanel.SelectedHash is ulong hash)
+        {
+            OpenTexture(hash);
+        }
+        else
+        {
+            _previewReady.TrySetResult(true);
+        }
     }
 
     internal void FilterForShot(string text)
@@ -1630,7 +2157,24 @@ internal sealed class MainForm : Form
         bitmap.Save(path, ImageFormat.Png);
     }
 
-    private sealed record FilterItem(string Text, ulong? Class, string? Format)
+    private sealed record MaterialRow(
+        MaterialEntry Entry,
+        string Code,
+        int SlotCount,
+        MaterialStorage Storage,
+        bool Failed = false)
+    {
+        public ulong NameHash => Entry.NameHash;
+
+        public string ClassName =>
+            Entry.ClassHash == MaterialHead.AnimClass ? "MaterialAnim_Z" : "Material_Z";
+    }
+
+    private sealed record FilterItem(
+        string Text,
+        ulong? Class,
+        string? Format,
+        bool Materials = false)
     {
         public override string ToString() => Text;
     }

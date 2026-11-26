@@ -12,6 +12,8 @@ public sealed record MaterialHit(
 
 public static class MaterialScanner
 {
+    public const uint ParserVersion = 1;
+
     private const int ChunkSize = 8 * 1024 * 1024;
     private const int Overlap = 7;
     private static readonly byte[] Magic = [0xFF, 0xD4, 0xC1, 0xCF, 0xF1, 0xB7, 0x0B, 0x31];

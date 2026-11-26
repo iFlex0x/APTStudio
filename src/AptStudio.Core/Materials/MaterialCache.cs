@@ -6,7 +6,7 @@ namespace AptStudio.Core.Materials;
 
 public static class MaterialCache
 {
-    private const uint FormatVersion = 1;
+    private const uint FormatVersion = 2;
     private const int RecordSize = 36;
     private const long MaxCacheBytes = 64 * 1024 * 1024;
     private static readonly byte[] Magic = "APTMATCACHE"u8.ToArray();
@@ -75,7 +75,7 @@ public static class MaterialCache
         try
         {
             FileInfo file = new(cachePath);
-            if (!file.Exists || file.Length > MaxCacheBytes || file.Length < Magic.Length + 24 + 32)
+            if (!file.Exists || file.Length > MaxCacheBytes || file.Length < Magic.Length + 28 + 32)
             {
                 return false;
             }
@@ -87,12 +87,14 @@ public static class MaterialCache
             }
 
             int at = Magic.Length;
-            if (BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(at)) != FormatVersion)
+            if (BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(at)) != FormatVersion
+                || BinaryPrimitives.ReadUInt32LittleEndian(bytes.AsSpan(at + 4))
+                    != MaterialScanner.ParserVersion)
             {
                 return false;
             }
 
-            at += 4;
+            at += 8;
             long length = BinaryPrimitives.ReadInt64LittleEndian(bytes.AsSpan(at));
             long ticks = BinaryPrimitives.ReadInt64LittleEndian(bytes.AsSpan(at + 8));
             if (length != archive.Length || ticks != archive.LastWriteTimeUtc.Ticks)
@@ -153,15 +155,17 @@ public static class MaterialCache
             BinaryPrimitives.WriteUInt32LittleEndian(record[32..], hit.TotalSize);
         }
 
-        byte[] bytes = new byte[Magic.Length + 24 + payload.Length + 32];
+        byte[] bytes = new byte[Magic.Length + 28 + payload.Length + 32];
         Magic.CopyTo(bytes, 0);
         int at = Magic.Length;
         BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(at), FormatVersion);
-        BinaryPrimitives.WriteInt64LittleEndian(bytes.AsSpan(at + 4), archive.Length);
-        BinaryPrimitives.WriteInt64LittleEndian(bytes.AsSpan(at + 12), archive.LastWriteTimeUtc.Ticks);
-        BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(at + 20), hits.Count);
-        payload.CopyTo(bytes, at + 24);
-        SHA256.HashData(payload).CopyTo(bytes, at + 24 + payload.Length);
+        BinaryPrimitives.WriteUInt32LittleEndian(
+            bytes.AsSpan(at + 4), MaterialScanner.ParserVersion);
+        BinaryPrimitives.WriteInt64LittleEndian(bytes.AsSpan(at + 8), archive.Length);
+        BinaryPrimitives.WriteInt64LittleEndian(bytes.AsSpan(at + 16), archive.LastWriteTimeUtc.Ticks);
+        BinaryPrimitives.WriteInt32LittleEndian(bytes.AsSpan(at + 24), hits.Count);
+        payload.CopyTo(bytes, at + 28);
+        SHA256.HashData(payload).CopyTo(bytes, at + 28 + payload.Length);
 
         Directory.CreateDirectory(Path.GetDirectoryName(cachePath)!);
         string temp = cachePath + "." + Environment.ProcessId + ".tmp";
