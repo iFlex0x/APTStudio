@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Runtime.InteropServices;
 using AptStudio.Core.Assets;
 using AptStudio.Core.Games;
+using AptStudio.Core.Meshes;
 using AptStudio.Core.Textures;
 
 namespace AptStudio.Desktop;
@@ -30,10 +31,12 @@ internal sealed class MainForm : Form
     private readonly ToolStripStatusLabel _selectionLabel = new();
     private readonly TextureGrid _grid = new();
     private readonly PreviewControl _preview = new();
+    private readonly MeshView _meshView = new();
     private readonly DarkComboBox _typeCombo = new();
     private readonly DarkComboBox _formatCombo = new();
     private readonly DarkComboBox _mipCombo = new();
     private readonly DarkComboBox _channelCombo = new();
+    private readonly CheckBox _wireframeCheck = new();
     private readonly TextBox _filterText = new();
     private readonly CheckBox _previewableCheck = new();
     private readonly Button _openButton = MakeButton("Open Game Folder", Theme.Accent);
@@ -87,8 +90,19 @@ internal sealed class MainForm : Form
         _rescanButton.Click += (_, _) => Rescan();
         _exportButton.Click += (_, _) => _ = ExportSelectedAsync();
         _cancelButton.Click += (_, _) => _exportCancel?.Cancel();
-        _fitButton.Click += (_, _) => _preview.Fit();
+        _fitButton.Click += (_, _) =>
+        {
+            if (_meshView.Visible)
+            {
+                _meshView.Fit();
+            }
+            else
+            {
+                _preview.Fit();
+            }
+        };
         _actualButton.Click += (_, _) => _preview.ActualSize();
+        _wireframeCheck.CheckedChanged += (_, _) => _meshView.SetWireframe(_wireframeCheck.Checked);
         _clearButton.Click += (_, _) => ClearFilters();
         _typeCombo.SelectedIndexChanged += (_, _) =>
         {
@@ -321,7 +335,13 @@ internal sealed class MainForm : Form
         _channelCombo.Width = 100;
         _channelCombo.Items.AddRange(["RGB", "Alpha", "Red", "Green", "Blue"]);
         _channelCombo.SelectedIndex = 0;
-        tools.Controls.AddRange([_fitButton, _actualButton, _zoomLabel, _mipCombo, _channelCombo]);
+        _wireframeCheck.Text = "Wireframe";
+        _wireframeCheck.AutoSize = true;
+        _wireframeCheck.ForeColor = Theme.Text;
+        _wireframeCheck.Margin = new Padding(0, 6, 6, 0);
+        _wireframeCheck.Visible = false;
+        tools.Controls.AddRange(
+            [_fitButton, _actualButton, _zoomLabel, _mipCombo, _channelCombo, _wireframeCheck]);
         bar.Controls.Add(tools);
 
         _infoLabel.Dock = DockStyle.Bottom;
@@ -332,9 +352,12 @@ internal sealed class MainForm : Form
         _infoLabel.Text = "";
 
         _preview.Dock = DockStyle.Fill;
+        _meshView.Dock = DockStyle.Fill;
+        _meshView.Visible = false;
 
         Panel panel = new() { Dock = DockStyle.Fill, BackColor = Theme.Background };
         panel.Controls.Add(_preview);
+        panel.Controls.Add(_meshView);
         panel.Controls.Add(_infoLabel);
         panel.Controls.Add(bar);
         return panel;
@@ -777,6 +800,7 @@ internal sealed class MainForm : Form
             _selectionTimer.Stop();
             _selectionLabel.Text = "0 selected";
             UpdateExportEnabled();
+            ShowMessageMode();
             _preview.ShowMessage(
                 _entries.Count == 0 ? "No assets in this game folder." : "Select an asset.",
                 false);
@@ -843,6 +867,7 @@ internal sealed class MainForm : Form
         if (entry is null)
         {
             CancelPreview();
+            ShowMessageMode();
             _selectionTimer.Stop();
             _selectionLabel.Text = "0 selected";
             UpdateExportEnabled();
@@ -851,10 +876,19 @@ internal sealed class MainForm : Form
             return;
         }
 
+        if (entry.ClassHash == AssetClass.Mesh)
+        {
+            ShowMeshMode();
+            await DecodeMeshAsync(entry);
+            return;
+        }
+
+        ShowTextureMode();
         if (entry.Bitmap is null)
         {
             CancelPreview();
             _previewReady.TrySetResult(true);
+            ShowMessageMode();
             _preview.ShowMessage(
                 entry.BodyError ?? $"{entry.ClassName} preview is not available yet.",
                 entry.BodyError is not null);
@@ -873,6 +907,88 @@ internal sealed class MainForm : Form
 
         int mip = _mipCombo.SelectedIndex >= 0 ? _mipCombo.SelectedIndex : 0;
         await DecodePreviewAsync(entry, mip);
+    }
+
+    private void ShowTextureMode()
+    {
+        _meshView.Visible = false;
+        _preview.Visible = true;
+        _mipCombo.Visible = true;
+        _channelCombo.Visible = true;
+        _zoomLabel.Visible = true;
+        _actualButton.Visible = true;
+        _fitButton.Visible = true;
+        _fitButton.Text = "Fit";
+        _wireframeCheck.Visible = false;
+    }
+
+    private void ShowMeshMode()
+    {
+        _preview.Visible = false;
+        _meshView.Visible = true;
+        _mipCombo.Visible = false;
+        _channelCombo.Visible = false;
+        _zoomLabel.Visible = false;
+        _actualButton.Visible = false;
+        _fitButton.Visible = true;
+        _fitButton.Text = "Reset";
+        _wireframeCheck.Visible = true;
+        _zoomLabel.Text = "";
+    }
+
+    private void ShowMessageMode()
+    {
+        _meshView.Visible = false;
+        _preview.Visible = true;
+        _mipCombo.Visible = false;
+        _channelCombo.Visible = false;
+        _zoomLabel.Visible = false;
+        _actualButton.Visible = false;
+        _fitButton.Visible = false;
+        _wireframeCheck.Visible = false;
+    }
+
+    private async Task DecodeMeshAsync(AssetEntry entry)
+    {
+        CancelPreview();
+        CancellationTokenSource cancel = new();
+        _previewCancel = cancel;
+        _meshView.ShowMessage("Loading mesh...", false);
+        _infoLabel.Text =
+            $"{entry.ClassName} | 0x{entry.NameHash:X16} | {Path.GetFileName(entry.ArchivePath)}";
+
+        try
+        {
+            MeshGeometry geometry = await Task.Run(() =>
+            {
+                using FileStream stream = new(
+                    entry.BodyArchivePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                MeshData mesh = MeshDecoder.Read(stream, entry.BodyArchivePath, entry.Row);
+                return mesh.ToGeometry();
+            }, cancel.Token);
+
+            if (IsDisposed || cancel != _previewCancel)
+            {
+                return;
+            }
+
+            _meshView.SetMesh(geometry);
+            _infoLabel.Text =
+                $"{geometry.Positions.Length:N0} verts | {geometry.Indices.Length / 3:N0} tris | {entry.ClassName} | {Path.GetFileName(entry.ArchivePath)}";
+            _previewReady.TrySetResult(true);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex) when (ex is InvalidDataException or IOException
+            or UnauthorizedAccessException)
+        {
+            if (!IsDisposed && cancel == _previewCancel)
+            {
+                _meshView.ShowMessage(ex.Message, true);
+                _previewReady.TrySetResult(true);
+            }
+        }
     }
 
     private void FillMipCombo(BitmapHead head)
@@ -1279,6 +1395,13 @@ internal sealed class MainForm : Form
 
     private void UpdateZoomLabel()
     {
+        if (_meshView.Visible)
+        {
+            _zoomLabel.Text = "";
+            _fitButton.ForeColor = Theme.Text;
+            return;
+        }
+
         _zoomLabel.Text = _preview.HasImage ? $"{_preview.Zoom * 100f:0}%" : "";
         _fitButton.ForeColor = _preview.IsFit ? Theme.Accent : Theme.Text;
         _actualButton.ForeColor = _preview.IsFit ? Theme.Text : Theme.Accent;
@@ -1375,6 +1498,7 @@ internal sealed class MainForm : Form
         _filterText.Font = _grid.Font;
         _preview.Font = _grid.Font;
         _preview.SetDpiScale(scale);
+        _meshView.Font = _grid.Font;
         _infoLabel.Font = _grid.Font;
         _zoomLabel.Font = _grid.Font;
         _statusLabel.Font = _grid.Font;
@@ -1426,6 +1550,12 @@ internal sealed class MainForm : Form
     }
 
     internal void ActualForShot() => _preview.ActualSize();
+
+    internal void WireframeForShot()
+    {
+        _wireframeCheck.Checked = true;
+        _meshView.SetWireframe(true);
+    }
 
     internal void PreviewableForShot()
     {
