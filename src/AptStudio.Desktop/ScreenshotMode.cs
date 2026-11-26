@@ -24,6 +24,8 @@ internal static class ScreenshotMode
         bool materials = false;
         bool openTexture = false;
         bool openMesh = false;
+        bool audio = false;
+        bool audioPlay = false;
         for (int i = 2; i < args.Length; i++)
         {
             if (args[i] == "--game" && i + 1 < args.Length)
@@ -68,6 +70,15 @@ internal static class ScreenshotMode
             else if (args[i] == "--openmesh")
             {
                 openMesh = true;
+            }
+            else if (args[i] == "--audio")
+            {
+                audio = true;
+            }
+            else if (args[i] == "--audioplay")
+            {
+                audio = true;
+                audioPlay = true;
             }
             else if (args[i] == "--slot"
                 && i + 1 < args.Length
@@ -161,6 +172,12 @@ internal static class ScreenshotMode
                     await form.WaitForPreviewAsync();
                 }
 
+                if (audio)
+                {
+                    await form.AudioForShotAsync();
+                    await form.WaitForPreviewAsync();
+                }
+
                 if (sort >= 0)
                 {
                     form.SortForShot(sort);
@@ -182,6 +199,11 @@ internal static class ScreenshotMode
                 {
                     form.OpenMeshForShot();
                     await form.WaitForPreviewAsync();
+                }
+
+                if (audioPlay)
+                {
+                    await form.PlayAudioForShotAsync();
                 }
 
                 if (exportFolder is not null)

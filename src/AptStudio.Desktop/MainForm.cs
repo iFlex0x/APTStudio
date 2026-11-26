@@ -3,6 +3,7 @@ using System.Drawing.Imaging;
 using System.Globalization;
 using System.Runtime.InteropServices;
 using AptStudio.Core.Assets;
+using AptStudio.Core.Audio;
 using AptStudio.Core.Games;
 using AptStudio.Core.Materials;
 using AptStudio.Core.Skins;
@@ -36,6 +37,7 @@ internal sealed class MainForm : Form
     private readonly MeshView _meshView = new();
     private readonly MaterialView _materialPanel = new();
     private readonly SkinView _skinView = new();
+    private readonly AudioView _audioPanel = new();
     private readonly DarkComboBox _typeCombo = new();
     private readonly DarkComboBox _formatCombo = new();
     private readonly DarkComboBox _mipCombo = new();
@@ -57,6 +59,7 @@ internal sealed class MainForm : Form
 
     private IReadOnlyList<AssetEntry> _entries = Array.Empty<AssetEntry>();
     private IReadOnlyList<MaterialRow> _materials = Array.Empty<MaterialRow>();
+    private IReadOnlyList<AudioEntry> _audio = Array.Empty<AudioEntry>();
     private Dictionary<ulong, AssetEntry> _bitmapByHash = new();
     private Dictionary<ulong, AssetEntry> _meshByHash = new();
     private int[] _view = Array.Empty<int>();
@@ -65,6 +68,7 @@ internal sealed class MainForm : Form
     private CancellationTokenSource? _previewCancel;
     private CancellationTokenSource? _exportCancel;
     private CancellationTokenSource? _materialCancel;
+    private CancellationTokenSource? _audioCancel;
     private bool _suppressFilters;
     private bool _suppressMip;
     private bool _updatingView;
@@ -73,8 +77,14 @@ internal sealed class MainForm : Form
     private bool _materialsLoaded;
     private bool _materialsLoading;
     private bool _viewIsMaterials;
+    private bool _viewIsAudio;
+    private bool _audioLoaded;
+    private bool _audioLoading;
+    private bool _audioBusy;
+    private bool _columnsAreAudio;
     private string _assetStatus = "No game folder selected.";
     private string _materialStatus = "";
+    private string _audioStatus = "";
     private bool _screenshotMode;
     private float _shotScale = 1f;
     private TaskCompletionSource<bool> _previewReady = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -119,6 +129,8 @@ internal sealed class MainForm : Form
         _materialPanel.SlotSelected += hash => _ = ShowSlotTextureAsync(hash);
         _materialPanel.TextureRequested += OpenTexture;
         _skinView.MeshRequested += OpenMesh;
+        _audioPanel.PlayRequested += () => _ = PlaySelectedAudioAsync();
+        _audioPanel.ExportRequested += () => _ = ExportAudioAsync();
         _clearButton.Click += (_, _) => ClearFilters();
         _typeCombo.SelectedIndexChanged += (_, _) =>
         {
@@ -190,6 +202,8 @@ internal sealed class MainForm : Form
             _scanCancel?.Dispose();
             _previewCancel?.Dispose();
             _exportCancel?.Dispose();
+            _materialCancel?.Dispose();
+            _audioCancel?.Dispose();
             _selectionTimer.Dispose();
             _filterTimer.Dispose();
             _monoFont.Dispose();
@@ -374,12 +388,15 @@ internal sealed class MainForm : Form
         _materialPanel.Visible = false;
         _skinView.Dock = DockStyle.Fill;
         _skinView.Visible = false;
+        _audioPanel.Dock = DockStyle.Fill;
+        _audioPanel.Visible = false;
 
         Panel panel = new() { Dock = DockStyle.Fill, BackColor = Theme.Background };
         panel.Controls.Add(_preview);
         panel.Controls.Add(_meshView);
         panel.Controls.Add(_materialPanel);
         panel.Controls.Add(_skinView);
+        panel.Controls.Add(_audioPanel);
         panel.Controls.Add(_infoLabel);
         panel.Controls.Add(bar);
         return panel;
@@ -468,6 +485,7 @@ internal sealed class MainForm : Form
         _grid.SelectionChanged += OnGridSelectionChanged;
         _grid.ColumnHeaderMouseClick += OnColumnHeaderClick;
         _grid.CellMouseDown += OnCellMouseDown;
+        _grid.CellDoubleClick += OnCellDoubleClick;
         _grid.ContextMenuStrip = BuildGridMenu();
     }
 
@@ -551,7 +569,9 @@ internal sealed class MainForm : Form
     private void ScaleGrid()
     {
         float scale = DeviceDpi / 96f * _shotScale;
-        int[] widths = [110, 140, 130, 90, 50, 48, 64, 155];
+        int[] widths = _columnsAreAudio
+            ? [120, 86, 164, 60, 42, 68, 70, 84]
+            : [110, 140, 130, 90, 50, 48, 64, 155];
         for (int i = 0; i < _grid.Columns.Count && i < widths.Length; i++)
         {
             _grid.Columns[i].Width = (int)Math.Round(widths[i] * scale);
@@ -559,6 +579,27 @@ internal sealed class MainForm : Form
 
         _grid.RowTemplate.Height = (int)Math.Round(22 * scale);
         _grid.ColumnHeadersHeight = (int)Math.Round(26 * scale);
+    }
+
+    private void SetColumnMode(bool audio)
+    {
+        if (_columnsAreAudio == audio)
+        {
+            return;
+        }
+
+        _columnsAreAudio = audio;
+        string[] headers = audio
+            ? ["Pack", "Id", "Name", "Length", "Ch", "Rate", "Lang", "Bank"]
+            : ["Type", "Hash", "Format", "Size", "Mips", "Surf", "Storage", "Archive"];
+        for (int i = 0; i < _grid.Columns.Count && i < headers.Length; i++)
+        {
+            _grid.Columns[i].HeaderText = headers[i];
+            _grid.Columns[i].HeaderCell.Tag = headers[i];
+        }
+
+        ScaleGrid();
+        UpdateSortGlyphs();
     }
 
     private void ConfigureSplit()
@@ -580,6 +621,7 @@ internal sealed class MainForm : Form
         ScaleGrid();
         _materialPanel.SetDpiScale(DeviceDpi / 96f);
         _skinView.SetDpiScale(DeviceDpi / 96f);
+        _audioPanel.SetDpiScale(DeviceDpi / 96f);
         if (_entries.Count > 0 && !_scanning)
         {
             ApplyFilter(false);
@@ -602,6 +644,14 @@ internal sealed class MainForm : Form
 
         int column = Math.Clamp(e.ColumnIndex, 0, _grid.Columns.Count - 1);
         _grid.CurrentCell = row.Cells[column];
+    }
+
+    private void OnCellDoubleClick(object? sender, DataGridViewCellEventArgs e)
+    {
+        if (_viewIsAudio && e.RowIndex >= 0)
+        {
+            _ = PlaySelectedAudioAsync();
+        }
     }
 
     private void OnGridSelectionChanged(object? sender, EventArgs e)
@@ -662,6 +712,24 @@ internal sealed class MainForm : Form
             return;
         }
 
+        if (_viewIsAudio)
+        {
+            AudioEntry row = _audio[_view[e.RowIndex]];
+            e.Value = e.ColumnIndex switch
+            {
+                0 => row.PackName,
+                1 => row.Id.ToString("X8", CultureInfo.InvariantCulture),
+                2 => row.Name ?? "",
+                3 => AudioTime(row.DurationSeconds),
+                4 => row.Info.Channels.ToString(CultureInfo.InvariantCulture),
+                5 => (row.Info.SampleRate / 1000.0).ToString("0.#", CultureInfo.InvariantCulture) + " kHz",
+                6 => ShortLanguage(row.Language),
+                7 => row.BankId == 0 ? "-" : $"0x{row.BankId:X8}",
+                _ => null,
+            };
+            return;
+        }
+
         if (_viewIsMaterials)
         {
             MaterialRow row = _materials[_view[e.RowIndex]];
@@ -702,19 +770,31 @@ internal sealed class MainForm : Form
     {
         FilterItem? type = _typeCombo.SelectedItem as FilterItem;
         bool materials = type?.Materials == true;
-        if (materials != _viewIsMaterials)
+        bool audio = type?.Audio == true;
+        bool modeChanged = materials != _viewIsMaterials || audio != _viewIsAudio;
+        if (modeChanged)
         {
-            _formatCombo.Enabled = !materials;
-            _previewableCheck.Enabled = !materials;
-            _statusLabel.Text = materials
-                ? _materialsLoaded
-                    ? _materialStatus
-                    : _materialsLoading ? "Scanning materials..." : "Material_Z not scanned."
-                : _assetStatus;
+            SetColumnMode(audio);
+            _formatCombo.Enabled = !materials && !audio;
+            _previewableCheck.Enabled = !materials && !audio;
+            _statusLabel.Text = audio
+                ? _audioLoaded
+                    ? _audioStatus
+                    : _audioLoading ? "Scanning SOUNDBANKS..." : "SOUNDBANKS not scanned."
+                : materials
+                    ? _materialsLoaded
+                        ? _materialStatus
+                        : _materialsLoading ? "Scanning materials..." : "Material_Z not scanned."
+                    : _assetStatus;
+        }
+
+        if (!audio)
+        {
+            _audioPanel.StopPlayback();
         }
 
         int keep = -1;
-        if (materials == _viewIsMaterials && _grid.SelectedRows.Count > 0)
+        if (!modeChanged && _grid.SelectedRows.Count > 0)
         {
             int selected = _grid.SelectedRows[0].Index;
             if (selected >= 0 && selected < _view.Length)
@@ -725,6 +805,34 @@ internal sealed class MainForm : Form
 
         string query = NormalizeQuery(_filterText.Text);
         _viewIsMaterials = materials;
+        _viewIsAudio = audio;
+        if (audio)
+        {
+            if (!_audioLoaded)
+            {
+                _ = LoadAudioAsync();
+                SetView(Array.Empty<int>(), -1, false);
+                ShowMessageMode();
+                _preview.ShowMessage(
+                    _audioLoading
+                        ? "Scanning SOUNDBANKS..."
+                        : "Select Audio (SOUNDBANKS) to scan.",
+                    false);
+                return;
+            }
+
+            IEnumerable<int> audioIndices = Enumerable.Range(0, _audio.Count);
+            if (query.Length > 0)
+            {
+                audioIndices = audioIndices.Where(index => MatchesAudio(_audio[index], query));
+            }
+
+            int[] audioView = audioIndices.ToArray();
+            Array.Sort(audioView, CompareAudio);
+            SetView(audioView, keep, selectFirst);
+            return;
+        }
+
         if (materials)
         {
             if (!_materialsLoaded)
@@ -822,6 +930,44 @@ internal sealed class MainForm : Form
         return result != 0 ? result : a.CompareTo(b);
     }
 
+    private int CompareAudio(int a, int b)
+    {
+        AudioEntry left = _audio[a];
+        AudioEntry right = _audio[b];
+        int result = _sortColumn switch
+        {
+            SortColumn.Type => StringComparer.OrdinalIgnoreCase.Compare(
+                left.PackName, right.PackName),
+            SortColumn.Hash => left.Id.CompareTo(right.Id),
+            SortColumn.Format => StringComparer.OrdinalIgnoreCase.Compare(left.Name, right.Name),
+            SortColumn.Size => left.DurationSeconds.CompareTo(right.DurationSeconds),
+            SortColumn.Mips => left.Info.Channels.CompareTo(right.Info.Channels),
+            SortColumn.Surfaces => left.Info.SampleRate.CompareTo(right.Info.SampleRate),
+            SortColumn.Storage => StringComparer.OrdinalIgnoreCase.Compare(
+                left.Language, right.Language),
+            SortColumn.Archive => left.BankId.CompareTo(right.BankId),
+            _ => 0,
+        };
+        if (!_sortAscending)
+        {
+            result = -result;
+        }
+
+        if (result != 0)
+        {
+            return result;
+        }
+
+        result = left.Id.CompareTo(right.Id);
+        if (result != 0)
+        {
+            return result;
+        }
+
+        result = string.CompareOrdinal(left.PackName, right.PackName);
+        return result != 0 ? result : a.CompareTo(b);
+    }
+
     private int CompareMaterials(int a, int b)
     {
         MaterialRow left = _materials[a];
@@ -862,6 +1008,64 @@ internal sealed class MainForm : Form
         return result != 0 ? result : a.CompareTo(b);
     }
 
+    private static byte[] ConvertAudio(AudioEntry media)
+    {
+        byte[] wem = new byte[media.Size];
+        using (FileStream stream = new(
+            media.PackPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+        {
+            stream.Seek(media.Offset, SeekOrigin.Begin);
+            stream.ReadExactly(wem);
+        }
+
+        return WemConverter.ToOgg(wem);
+    }
+
+    private static string ShortLanguage(string language)
+    {
+        int parenthesis = language.IndexOf('(');
+        return parenthesis > 0 ? language[..parenthesis] : language;
+    }
+
+    private static string AudioTime(double seconds)
+    {
+        if (seconds <= 0)
+        {
+            return "0:00";
+        }
+
+        TimeSpan value = TimeSpan.FromSeconds(seconds);
+        if (value.TotalHours >= 1)
+        {
+            return value.ToString(@"h\:mm\:ss", CultureInfo.InvariantCulture);
+        }
+
+        return value.TotalMinutes >= 1
+            ? value.ToString(@"m\:ss", CultureInfo.InvariantCulture)
+            : value.TotalSeconds.ToString("0.00", CultureInfo.InvariantCulture) + "s";
+    }
+
+    private static string AudioExportName(AudioEntry media)
+    {
+        string stem = media.PackName;
+        foreach (string suffix in new[] { ".PC.PCK", ".PCK", ".PC" })
+        {
+            if (stem.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
+            {
+                stem = stem[..^suffix.Length];
+                break;
+            }
+        }
+
+        string name = media.Name ?? $"{stem}_{media.Id:X8}";
+        foreach (char invalid in Path.GetInvalidFileNameChars())
+        {
+            name = name.Replace(invalid, '_');
+        }
+
+        return name + ".ogg";
+    }
+
     private static long PixelCount(AssetEntry entry) =>
         entry.Bitmap is null ? 0 : (long)entry.Bitmap.Width * entry.Bitmap.Height;
 
@@ -877,6 +1081,14 @@ internal sealed class MainForm : Form
         || Path.GetFileName(entry.ArchivePath).Contains(query, StringComparison.OrdinalIgnoreCase)
         || (entry.Bitmap is not null
             && entry.Bitmap.Format.DisplayName.Contains(query, StringComparison.OrdinalIgnoreCase));
+
+    private static bool MatchesAudio(AudioEntry row, string query) =>
+        row.Id.ToString("X8", CultureInfo.InvariantCulture)
+            .Contains(query, StringComparison.OrdinalIgnoreCase)
+        || (row.Name?.Contains(query, StringComparison.OrdinalIgnoreCase) ?? false)
+        || row.PackName.Contains(query, StringComparison.OrdinalIgnoreCase)
+        || row.Language.Contains(query, StringComparison.OrdinalIgnoreCase)
+        || row.Info.Codec.Contains(query, StringComparison.OrdinalIgnoreCase);
 
     private static bool MatchesMaterial(MaterialRow row, string query) =>
         row.NameHash.ToString("X16").Contains(query, StringComparison.OrdinalIgnoreCase)
@@ -930,7 +1142,9 @@ internal sealed class MainForm : Form
             ShowMessageMode();
             _preview.ShowMessage(
                 ActiveCount == 0
-                    ? _viewIsMaterials ? "No materials to show." : "No assets in this game folder."
+                    ? _viewIsAudio
+                        ? "No audio to show."
+                        : _viewIsMaterials ? "No materials to show." : "No assets in this game folder."
                     : "Select an asset.",
                 false);
             _infoLabel.Text = "";
@@ -969,7 +1183,8 @@ internal sealed class MainForm : Form
         ApplyFilter(true);
     }
 
-    private int ActiveCount => _viewIsMaterials ? _materials.Count : _entries.Count;
+    private int ActiveCount =>
+        _viewIsAudio ? _audio.Count : _viewIsMaterials ? _materials.Count : _entries.Count;
 
     private MaterialRow? SelectedMaterial()
     {
@@ -982,6 +1197,20 @@ internal sealed class MainForm : Form
         return row is not null && row.Index >= 0 && row.Index < _view.Length
             && _materials.Count > _view[row.Index]
             ? _materials[_view[row.Index]]
+            : null;
+    }
+
+    private AudioEntry? SelectedAudio()
+    {
+        DataGridViewRow? row = _grid.CurrentRow;
+        if (row is null || !row.Selected)
+        {
+            row = _grid.SelectedRows.Count > 0 ? _grid.SelectedRows[0] : null;
+        }
+
+        return row is not null && row.Index >= 0 && row.Index < _view.Length
+            && _audio.Count > _view[row.Index]
+            ? _audio[_view[row.Index]]
             : null;
     }
 
@@ -999,7 +1228,7 @@ internal sealed class MainForm : Form
     }
 
     private List<AssetEntry> SelectedEntries() =>
-        _viewIsMaterials
+        _viewIsMaterials || _viewIsAudio
             ? new List<AssetEntry>()
             : _grid.SelectedRows
                 .Cast<DataGridViewRow>()
@@ -1011,6 +1240,11 @@ internal sealed class MainForm : Form
     private void ShowNoSelection()
     {
         CancelPreview();
+        if (_viewIsAudio)
+        {
+            _audioPanel.StopPlayback();
+        }
+
         ShowMessageMode();
         _selectionTimer.Stop();
         _selectionLabel.Text = "0 selected";
@@ -1021,6 +1255,23 @@ internal sealed class MainForm : Form
 
     private async Task PreviewSelectionAsync(bool keepMip)
     {
+        if (_viewIsAudio)
+        {
+            AudioEntry? media = SelectedAudio();
+            if (media is null)
+            {
+                ShowNoSelection();
+                return;
+            }
+
+            ShowAudioMode();
+            _audioPanel.SetAudio(media);
+            _infoLabel.Text =
+                $"Audio | {media.IdText} | {media.PackName} | {media.Language} | {media.DurationSeconds:0.00} s";
+            _previewReady.TrySetResult(true);
+            return;
+        }
+
         if (_viewIsMaterials)
         {
             MaterialRow? material = SelectedMaterial();
@@ -1086,6 +1337,7 @@ internal sealed class MainForm : Form
         _meshView.Visible = false;
         _materialPanel.Visible = false;
         _skinView.Visible = false;
+        _audioPanel.Visible = false;
         _preview.Visible = true;
         _mipCombo.Visible = true;
         _channelCombo.Visible = true;
@@ -1101,6 +1353,7 @@ internal sealed class MainForm : Form
         _preview.Visible = false;
         _materialPanel.Visible = false;
         _skinView.Visible = false;
+        _audioPanel.Visible = false;
         _meshView.Visible = true;
         _mipCombo.Visible = false;
         _channelCombo.Visible = false;
@@ -1117,6 +1370,7 @@ internal sealed class MainForm : Form
         _preview.Visible = false;
         _meshView.Visible = false;
         _skinView.Visible = false;
+        _audioPanel.Visible = false;
         _materialPanel.Visible = true;
         _mipCombo.Visible = false;
         _channelCombo.Visible = false;
@@ -1132,7 +1386,24 @@ internal sealed class MainForm : Form
         _preview.Visible = false;
         _meshView.Visible = false;
         _materialPanel.Visible = false;
+        _audioPanel.Visible = false;
         _skinView.Visible = true;
+        _mipCombo.Visible = false;
+        _channelCombo.Visible = false;
+        _zoomLabel.Visible = false;
+        _actualButton.Visible = false;
+        _fitButton.Visible = false;
+        _wireframeCheck.Visible = false;
+        _zoomLabel.Text = "";
+    }
+
+    private void ShowAudioMode()
+    {
+        _preview.Visible = false;
+        _meshView.Visible = false;
+        _materialPanel.Visible = false;
+        _skinView.Visible = false;
+        _audioPanel.Visible = true;
         _mipCombo.Visible = false;
         _channelCombo.Visible = false;
         _zoomLabel.Visible = false;
@@ -1154,6 +1425,184 @@ internal sealed class MainForm : Form
         _actualButton.Visible = false;
         _fitButton.Visible = false;
         _wireframeCheck.Visible = false;
+    }
+
+    private async Task LoadAudioAsync()
+    {
+        if (_audioLoaded || _audioLoading || _profile is null)
+        {
+            return;
+        }
+
+        _audioLoading = true;
+        _audioCancel?.Cancel();
+        _audioCancel?.Dispose();
+        CancellationTokenSource cancel = new();
+        _audioCancel = cancel;
+        GameProfile profile = _profile;
+        Stopwatch watch = Stopwatch.StartNew();
+        _statusLabel.Text = "Scanning SOUNDBANKS...";
+        IProgress<CatalogProgress> progress = new Progress<CatalogProgress>(item =>
+        {
+            if (!IsDisposed && cancel == _audioCancel)
+            {
+                _statusLabel.Text =
+                    $"Scanning SOUNDBANKS {Path.GetFileName(item.ArchivePath)} {item.Index}/{item.Total}";
+            }
+        });
+
+        try
+        {
+            AudioCatalog catalog = await Task.Run(
+                () => AudioCatalog.Load(profile, progress, cancel.Token), cancel.Token);
+            if (IsDisposed || cancel != _audioCancel)
+            {
+                return;
+            }
+
+            watch.Stop();
+            _audio = catalog.Entries;
+            _audioLoaded = true;
+            int named = catalog.Entries.Count(entry => entry.Name is not null);
+            _audioStatus =
+                $"{N(catalog.Entries.Count)} audio media | {N(named)} named | {N(catalog.Archives.Count)} packs with media | {N(catalog.Previews)} previews skipped | {catalog.Failures.Count} failed | {watch.ElapsedMilliseconds} ms";
+            _statusLabel.Text = _audioStatus;
+            _statusLabel.ToolTipText = string.Join(
+                Environment.NewLine, catalog.Failures.Select(failure => failure.Message));
+            ApplyFilter(true);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex) when (ex is InvalidDataException or IOException
+            or UnauthorizedAccessException)
+        {
+            if (!IsDisposed && cancel == _audioCancel)
+            {
+                _statusLabel.Text = ex.Message;
+                _preview.ShowMessage(ex.Message, true);
+            }
+        }
+        finally
+        {
+            if (cancel == _audioCancel)
+            {
+                _audioLoading = false;
+            }
+        }
+    }
+
+    private async Task PlaySelectedAudioAsync()
+    {
+        AudioEntry? media = SelectedAudio();
+        if (media is null || _audioBusy)
+        {
+            return;
+        }
+
+        _audioBusy = true;
+        _audioPanel.SetBusy("Converting...");
+        try
+        {
+            byte[] ogg = await Task.Run(() => ConvertAudio(media));
+
+            if (IsDisposed || !ReferenceEquals(SelectedAudio(), media))
+            {
+                _audioPanel.StopPlayback();
+                return;
+            }
+
+            _audioPanel.StartPlayback(ogg);
+        }
+        catch (Exception ex) when (ex is InvalidDataException or IOException
+            or UnauthorizedAccessException)
+        {
+            if (!IsDisposed)
+            {
+                _audioPanel.ShowError(ex.Message);
+            }
+        }
+        finally
+        {
+            _audioBusy = false;
+        }
+    }
+
+    private async Task ExportAudioAsync()
+    {
+        AudioEntry? media = SelectedAudio();
+        if (media is null || _audioBusy)
+        {
+            return;
+        }
+
+        using SaveFileDialog dialog = new()
+        {
+            Filter = "Ogg Vorbis (*.ogg)|*.ogg",
+            FileName = AudioExportName(media),
+            Title = "Export Audio",
+            AddExtension = true,
+            DefaultExt = "ogg",
+        };
+        if (dialog.ShowDialog(this) != DialogResult.OK)
+        {
+            return;
+        }
+
+        string full = Path.GetFullPath(dialog.FileName);
+        if (_profile is not null
+            && GameFolderGuard.IsInside(_profile.Root, Path.GetDirectoryName(full)!))
+        {
+            _statusLabel.Text = "Refusing to write inside the game folder.";
+            return;
+        }
+
+        _audioBusy = true;
+        _audioPanel.SetBusy("Exporting...");
+        try
+        {
+            byte[] ogg = await Task.Run(() => ConvertAudio(media));
+
+            if (IsDisposed)
+            {
+                return;
+            }
+
+            string? directory = Path.GetDirectoryName(full);
+            if (!string.IsNullOrEmpty(directory))
+            {
+                Directory.CreateDirectory(directory);
+            }
+
+            string temp = full + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            try
+            {
+                File.WriteAllBytes(temp, ogg);
+                File.Move(temp, full, overwrite: true);
+            }
+            finally
+            {
+                if (File.Exists(temp))
+                {
+                    File.Delete(temp);
+                }
+            }
+
+            _audioPanel.SetStatus($"Exported {Path.GetFileName(full)}");
+            _statusLabel.Text = $"Exported {Path.GetFileName(full)} ({N(ogg.Length)} bytes).";
+        }
+        catch (Exception ex) when (ex is InvalidDataException or IOException
+            or UnauthorizedAccessException)
+        {
+            if (!IsDisposed)
+            {
+                _audioPanel.ShowError(ex.Message);
+            }
+        }
+        finally
+        {
+            _audioBusy = false;
+        }
     }
 
     private async Task DecodeMeshAsync(AssetEntry entry)
@@ -1684,6 +2133,12 @@ internal sealed class MainForm : Form
             return;
         }
 
+        if (_viewIsAudio)
+        {
+            await ExportAudioAsync();
+            return;
+        }
+
         List<AssetEntry> selected = SelectedEntries();
         List<AssetEntry> entries = selected.Where(entry => entry.Texture is not null).ToList();
         if (entries.Count == 0)
@@ -1812,9 +2267,11 @@ internal sealed class MainForm : Form
 
     private void CopyHash()
     {
-        ulong? hash = _viewIsMaterials
-            ? SelectedMaterial()?.NameHash
-            : SelectedEntry()?.NameHash;
+        ulong? hash = _viewIsAudio
+            ? SelectedAudio()?.Id
+            : _viewIsMaterials
+                ? SelectedMaterial()?.NameHash
+                : SelectedEntry()?.NameHash;
         if (hash is not ulong value)
         {
             return;
@@ -1822,8 +2279,9 @@ internal sealed class MainForm : Form
 
         try
         {
-            Clipboard.SetText(value.ToString("X16"));
-            _statusLabel.Text = $"Copied 0x{value:X16}.";
+            string text = _viewIsAudio ? $"0x{value:X8}" : $"0x{value:X16}";
+            Clipboard.SetText(text);
+            _statusLabel.Text = $"Copied {text}.";
         }
         catch (ExternalException)
         {
@@ -1880,6 +2338,15 @@ internal sealed class MainForm : Form
         _materialsLoading = false;
         _viewIsMaterials = false;
         _materialPanel.Reset();
+        _audioCancel?.Cancel();
+        _audioCancel?.Dispose();
+        _audioCancel = null;
+        _audio = Array.Empty<AudioEntry>();
+        _audioLoaded = false;
+        _audioLoading = false;
+        _viewIsAudio = false;
+        _audioStatus = "";
+        _audioPanel.Reset();
         SetScanning(true);
         _statusLabel.Text = "Scanning...";
         _statusLabel.ToolTipText = "";
@@ -1977,6 +2444,7 @@ internal sealed class MainForm : Form
 
             _typeCombo.Items.Add(new FilterItem(
                 "Material_Z (not scanned)", AssetClass.Material, null, true));
+            _typeCombo.Items.Add(new FilterItem("Audio (SOUNDBANKS)", null, null, Audio: true));
 
             _typeCombo.SelectedIndex = 0;
 
@@ -2018,7 +2486,8 @@ internal sealed class MainForm : Form
     private void UpdateExportEnabled()
     {
         _exportButton.Enabled =
-            !_exporting && !_scanning && !_viewIsMaterials && _grid.SelectedRows.Count > 0;
+            !_exporting && !_scanning && !_viewIsMaterials && !_viewIsAudio
+            && _grid.SelectedRows.Count > 0;
     }
 
     private void UpdateZoomLabel()
@@ -2078,6 +2547,10 @@ internal sealed class MainForm : Form
         _materialCancel?.Cancel();
         _materialCancel?.Dispose();
         _materialCancel = null;
+        _audioCancel?.Cancel();
+        _audioCancel?.Dispose();
+        _audioCancel = null;
+        _audioPanel.Reset();
         CancelPreview();
         _exportCancel?.Cancel();
         _exportCancel?.Dispose();
@@ -2200,6 +2673,38 @@ internal sealed class MainForm : Form
         {
             _previewReady.TrySetResult(true);
         }
+    }
+
+    internal async Task AudioForShotAsync()
+    {
+        FilterItem? item = _typeCombo.Items
+            .Cast<FilterItem>()
+            .FirstOrDefault(candidate => candidate.Audio);
+        if (item is null)
+        {
+            return;
+        }
+
+        _typeCombo.SelectedItem = item;
+        for (int i = 0; i < 400 && !_audioLoaded && !IsDisposed; i++)
+        {
+            await Task.Delay(50);
+        }
+
+        if (IsDisposed)
+        {
+            return;
+        }
+
+        _previewReady = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        ApplyFilter(true);
+    }
+
+    internal async Task PlayAudioForShotAsync()
+    {
+        await PlaySelectedAudioAsync();
+        await Task.Delay(600);
     }
 
     internal void FilterForShot(string text)
@@ -2330,7 +2835,8 @@ internal sealed class MainForm : Form
         string Text,
         ulong? Class,
         string? Format,
-        bool Materials = false)
+        bool Materials = false,
+        bool Audio = false)
     {
         public override string ToString() => Text;
     }
