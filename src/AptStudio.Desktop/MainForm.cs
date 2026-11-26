@@ -2258,7 +2258,7 @@ internal sealed class MainForm : Form
                 ? $"packed {N(animation.PackedBits)} bits"
                 : $"{N(animation.FrameEntries)} frame entries";
             string counts = animation.Encoding == AnimationEncoding.Packed
-                ? $"{N(bones.Length)} bones"
+                ? $"{N(bones.Length)} bones ({N(animation.AnimatedBones)} animated)"
                 : $"{N(animation.FrameTracks)} tracks";
             string subtitle =
                 $"{animation.Duration:0.###}s | {N(animation.KeyCount)} keys | {encoding} | {counts} | {Path.GetFileName(entry.ArchivePath)}";

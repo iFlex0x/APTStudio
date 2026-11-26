@@ -26,6 +26,20 @@ public sealed class AnimationDataTests
     }
 
     [Fact]
+    public void CountsBaseAndAnimatedBlocks()
+    {
+        AnimationHead head = AnimationHead.Parse(AnimationTestData.Header(0x1234), "test");
+        AnimationData data = AnimationData.Parse(
+            head, AnimationTestData.PackedBaseBody(), AnimationTestData.LinkBlock(1f), "test");
+
+        Assert.Equal(2, data.Bones.Count);
+        Assert.Equal(1, data.BaseBones);
+        Assert.Equal(1, data.AnimatedBones);
+        Assert.Equal(142u, data.Bones[0].BitLength);
+        Assert.Equal(300u, data.Bones[1].BitLength);
+    }
+
+    [Fact]
     public void FallsBackToLinkDurationForFrameBodies()
     {
         AnimationHead head = AnimationHead.Parse(AnimationTestData.Header(0x1234), "test");
