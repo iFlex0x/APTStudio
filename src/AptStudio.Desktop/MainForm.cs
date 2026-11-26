@@ -1447,7 +1447,7 @@ internal sealed class MainForm : Form
             if (!IsDisposed && cancel == _audioCancel)
             {
                 _statusLabel.Text =
-                    $"Scanning SOUNDBANKS {item.ArchivePath} {item.Index}/{item.Total}";
+                    $"Scanning SOUNDBANKS {Path.GetFileName(item.ArchivePath)} {item.Index}/{item.Total}";
             }
         });
 
