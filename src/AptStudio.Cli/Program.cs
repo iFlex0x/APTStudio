@@ -153,11 +153,16 @@ internal static class Program
                 using FileStream stream = new(
                     entry.BodyArchivePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
                 MeshData mesh = MeshDecoder.Read(stream, entry.BodyArchivePath, entry.Row);
-                MeshGeometry geometry = mesh.ToGeometry();
                 Console.WriteLine(
                     $"{Path.GetFileName(entry.ArchivePath)} 0x{entry.NameHash:X16} offset {entry.Row.Offset}{(entry.IsExternal ? " body COMMON.DPC" : "")}");
+                int groupCount = 0;
+                foreach (MeshIndexSet item in mesh.IndexSets)
+                {
+                    groupCount += item.Groups.Count;
+                }
+
                 Console.WriteLine(
-                    $"  version {mesh.Head.Version}, {mesh.Head.Storage}, body {N(mesh.Head.BodySize)}, streams {mesh.Streams.Count}, index sets {mesh.IndexSets.Count}");
+                    $"  version {mesh.Head.Version}, {mesh.Head.Storage}, body {N(mesh.Head.BodySize)}, streams {mesh.Streams.Count}, index sets {mesh.IndexSets.Count}, groups {groupCount}");
                 for (int index = 0; index < mesh.Streams.Count; index++)
                 {
                     MeshStream item = mesh.Streams[index];
@@ -169,9 +174,26 @@ internal static class Program
                 {
                     MeshIndexSet item = mesh.IndexSets[index];
                     Console.WriteLine(
-                        $"  indices {index}: {N(item.IndexCount)} ({N(item.IndexCount / 3)} triangles), flags 0x{item.Flags:X4}");
+                        $"  indices {index}: {N(item.IndexCount)} ({N(item.IndexCount / 3)} triangles), u{item.IndexSize * 8}, flags 0x{item.Flags:X4}");
                 }
 
+                for (int setIndex = 0; setIndex < mesh.IndexSets.Count; setIndex++)
+                {
+                    for (int groupIndex = 0; groupIndex < mesh.IndexSets[setIndex].Groups.Count; groupIndex++)
+                    {
+                        MeshGroup item = mesh.IndexSets[setIndex].Groups[groupIndex];
+                        Console.WriteLine(
+                            $"  group {setIndex}.{groupIndex}: {N(item.VertexCount)} vertices, {N(item.FaceCount)} triangles, offsets {N(item.VertexOffset)}/{N(item.IndexOffset)}");
+                    }
+                }
+
+                if (mesh.Streams.Count == 0)
+                {
+                    Console.WriteLine("  empty mesh (no geometry)");
+                    continue;
+                }
+
+                MeshGeometry geometry = mesh.ToGeometry();
                 Console.WriteLine(
                     $"  bounds min ({F(geometry.Min.X)}, {F(geometry.Min.Y)}, {F(geometry.Min.Z)}) max ({F(geometry.Max.X)}, {F(geometry.Max.Y)}, {F(geometry.Max.Z)})");
             }
