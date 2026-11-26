@@ -5,6 +5,7 @@ using AptStudio.Core.Containers;
 using AptStudio.Core.Games;
 using AptStudio.Core.Materials;
 using AptStudio.Core.Meshes;
+using AptStudio.Core.Skins;
 using AptStudio.Core.Textures;
 
 namespace AptStudio.Cli;
@@ -65,6 +66,16 @@ internal static class Program
             return Material(args[1], args[2]);
         }
 
+        if (args.Length == 2 && string.Equals(args[0], "skins", StringComparison.OrdinalIgnoreCase))
+        {
+            return Skins(args[1]);
+        }
+
+        if (args.Length == 3 && string.Equals(args[0], "skin", StringComparison.OrdinalIgnoreCase))
+        {
+            return Skin(args[1], args[2]);
+        }
+
         if (args.Length == 4 && string.Equals(args[0], "export", StringComparison.OrdinalIgnoreCase))
         {
             return Export(args[1], args[2], args[3]);
@@ -83,6 +94,8 @@ internal static class Program
         Console.Error.WriteLine("  aptstudio mesh <gameRoot> <nameHash>");
         Console.Error.WriteLine("  aptstudio materials <gameRoot> [--rebuild]");
         Console.Error.WriteLine("  aptstudio material <gameRoot> <nameHash>");
+        Console.Error.WriteLine("  aptstudio skins <gameRoot>");
+        Console.Error.WriteLine("  aptstudio skin <gameRoot> <nameHash>");
         Console.Error.WriteLine("  aptstudio export <gameRoot> <nameHash> <outputPath>");
     }
 
@@ -283,6 +296,185 @@ internal static class Program
             .Where(entry => entry.IsBitmap)
             .GroupBy(entry => entry.NameHash)
             .ToDictionary(group => group.Key, group => group.First());
+
+    private static Func<ulong, int?> MeshVertexLookup(AssetCatalog assets)
+    {
+        Dictionary<ulong, AssetEntry> rows = assets.Entries
+            .Where(entry => entry.ClassHash == AssetClass.Mesh)
+            .GroupBy(entry => entry.NameHash)
+            .ToDictionary(group => group.Key, group => group.First());
+        Dictionary<ulong, int?> cache = new();
+        return mesh =>
+        {
+            if (cache.TryGetValue(mesh, out int? known))
+            {
+                return known;
+            }
+
+            int? result = null;
+            if (rows.TryGetValue(mesh, out AssetEntry? row))
+            {
+                try
+                {
+                    using FileStream stream = new(
+                        row.BodyArchivePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                    MeshData data = MeshDecoder.Read(stream, row.BodyArchivePath, row.Row);
+                    result = data.Streams.Count > 0 ? data.Streams[0].VertexCount : 0;
+                }
+                catch (InvalidDataException)
+                {
+                    result = null;
+                }
+            }
+
+            cache[mesh] = result;
+            return result;
+        };
+    }
+
+    private static int Skins(string gameRoot)
+    {
+        if (!GameProfile.TryDetect(gameRoot, out GameProfile? profile, out string? error) || profile is null)
+        {
+            Console.Error.WriteLine(error);
+            return 1;
+        }
+
+        try
+        {
+            Stopwatch watch = Stopwatch.StartNew();
+            AssetCatalog assets = AssetCatalog.Load(profile);
+            int rows = assets.Entries.Count(entry => entry.ClassHash == AssetClass.Skin);
+            Func<ulong, int?> vertices = MeshVertexLookup(assets);
+            HashSet<(string Path, long Offset)> seen = new();
+            Dictionary<ushort, int> versions = new();
+            Dictionary<int, int> strides = new();
+            List<string> failures = new();
+            int bodies = 0;
+            int parts = 0;
+            int skinned = 0;
+            int packets = 0;
+            int bones = 0;
+            int failed = 0;
+            long verticesTotal = 0;
+            foreach (AssetEntry entry in assets.Entries)
+            {
+                if (entry.ClassHash != AssetClass.Skin
+                    || !seen.Add((entry.BodyArchivePath, entry.Row.BodyOffset)))
+                {
+                    continue;
+                }
+
+                bodies++;
+                try
+                {
+                    using FileStream stream = new(
+                        entry.BodyArchivePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                    SkinData skin = SkinDecoder.Read(
+                        stream, entry.BodyArchivePath, entry.Row, vertices);
+                    versions[skin.Head.Version] = versions.GetValueOrDefault(skin.Head.Version) + 1;
+                    parts += skin.Parts.Length;
+                    bones += skin.Bones.Length;
+                    foreach (SkinPart part in skin.Parts)
+                    {
+                        if (part.VertexCount == 0)
+                        {
+                            continue;
+                        }
+
+                        skinned++;
+                        verticesTotal += part.VertexCount;
+                        strides[part.Stride] = strides.GetValueOrDefault(part.Stride) + 1;
+                        if (part.PacketsParsed)
+                        {
+                            packets++;
+                        }
+                    }
+                }
+                catch (InvalidDataException ex)
+                {
+                    failed++;
+                    if (failures.Count < 10)
+                    {
+                        failures.Add(ex.Message);
+                    }
+                }
+            }
+
+            watch.Stop();
+            Console.WriteLine(
+                $"skins: {N(rows)} rows, {N(bodies)} bodies, parts: {N(parts)}, skinned: {N(skinned)}, vertices: {N(verticesTotal)}, packets: {N(packets)}, bones: {N(bones)}, versions: {string.Join(", ", versions.OrderBy(p => p.Key).Select(p => $"v{p.Key}={N(p.Value)}"))}, strides: {string.Join(", ", strides.OrderBy(p => p.Key).Select(p => $"{p.Key}={N(p.Value)}"))}, failed: {N(failed)}, {N(watch.ElapsedMilliseconds)} ms");
+            foreach (string failure in failures)
+            {
+                Console.Error.WriteLine(failure);
+            }
+
+            return failed == 0 ? 0 : 2;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Console.Error.WriteLine(ex.Message);
+            return 1;
+        }
+    }
+
+    private static int Skin(string gameRoot, string hashText)
+    {
+        if (!TryHash(hashText, out ulong nameHash))
+        {
+            Console.Error.WriteLine($"'{hashText}' is not a 64-bit hex hash.");
+            return 1;
+        }
+
+        if (!GameProfile.TryDetect(gameRoot, out GameProfile? profile, out string? error) || profile is null)
+        {
+            Console.Error.WriteLine(error);
+            return 1;
+        }
+
+        try
+        {
+            AssetCatalog assets = AssetCatalog.Load(profile);
+            List<AssetEntry> matches = assets.Entries
+                .Where(entry => entry.ClassHash == AssetClass.Skin && entry.NameHash == nameHash)
+                .ToList();
+            if (matches.Count == 0)
+            {
+                Console.Error.WriteLine($"no Skin_Z row named 0x{nameHash:X16}.");
+                return 1;
+            }
+
+            Func<ulong, int?> vertices = MeshVertexLookup(assets);
+
+            foreach (AssetEntry entry in matches)
+            {
+                using FileStream stream = new(
+                    entry.BodyArchivePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                SkinData skin = SkinDecoder.Read(
+                    stream, entry.BodyArchivePath, entry.Row, vertices);
+                string external = entry.IsExternal ? " body COMMON.DPC" : string.Empty;
+                Console.WriteLine(
+                    $"{Path.GetFileName(entry.ArchivePath)} 0x{skin.Head.NameHash:X16} offset {entry.Row.Offset}{external}");
+                Console.WriteLine(
+                    $"  version {skin.Head.Version}, {skin.Head.Storage}, body {N(skin.Head.BodySize)}, stored {N(skin.Head.StoredSize)}, meshes {skin.MeshLinks.Length}, parts {skin.Parts.Length}, bones {skin.Bones.Length}");
+                foreach (SkinPart part in skin.Parts)
+                {
+                    string packets = part.PacketsParsed
+                        ? $"{part.PacketCount} packet{(part.PacketCount == 1 ? string.Empty : "s")} 0x{part.MaterialHash:X16}"
+                        : "packets not measured";
+                    Console.WriteLine(
+                        $"  part {part.Index,2}: mesh 0x{part.MeshHash:X16}, {N(part.VertexCount)} vertices, stride {part.Stride}, {packets}");
+                }
+            }
+
+            return 0;
+        }
+        catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
+        {
+            Console.Error.WriteLine(ex.Message);
+            return 1;
+        }
+    }
 
     private static bool TryHash(string text, out ulong value)
     {
