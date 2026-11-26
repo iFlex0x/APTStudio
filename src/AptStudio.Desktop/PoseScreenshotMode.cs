@@ -79,6 +79,28 @@ internal static class PoseScreenshotMode
         }
 
         Directory.CreateDirectory(Path.GetDirectoryName(output)!);
+        if (File.Exists(output))
+        {
+            File.Delete(output);
+        }
+
+        if (File.Exists(output + ".log"))
+        {
+            File.Delete(output + ".log");
+        }
+
+        if (!float.IsFinite(x) || !float.IsFinite(y) || !float.IsFinite(z))
+        {
+            File.WriteAllText(output + ".log", "Angles must be finite." + Environment.NewLine);
+            return;
+        }
+
+        if (!float.IsFinite(scale) || scale <= 0f)
+        {
+            File.WriteAllText(output + ".log", "Scale must be a positive number." + Environment.NewLine);
+            return;
+        }
+
         game ??= Settings.LoadLastGameRoot();
         if (!GameProfile.TryDetect(game, out GameProfile? profile, out string? error)
             || profile is null)
@@ -135,7 +157,13 @@ internal static class PoseScreenshotMode
                 await form.LoadForShotAsync();
                 if (bone is ulong selected)
                 {
-                    form.PoseForShot(selected, x, y, z);
+                    if (!form.PoseForShot(selected, x, y, z))
+                    {
+                        File.WriteAllText(
+                            output + ".log",
+                            $"bone 0x{selected:X16} is not in this skin." + Environment.NewLine);
+                        return;
+                    }
                 }
 
                 await Task.Delay(300);

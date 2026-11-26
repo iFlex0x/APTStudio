@@ -68,6 +68,81 @@ public sealed class SkinDeformerTests
     }
 
     [Fact]
+    public void UsesPaletteSlotsNotArrayOrder()
+    {
+        byte[] body = SkinTestData.BodyWithBones(
+            [new TestPart(2, 12, 0xAA, Array.Empty<ulong>(), Rigid(5, 2))],
+            [(0x2000, 5), (0x2001, 2)]);
+        SkinData skin = SkinData.Parse(
+            SkinHead.Parse(SkinTestData.Header(1), "test"), body, "test", _ => 2);
+        MeshGeometry mesh = new(
+            [new Vector3(0.5f, 0f, 0f), new Vector3(2f, 0f, 0f)],
+            [0, 1, 0],
+            new Vector3(0.5f, 0f, 0f),
+            new Vector3(2f, 0f, 0f));
+        SkinDeformer deformer = SkinDeformer.Create(skin, BuildSkeleton(), _ => mesh);
+
+        MeshGeometry result = deformer.Deform(new Dictionary<int, Quaternion>
+        {
+            [1] = Quaternion.CreateFromAxisAngle(Vector3.UnitZ, MathF.PI / 2f),
+        });
+
+        AssertVector(new Vector3(0.5f, 0f, 0f), result.Positions[0]);
+        AssertVector(new Vector3(1f, 1f, 0f), result.Positions[1]);
+    }
+
+    [Fact]
+    public void PropagatesRootRotationToGrandchild()
+    {
+        byte[] body = SkinTestData.BodyWithBones(
+            [new TestPart(1, 12, 0xAA, Array.Empty<ulong>(), Rigid(2))],
+            [(0x2000, 0), (0x2001, 1), (0x2002, 2)]);
+        SkinData skin = SkinData.Parse(
+            SkinHead.Parse(SkinTestData.Header(1), "test"), body, "test", _ => 1);
+        byte[] skeletonBody = SkeletonTestData.Body(
+            new TestBone(0x2000),
+            new TestBone(0x2001, Parent: 0, X: 1f),
+            new TestBone(0x2002, Parent: 1, X: 2f));
+        SkeletonData skeleton = SkeletonData.Parse(
+            SkeletonHead.Parse(SkeletonTestData.Header(), "test"),
+            skeletonBody,
+            "test");
+        MeshGeometry mesh = Point(new Vector3(3f, 0f, 0f));
+        SkinDeformer deformer = SkinDeformer.Create(skin, skeleton, _ => mesh);
+
+        MeshGeometry result = deformer.Deform(new Dictionary<int, Quaternion>
+        {
+            [0] = Quaternion.CreateFromAxisAngle(Vector3.UnitZ, MathF.PI / 2f),
+        });
+
+        AssertVector(new Vector3(0f, 3f, 0f), result.Positions[0]);
+    }
+
+    [Fact]
+    public void BlendsFourInfluenceWeights()
+    {
+        byte[] weights = new byte[16];
+        BinaryPrimitives.WriteUInt16LittleEndian(weights, 0);
+        BinaryPrimitives.WriteUInt16LittleEndian(weights.AsSpan(2), 1);
+        BinaryPrimitives.WriteUInt16LittleEndian(weights.AsSpan(8), 0x8000);
+        BinaryPrimitives.WriteUInt16LittleEndian(weights.AsSpan(10), 0x8000);
+        byte[] body = SkinTestData.BodyWithBones(
+            [new TestPart(1, 16, 0xAA, Array.Empty<ulong>(), weights)],
+            [(0x2000, 0), (0x2001, 1)]);
+        SkinData skin = SkinData.Parse(
+            SkinHead.Parse(SkinTestData.Header(1), "test"), body, "test", _ => 1);
+        MeshGeometry mesh = Point(new Vector3(2f, 0f, 0f));
+        SkinDeformer deformer = SkinDeformer.Create(skin, BuildSkeleton(), _ => mesh);
+
+        MeshGeometry result = deformer.Deform(new Dictionary<int, Quaternion>
+        {
+            [1] = Quaternion.CreateFromAxisAngle(Vector3.UnitZ, MathF.PI / 2f),
+        });
+
+        AssertVector(new Vector3(1.5f, 0.5f, 0f), result.Positions[0]);
+    }
+
+    [Fact]
     public void RejectsSkinWithoutGeometry()
     {
         SkinData skin = BuildSkin(out _);

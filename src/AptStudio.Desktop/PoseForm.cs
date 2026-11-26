@@ -103,11 +103,16 @@ internal sealed class PoseForm : Form
 
     internal async Task LoadForShotAsync() => await _ready.Task;
 
-    internal void PoseForShot(ulong boneHash, float x, float y, float z)
+    internal bool PoseForShot(ulong boneHash, float x, float y, float z)
     {
+        if (!float.IsFinite(x) || !float.IsFinite(y) || !float.IsFinite(z))
+        {
+            return false;
+        }
+
         if (!_boneRows.TryGetValue(boneHash, out int row))
         {
-            return;
+            return false;
         }
 
         _bones.CurrentCell = _bones.Rows[row].Cells[0];
@@ -126,6 +131,7 @@ internal sealed class PoseForm : Form
         }
 
         ApplyAngles();
+        return true;
     }
 
     internal void CaptureShot(string path)
@@ -137,7 +143,7 @@ internal sealed class PoseForm : Form
 
     internal void ScaleForShot(float scale)
     {
-        if (scale <= 0f)
+        if (!float.IsFinite(scale) || scale <= 0f)
         {
             return;
         }
@@ -340,6 +346,7 @@ internal sealed class PoseForm : Form
             PoseLoad result = await Task.Run(() => LoadPose(_cancel.Token), _cancel.Token);
             if (IsDisposed)
             {
+                _ready.TrySetResult(false);
                 return;
             }
 
@@ -455,6 +462,7 @@ internal sealed class PoseForm : Form
         {
             _bones.CurrentCell = _bones.Rows[0].Cells[0];
             _bones.Rows[0].Selected = true;
+            SelectBone(0);
         }
     }
 

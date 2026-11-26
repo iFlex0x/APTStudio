@@ -569,6 +569,12 @@ internal static class Program
             return 1;
         }
 
+        if (!float.IsFinite(degrees))
+        {
+            Console.Error.WriteLine("angle must be finite.");
+            return 1;
+        }
+
         Vector3 axis = axisText.ToLowerInvariant() switch
         {
             "x" => Vector3.UnitX,
