@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Runtime.InteropServices;
 using AptStudio.Core.Assets;
 using AptStudio.Core.Games;
 
@@ -74,7 +75,7 @@ internal static class SkeletonScreenshotMode
                 form.CaptureShot(output);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
-                or ArgumentException or InvalidOperationException)
+                or ArgumentException or InvalidOperationException or ExternalException)
             {
                 File.WriteAllText(output + ".log", ex.ToString());
             }
