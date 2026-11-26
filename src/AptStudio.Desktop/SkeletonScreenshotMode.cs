@@ -14,6 +14,7 @@ internal static class SkeletonScreenshotMode
         ulong? hash = null;
         float scale = 1f;
         bool usedBy = false;
+        string? filter = null;
         for (int index = 2; index < args.Length; index++)
         {
             if (args[index] == "--game" && index + 1 < args.Length)
@@ -46,6 +47,10 @@ internal static class SkeletonScreenshotMode
             {
                 usedBy = true;
             }
+            else if (args[index] == "--filter" && index + 1 < args.Length)
+            {
+                filter = args[++index];
+            }
         }
 
         Directory.CreateDirectory(Path.GetDirectoryName(output)!);
@@ -66,6 +71,16 @@ internal static class SkeletonScreenshotMode
             try
             {
                 await form.LoadForShotAsync(hash);
+                if (filter is not null)
+                {
+                    form.FilterForShot(filter);
+                }
+
+                if (hash is ulong selected)
+                {
+                    form.SelectSkeleton(selected);
+                }
+
                 if (usedBy)
                 {
                     form.ShowSkinsForShot();

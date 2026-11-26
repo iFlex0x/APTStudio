@@ -34,6 +34,7 @@ internal sealed class SkeletonForm : Form
     private ulong? _pendingName;
     private bool _screenshotMode;
     private bool _loading;
+    private bool _loaded;
 
     public SkeletonForm(GameProfile profile, IReadOnlyList<AssetEntry> assets, ulong? initialName = null)
     {
@@ -239,12 +240,17 @@ internal sealed class SkeletonForm : Form
             return;
         }
 
-        if (_loadTask is null || _grid.Rows.Count == 0)
+        CloseLinks();
+        _filterTimer.Stop();
+        _filter.Text = "";
+        _filterTimer.Stop();
+        if (!_loaded)
         {
             _pendingName = hash;
             return;
         }
 
+        ApplyFilter();
         if (!SelectName(hash))
         {
             ShowMissing(hash);
@@ -261,6 +267,14 @@ internal sealed class SkeletonForm : Form
     internal void ShowSkinsForShot()
     {
         ShowSkins();
+    }
+
+    internal void FilterForShot(string text)
+    {
+        _filterTimer.Stop();
+        _filter.Text = text;
+        _filterTimer.Stop();
+        ApplyFilter();
     }
 
     internal void ScaleForShot(float scale)
@@ -309,6 +323,7 @@ internal sealed class SkeletonForm : Form
     private async Task LoadCatalogAsync()
     {
         _loading = true;
+        _loaded = false;
         _status.Text = "scanning skeletons...";
         _loadCancel = new CancellationTokenSource();
         try
@@ -336,6 +351,7 @@ internal sealed class SkeletonForm : Form
             _copies = _entries
                 .GroupBy(entry => entry.NameHash)
                 .ToDictionary(group => group.Key, group => group.Count());
+            _loaded = true;
             _status.Text =
                 $"{_entries.Count:N0} objects | {catalog.UniqueNameCount:N0} names | {catalog.Archives.Count:N0} archives | scanned {catalog.Scanned:N0}, cached {catalog.Cached:N0}";
             _loading = false;
@@ -475,6 +491,7 @@ internal sealed class SkeletonForm : Form
 
     private void ShowMissing(ulong nameHash)
     {
+        CloseLinks();
         _decodeCancel?.Cancel();
         _decodeCancel?.Dispose();
         _decodeCancel = null;
@@ -502,16 +519,16 @@ internal sealed class SkeletonForm : Form
 
     private async Task DecodeSelectedAsync()
     {
+        if (_links.Visible)
+        {
+            CloseLinks();
+        }
+
         SkeletonEntry? entry = Selected();
         if (entry is null || _loading)
         {
             UpdateUsedButton();
             return;
-        }
-
-        if (_links.Visible)
-        {
-            CloseLinks();
         }
 
         _decodeCancel?.Cancel();
@@ -660,11 +677,11 @@ internal sealed class SkeletonForm : Form
         };
 
         AddColumn("Name", 144, true);
-        AddColumn("Archive", 78, false);
-        AddColumn("Offset", 72, false, true);
-        AddColumn("Body", 50, false, true);
+        AddColumn("Archive", 66, false);
+        AddColumn("Offset", 78, false, true);
+        AddColumn("Body", 56, false, true);
         AddColumn("Stored", 54, false, true);
-        AddColumn("Copies", 56, false, true);
+        AddColumn("Copies", 54, false, true);
     }
 
     private void AddColumn(string header, int width, bool mono, bool right = false)

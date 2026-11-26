@@ -2743,6 +2743,8 @@ internal sealed class MainForm : Form
 
         _scanCancel?.Cancel();
         _scanCancel?.Dispose();
+        _skeletonForm?.Close();
+        _skeletonForm = null;
         CancellationTokenSource cancel = new();
         _scanCancel = cancel;
         _materialCancel?.Cancel();
