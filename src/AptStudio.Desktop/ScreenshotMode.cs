@@ -19,6 +19,7 @@ internal static class ScreenshotMode
         float scale = 1f;
         bool previewable = false;
         bool actual = false;
+        bool wire = false;
         for (int i = 2; i < args.Length; i++)
         {
             if (args[i] == "--game" && i + 1 < args.Length)
@@ -47,6 +48,10 @@ internal static class ScreenshotMode
             else if (args[i] == "--actual")
             {
                 actual = true;
+            }
+            else if (args[i] == "--wire")
+            {
+                wire = true;
             }
             else if (args[i] == "--sort"
                 && i + 1 < args.Length
@@ -120,6 +125,11 @@ internal static class ScreenshotMode
                 if (actual)
                 {
                     form.ActualForShot();
+                }
+
+                if (wire)
+                {
+                    form.WireframeForShot();
                 }
 
                 if (sort >= 0)

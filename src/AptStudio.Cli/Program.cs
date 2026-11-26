@@ -3,6 +3,7 @@ using System.Globalization;
 using AptStudio.Core.Assets;
 using AptStudio.Core.Containers;
 using AptStudio.Core.Games;
+using AptStudio.Core.Meshes;
 using AptStudio.Core.Textures;
 
 namespace AptStudio.Cli;
@@ -39,6 +40,11 @@ internal static class Program
             return Assets(args[1]);
         }
 
+        if (args.Length == 3 && string.Equals(args[0], "mesh", StringComparison.OrdinalIgnoreCase))
+        {
+            return Mesh(args[1], args[2]);
+        }
+
         if (args.Length == 4 && string.Equals(args[0], "export", StringComparison.OrdinalIgnoreCase))
         {
             return Export(args[1], args[2], args[3]);
@@ -54,6 +60,7 @@ internal static class Program
         Console.Error.WriteLine("  aptstudio scan <gameRoot>");
         Console.Error.WriteLine("  aptstudio list <gameRoot> [--rebuild]");
         Console.Error.WriteLine("  aptstudio assets <gameRoot>");
+        Console.Error.WriteLine("  aptstudio mesh <gameRoot> <nameHash>");
         Console.Error.WriteLine("  aptstudio export <gameRoot> <nameHash> <outputPath>");
     }
 
@@ -100,6 +107,87 @@ internal static class Program
 
         return catalog.Failures.Count == 0 && catalog.BodyErrorCount == 0 ? 0 : 2;
     }
+
+    private static int Mesh(string gameRoot, string hashText)
+    {
+        string text = hashText.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
+            ? hashText[2..]
+            : hashText;
+        if (!ulong.TryParse(text, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out ulong nameHash))
+        {
+            Console.Error.WriteLine($"'{hashText}' is not a 64-bit hex hash.");
+            return 1;
+        }
+
+        if (!GameProfile.TryDetect(gameRoot, out GameProfile? profile, out string? error) || profile is null)
+        {
+            Console.Error.WriteLine(error);
+            return 1;
+        }
+
+        AssetCatalog catalog;
+        try
+        {
+            catalog = AssetCatalog.Load(profile);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Console.Error.WriteLine(ex.Message);
+            return 1;
+        }
+
+        List<AssetEntry> matches = catalog.Entries
+            .Where(entry => entry.ClassHash == AssetClass.Mesh && entry.NameHash == nameHash)
+            .ToList();
+        if (matches.Count == 0)
+        {
+            Console.Error.WriteLine($"no Mesh_Z row named 0x{nameHash:X16}.");
+            return 1;
+        }
+
+        int failed = 0;
+        foreach (AssetEntry entry in matches)
+        {
+            try
+            {
+                using FileStream stream = new(
+                    entry.BodyArchivePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                MeshData mesh = MeshDecoder.Read(stream, entry.BodyArchivePath, entry.Row);
+                MeshGeometry geometry = mesh.ToGeometry();
+                Console.WriteLine(
+                    $"{Path.GetFileName(entry.ArchivePath)} 0x{entry.NameHash:X16} offset {entry.Row.Offset}{(entry.IsExternal ? " body COMMON.DPC" : "")}");
+                Console.WriteLine(
+                    $"  version {mesh.Head.Version}, {mesh.Head.Storage}, body {N(mesh.Head.BodySize)}, streams {mesh.Streams.Count}, index sets {mesh.IndexSets.Count}");
+                for (int index = 0; index < mesh.Streams.Count; index++)
+                {
+                    MeshStream item = mesh.Streams[index];
+                    Console.WriteLine(
+                        $"  stream {index}: {N(item.VertexCount)} vertices, stride {item.Stride}, flags 0x{item.Flags:X4}");
+                }
+
+                for (int index = 0; index < mesh.IndexSets.Count; index++)
+                {
+                    MeshIndexSet item = mesh.IndexSets[index];
+                    Console.WriteLine(
+                        $"  indices {index}: {N(item.IndexCount)} ({N(item.IndexCount / 3)} triangles), flags 0x{item.Flags:X4}");
+                }
+
+                Console.WriteLine(
+                    $"  bounds min ({F(geometry.Min.X)}, {F(geometry.Min.Y)}, {F(geometry.Min.Z)}) max ({F(geometry.Max.X)}, {F(geometry.Max.Y)}, {F(geometry.Max.Z)})");
+            }
+            catch (Exception ex) when (ex is InvalidDataException or IOException
+                or UnauthorizedAccessException)
+            {
+                failed++;
+                Console.Error.WriteLine($"{Path.GetFileName(entry.ArchivePath)} 0x{entry.NameHash:X16}: {ex.Message}");
+            }
+        }
+
+        return failed == 0 ? 0 : 2;
+    }
+
+    private static string F(float value) =>
+        value.ToString("0.###", CultureInfo.InvariantCulture);
 
     private static int Scan(string gameRoot)
     {
