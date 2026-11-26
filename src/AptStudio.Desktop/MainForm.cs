@@ -202,6 +202,8 @@ internal sealed class MainForm : Form
             _scanCancel?.Dispose();
             _previewCancel?.Dispose();
             _exportCancel?.Dispose();
+            _materialCancel?.Dispose();
+            _audioCancel?.Dispose();
             _selectionTimer.Dispose();
             _filterTimer.Dispose();
             _monoFont.Dispose();
@@ -1033,15 +1035,29 @@ internal sealed class MainForm : Form
         }
 
         TimeSpan value = TimeSpan.FromSeconds(seconds);
-        return value.TotalHours >= 1
-            ? value.ToString(@"h\:mm\:ss", CultureInfo.InvariantCulture)
-            : value.ToString(@"m\:ss", CultureInfo.InvariantCulture);
+        if (value.TotalHours >= 1)
+        {
+            return value.ToString(@"h\:mm\:ss", CultureInfo.InvariantCulture);
+        }
+
+        return value.TotalMinutes >= 1
+            ? value.ToString(@"m\:ss", CultureInfo.InvariantCulture)
+            : value.TotalSeconds.ToString("0.00", CultureInfo.InvariantCulture) + "s";
     }
 
     private static string AudioExportName(AudioEntry media)
     {
-        string name = media.Name
-            ?? $"{Path.GetFileNameWithoutExtension(media.PackName)}_{media.Id:X8}";
+        string stem = media.PackName;
+        foreach (string suffix in new[] { ".PC.PCK", ".PCK", ".PC" })
+        {
+            if (stem.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
+            {
+                stem = stem[..^suffix.Length];
+                break;
+            }
+        }
+
+        string name = media.Name ?? $"{stem}_{media.Id:X8}";
         foreach (char invalid in Path.GetInvalidFileNameChars())
         {
             name = name.Replace(invalid, '_');
@@ -1224,6 +1240,11 @@ internal sealed class MainForm : Form
     private void ShowNoSelection()
     {
         CancelPreview();
+        if (_viewIsAudio)
+        {
+            _audioPanel.StopPlayback();
+        }
+
         ShowMessageMode();
         _selectionTimer.Stop();
         _selectionLabel.Text = "0 selected";
@@ -1444,8 +1465,10 @@ internal sealed class MainForm : Form
             _audioLoaded = true;
             int named = catalog.Entries.Count(entry => entry.Name is not null);
             _audioStatus =
-                $"{N(catalog.Entries.Count)} audio media | {N(named)} named | {N(catalog.Archives.Count)} packs | {N(catalog.Previews)} previews skipped | {catalog.Failures.Count} failed | {watch.ElapsedMilliseconds} ms";
+                $"{N(catalog.Entries.Count)} audio media | {N(named)} named | {N(catalog.Archives.Count)} packs with media | {N(catalog.Previews)} previews skipped | {catalog.Failures.Count} failed | {watch.ElapsedMilliseconds} ms";
             _statusLabel.Text = _audioStatus;
+            _statusLabel.ToolTipText = string.Join(
+                Environment.NewLine, catalog.Failures.Select(failure => failure.Message));
             ApplyFilter(true);
         }
         catch (OperationCanceledException)
@@ -1540,15 +1563,31 @@ internal sealed class MainForm : Form
         {
             byte[] ogg = await Task.Run(() => ConvertAudio(media));
 
+            if (IsDisposed)
+            {
+                return;
+            }
+
             string? directory = Path.GetDirectoryName(full);
             if (!string.IsNullOrEmpty(directory))
             {
                 Directory.CreateDirectory(directory);
             }
 
-            string temp = full + ".tmp";
-            File.WriteAllBytes(temp, ogg);
-            File.Move(temp, full, overwrite: true);
+            string temp = full + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            try
+            {
+                File.WriteAllBytes(temp, ogg);
+                File.Move(temp, full, overwrite: true);
+            }
+            finally
+            {
+                if (File.Exists(temp))
+                {
+                    File.Delete(temp);
+                }
+            }
+
             _audioPanel.SetStatus($"Exported {Path.GetFileName(full)}");
             _statusLabel.Text = $"Exported {Path.GetFileName(full)} ({N(ogg.Length)} bytes).";
         }
@@ -2094,6 +2133,12 @@ internal sealed class MainForm : Form
             return;
         }
 
+        if (_viewIsAudio)
+        {
+            await ExportAudioAsync();
+            return;
+        }
+
         List<AssetEntry> selected = SelectedEntries();
         List<AssetEntry> entries = selected.Where(entry => entry.Texture is not null).ToList();
         if (entries.Count == 0)
@@ -2293,6 +2338,15 @@ internal sealed class MainForm : Form
         _materialsLoading = false;
         _viewIsMaterials = false;
         _materialPanel.Reset();
+        _audioCancel?.Cancel();
+        _audioCancel?.Dispose();
+        _audioCancel = null;
+        _audio = Array.Empty<AudioEntry>();
+        _audioLoaded = false;
+        _audioLoading = false;
+        _viewIsAudio = false;
+        _audioStatus = "";
+        _audioPanel.Reset();
         SetScanning(true);
         _statusLabel.Text = "Scanning...";
         _statusLabel.ToolTipText = "";
@@ -2493,6 +2547,10 @@ internal sealed class MainForm : Form
         _materialCancel?.Cancel();
         _materialCancel?.Dispose();
         _materialCancel = null;
+        _audioCancel?.Cancel();
+        _audioCancel?.Dispose();
+        _audioCancel = null;
+        _audioPanel.Reset();
         CancelPreview();
         _exportCancel?.Cancel();
         _exportCancel?.Dispose();

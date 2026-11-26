@@ -1,6 +1,6 @@
-namespace AptStudio.Desktop;
+namespace AptStudio.Core.Games;
 
-internal static class GameFolderGuard
+public static class GameFolderGuard
 {
     public static bool IsInside(string root, string folder)
     {

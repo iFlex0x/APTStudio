@@ -85,7 +85,7 @@ public sealed record WemInfo(
             }
             else if (tag == "LIST" && cue is null)
             {
-                cue = ReadCue(stream, body, (int)Math.Min(size, 2048), source);
+                cue = ReadCue(stream, body, (int)Math.Min(size, 4096), source);
             }
             else if (tag == "data" && foundFormat)
             {

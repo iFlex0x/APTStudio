@@ -15,23 +15,48 @@ internal sealed class AudioPlayer : IDisposable
     private const uint WhdrDone = 0x01;
 
     private readonly object _sync = new();
-    private Thread? _thread;
-    private IntPtr _device;
-    private volatile bool _stop;
-    private volatile bool _playing;
-    private long _framesDone;
-    private int _sampleRate;
+    private Session? _session;
+    private string? _error;
     private bool _disposed;
 
-    public bool IsPlaying => _playing;
+    public bool IsPlaying
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _session is not null;
+            }
+        }
+    }
 
     public TimeSpan Position
     {
         get
         {
-            long frames = Interlocked.Read(ref _framesDone);
-            int rate = Volatile.Read(ref _sampleRate);
-            return rate == 0 ? TimeSpan.Zero : TimeSpan.FromSeconds((double)frames / rate);
+            Session? session;
+            lock (_sync)
+            {
+                session = _session;
+            }
+
+            if (session is null || session.SampleRate == 0)
+            {
+                return TimeSpan.Zero;
+            }
+
+            long frames = Interlocked.Read(ref session.FramesDone);
+            return TimeSpan.FromSeconds((double)frames / session.SampleRate);
+        }
+    }
+
+    public string? TakeError()
+    {
+        lock (_sync)
+        {
+            string? error = _error;
+            _error = null;
+            return error;
         }
     }
 
@@ -47,10 +72,10 @@ internal sealed class AudioPlayer : IDisposable
         {
             reader = new VorbisReader(stream);
         }
-        catch
+        catch (Exception ex)
         {
             stream.Dispose();
-            throw;
+            throw new InvalidDataException($"Ogg decode failed: {ex.Message}", ex);
         }
 
         int rate = reader.SampleRate;
@@ -74,10 +99,10 @@ internal sealed class AudioPlayer : IDisposable
             throw new InvalidOperationException($"Audio device open failed ({result}).");
         }
 
-        List<IntPtr> headers = new();
-        List<IntPtr> buffers = new();
         int headerSize = Marshal.SizeOf<WAVEHDR>();
         int chunkBytes = BufferFrames * channels * 2;
+        List<IntPtr> headers = new();
+        List<IntPtr> buffers = new();
         for (int i = 0; i < BufferCount; i++)
         {
             WAVEHDR header = new()
@@ -101,44 +126,51 @@ internal sealed class AudioPlayer : IDisposable
             buffers.Add(header.Data);
         }
 
+        Session session;
         lock (_sync)
         {
-            _device = device;
-            _sampleRate = rate;
-            _framesDone = 0;
-            _stop = false;
-            _playing = true;
+            session = new Session(device, reader.SampleRate, reader.Channels);
+            _session = session;
+            _error = null;
         }
 
-        Thread thread = new(() => Run(reader, stream, device, headers, buffers, channels, rate, chunkBytes))
+        Thread thread = new(() => Run(session, reader, stream, headers, buffers, chunkBytes))
         {
             IsBackground = true,
             Name = "APTStudio audio",
         };
-        _thread = thread;
+        session.Thread = thread;
         thread.Start();
     }
 
     public void Stop()
     {
-        Thread? thread;
+        Session? session;
         lock (_sync)
         {
-            _stop = true;
-            thread = _thread;
-            _thread = null;
-            if (_device != IntPtr.Zero)
+            session = _session;
+            if (session is not null)
             {
-                WaveOutReset(_device);
+                session.Stop = true;
+                _session = null;
             }
         }
 
+        if (session is null)
+        {
+            return;
+        }
+
+        if (session.Device != IntPtr.Zero)
+        {
+            WaveOutReset(session.Device);
+        }
+
+        Thread? thread = session.Thread;
         if (thread is not null && thread != Thread.CurrentThread)
         {
             thread.Join(2000);
         }
-
-        _playing = false;
     }
 
     public void Dispose()
@@ -153,24 +185,22 @@ internal sealed class AudioPlayer : IDisposable
     }
 
     private void Run(
+        Session session,
         VorbisReader reader,
         MemoryStream stream,
-        IntPtr device,
         List<IntPtr> headers,
         List<IntPtr> buffers,
-        int channels,
-        int rate,
         int chunkBytes)
     {
-        float[] samples = new float[BufferFrames * channels];
-        short[] pcm = new short[BufferFrames * channels];
+        float[] samples = new float[BufferFrames * session.Channels];
+        short[] pcm = new short[BufferFrames * session.Channels];
         int[] queuedFrames = new int[BufferCount];
         int[] queued = new int[BufferCount];
         int next = 0;
         int headerSize = Marshal.SizeOf<WAVEHDR>();
         try
         {
-            while (!_stop)
+            while (!session.Stop)
             {
                 if (queued[next] != 0)
                 {
@@ -180,7 +210,7 @@ internal sealed class AudioPlayer : IDisposable
                         continue;
                     }
 
-                    Interlocked.Add(ref _framesDone, queuedFrames[next]);
+                    Interlocked.Add(ref session.FramesDone, queuedFrames[next]);
                     queued[next] = 0;
                 }
 
@@ -190,13 +220,13 @@ internal sealed class AudioPlayer : IDisposable
                     break;
                 }
 
-                int frames = read / channels;
+                int frames = read / session.Channels;
                 if (frames == 0)
                 {
                     continue;
                 }
 
-                int total = frames * channels;
+                int total = frames * session.Channels;
                 for (int i = 0; i < total; i++)
                 {
                     pcm[i] = (short)Math.Clamp(samples[i] * 32767f, -32768f, 32767f);
@@ -208,7 +238,7 @@ internal sealed class AudioPlayer : IDisposable
                 header.BufferLength = (uint)bytes;
                 header.Flags &= ~WhdrDone;
                 Marshal.StructureToPtr(header, headers[next], false);
-                if (WaveOutWrite(device, headers[next], headerSize) != 0)
+                if (WaveOutWrite(session.Device, headers[next], headerSize) != 0)
                 {
                     break;
                 }
@@ -218,10 +248,10 @@ internal sealed class AudioPlayer : IDisposable
                 next = (next + 1) % BufferCount;
             }
 
-            if (!_stop)
+            if (!session.Stop)
             {
                 bool pending = true;
-                while (pending && !_stop)
+                while (pending && !session.Stop)
                 {
                     pending = false;
                     for (int i = 0; i < BufferCount; i++)
@@ -233,7 +263,7 @@ internal sealed class AudioPlayer : IDisposable
 
                         if (IsDone(headers[i]))
                         {
-                            Interlocked.Add(ref _framesDone, queuedFrames[i]);
+                            Interlocked.Add(ref session.FramesDone, queuedFrames[i]);
                             queued[i] = 0;
                         }
                         else
@@ -249,21 +279,37 @@ internal sealed class AudioPlayer : IDisposable
                 }
             }
         }
-        finally
+        catch (Exception ex)
         {
-            lock (_sync)
+            if (!session.Stop)
             {
-                if (_device == device)
+                lock (_sync)
                 {
-                    WaveOutReset(device);
-                    _device = IntPtr.Zero;
+                    if (ReferenceEquals(_session, session))
+                    {
+                        _error = $"Playback failed: {ex.Message}";
+                    }
                 }
             }
+        }
+        finally
+        {
+            if (session.Device != IntPtr.Zero)
+            {
+                WaveOutReset(session.Device);
+                Cleanup(session.Device, headers, buffers);
+                session.Device = IntPtr.Zero;
+            }
 
-            Cleanup(device, headers, buffers);
             reader.Dispose();
             stream.Dispose();
-            _playing = false;
+            lock (_sync)
+            {
+                if (ReferenceEquals(_session, session))
+                {
+                    _session = null;
+                }
+            }
         }
     }
 
@@ -288,6 +334,21 @@ internal sealed class AudioPlayer : IDisposable
         }
 
         WaveOutClose(device);
+    }
+
+    private sealed class Session(IntPtr device, int sampleRate, int channels)
+    {
+        public volatile bool Stop;
+
+        public IntPtr Device = device;
+
+        public int SampleRate = sampleRate;
+
+        public int Channels = channels;
+
+        public long FramesDone;
+
+        public Thread? Thread;
     }
 
     [StructLayout(LayoutKind.Sequential)]

@@ -140,14 +140,25 @@ internal sealed class AudioView : Panel
 
         _timer.Tick += (_, _) =>
         {
+            string? error = _player.TakeError();
+            if (error is not null)
+            {
+                ShowError(error);
+                return;
+            }
+
             if (_player.IsPlaying)
             {
+                _status.ForeColor = Theme.Muted;
                 _status.Text = $"{Time(_player.Position.TotalSeconds)} / {Time(Duration)}";
                 return;
             }
 
             _timer.Stop();
             _play.Text = "Play";
+            _play.Enabled = _entry is not null;
+            _export.Enabled = _entry is not null;
+            _status.ForeColor = Theme.Muted;
             _status.Text = "Finished";
         };
     }
@@ -185,6 +196,7 @@ internal sealed class AudioView : Panel
     {
         _play.Enabled = false;
         _export.Enabled = false;
+        _status.ForeColor = Theme.Muted;
         _status.Text = text;
     }
 
@@ -222,6 +234,8 @@ internal sealed class AudioView : Panel
 
     public void SetStatus(string text)
     {
+        _play.Enabled = _entry is not null;
+        _export.Enabled = _entry is not null;
         _status.ForeColor = Theme.Muted;
         _status.Text = text;
     }
@@ -285,8 +299,13 @@ internal sealed class AudioView : Panel
         }
 
         TimeSpan value = TimeSpan.FromSeconds(seconds);
-        return value.TotalHours >= 1
-            ? value.ToString(@"h\:mm\:ss", CultureInfo.InvariantCulture)
-            : value.ToString(@"m\:ss", CultureInfo.InvariantCulture);
+        if (value.TotalHours >= 1)
+        {
+            return value.ToString(@"h\:mm\:ss", CultureInfo.InvariantCulture);
+        }
+
+        return value.TotalMinutes >= 1
+            ? value.ToString(@"m\:ss", CultureInfo.InvariantCulture)
+            : value.TotalSeconds.ToString("0.00", CultureInfo.InvariantCulture) + "s";
     }
 }

@@ -556,6 +556,13 @@ internal static class Program
             return 1;
         }
 
+        string full = Path.GetFullPath(outputPath);
+        if (GameFolderGuard.IsInside(profile.Root, Path.GetDirectoryName(full)!))
+        {
+            Console.Error.WriteLine("refusing to write inside the game folder.");
+            return 1;
+        }
+
         try
         {
             AudioCatalog catalog = AudioCatalog.Load(profile);
@@ -581,16 +588,26 @@ internal static class Program
             }
 
             byte[] ogg = WemConverter.ToOgg(wem);
-            string full = Path.GetFullPath(outputPath);
             string? directory = Path.GetDirectoryName(full);
             if (!string.IsNullOrEmpty(directory))
             {
                 Directory.CreateDirectory(directory);
             }
 
-            string temp = full + ".tmp";
-            File.WriteAllBytes(temp, ogg);
-            File.Move(temp, full, overwrite: true);
+            string temp = full + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            try
+            {
+                File.WriteAllBytes(temp, ogg);
+                File.Move(temp, full, overwrite: true);
+            }
+            finally
+            {
+                if (File.Exists(temp))
+                {
+                    File.Delete(temp);
+                }
+            }
+
             Console.WriteLine(
                 $"converted {media.PackName} 0x{media.Id:X8} -> {full} ({N(ogg.Length)} bytes, {media.DurationSeconds:F2}s, {media.Info.Channels}ch {media.Info.SampleRate} Hz, {media.Info.Codec})");
             if (matches.Count > 1)
@@ -912,6 +929,13 @@ internal static class Program
 
         if (!TryFindDpcs(gameRoot, out string[] files))
         {
+            return 1;
+        }
+
+        string fullOutput = Path.GetFullPath(outputPath);
+        if (GameFolderGuard.IsInside(gameRoot, Path.GetDirectoryName(fullOutput)!))
+        {
+            Console.Error.WriteLine("refusing to write inside the game folder.");
             return 1;
         }
 

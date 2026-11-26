@@ -84,7 +84,8 @@ public sealed record AudioCatalog(
                     continue;
                 }
 
-                int playable = 0;
+                List<AudioEntry> packEntries = new();
+                int packPlugins = 0;
                 using FileStream stream = new(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
                 foreach (AudioMediaRef media in pack.Media)
                 {
@@ -93,11 +94,11 @@ public sealed record AudioCatalog(
                         stream, media.Offset, media.Size, $"{pack.Name} 0x{media.Id:X8}");
                     if (info is null)
                     {
-                        plugins++;
+                        packPlugins++;
                         continue;
                     }
 
-                    entries.Add(new AudioEntry(
+                    packEntries.Add(new AudioEntry(
                         file,
                         pack.Name,
                         media.BankId,
@@ -108,12 +109,13 @@ public sealed record AudioCatalog(
                         pack.LanguageName(media.LanguageId),
                         info,
                         info.Cue));
-                    playable++;
                 }
 
-                if (playable > 0)
+                entries.AddRange(packEntries);
+                plugins += packPlugins;
+                if (packEntries.Count > 0)
                 {
-                    archives.Add(new AudioArchive(file, playable));
+                    archives.Add(new AudioArchive(file, packEntries.Count));
                 }
             }
             catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)

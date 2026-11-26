@@ -7,7 +7,7 @@ public sealed record AudioLanguage(uint Id, string Name);
 
 public sealed record AudioBankRef(uint Id, uint BlockSize, uint Size, uint OffsetSectors, uint LanguageId)
 {
-    public long Offset => (long)OffsetSectors * BlockSize;
+    public long Offset => OffsetSectors * (long)BlockSize;
 }
 
 public sealed record AudioMediaRef(
@@ -79,7 +79,15 @@ public sealed class AudioPack
         uint languageSize = BinaryPrimitives.ReadUInt32LittleEndian(header.AsSpan(0x0C));
         uint bankSize = BinaryPrimitives.ReadUInt32LittleEndian(header.AsSpan(0x10));
         uint soundSize = BinaryPrimitives.ReadUInt32LittleEndian(header.AsSpan(0x14));
-        if (headerSize > stream.Length || (long)HeaderSize + languageSize + bankSize + soundSize > stream.Length)
+        if (version != 1)
+        {
+            throw new InvalidDataException(
+                $"{System.IO.Path.GetFileName(path)}: AKPK version {version} is not measured.");
+        }
+
+        if (headerSize > stream.Length
+            || (long)HeaderSize + languageSize + bankSize + soundSize > stream.Length
+            || languageSize > int.MaxValue || bankSize > int.MaxValue || soundSize > int.MaxValue)
         {
             throw new InvalidDataException(
                 $"{System.IO.Path.GetFileName(path)}: header sizes exceed the file.");
@@ -199,14 +207,23 @@ public sealed class AudioPack
         return media;
     }
 
-    private static AudioMediaRef ReadMediaRow(ReadOnlySpan<byte> row, uint bankId) =>
-        new(
+    private static AudioMediaRef ReadMediaRow(ReadOnlySpan<byte> row, uint bankId)
+    {
+        uint id = BinaryPrimitives.ReadUInt32LittleEndian(row);
+        uint block = BinaryPrimitives.ReadUInt32LittleEndian(row[4..]);
+        uint sectors = BinaryPrimitives.ReadUInt32LittleEndian(row[12..]);
+        if (block != 0 && sectors > long.MaxValue / block)
+        {
+            throw new InvalidDataException($"media 0x{id:X8} has a wrapped sector offset.");
+        }
+
+        return new AudioMediaRef(
             bankId,
-            BinaryPrimitives.ReadUInt32LittleEndian(row),
-            (long)BinaryPrimitives.ReadUInt32LittleEndian(row[12..])
-                * BinaryPrimitives.ReadUInt32LittleEndian(row[4..]),
+            id,
+            sectors * (long)block,
             BinaryPrimitives.ReadUInt32LittleEndian(row[8..]),
             BinaryPrimitives.ReadUInt32LittleEndian(row[16..]));
+    }
 
     private static IEnumerable<AudioMediaRef> ReadBankMedia(
         FileStream stream,
@@ -259,10 +276,10 @@ public sealed class AudioPack
             yield break;
         }
 
-        if (didxSize % 12 != 0)
+        if (didxSize % 12 != 0 || didxSize > int.MaxValue)
         {
             throw new InvalidDataException(
-                $"{System.IO.Path.GetFileName(path)}: bank 0x{bank.Id:X8} DIDX size {didxSize} is not a row multiple.");
+                $"{System.IO.Path.GetFileName(path)}: bank 0x{bank.Id:X8} DIDX size {didxSize} is not a row table.");
         }
 
         byte[] rows = ReadExactly(stream, didx, (int)didxSize, path);

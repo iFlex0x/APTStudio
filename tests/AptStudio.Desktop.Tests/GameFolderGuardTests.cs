@@ -1,3 +1,5 @@
+using AptStudio.Core.Games;
+
 namespace AptStudio.Desktop.Tests;
 
 public sealed class GameFolderGuardTests

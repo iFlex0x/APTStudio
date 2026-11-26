@@ -49,10 +49,39 @@ MIT, copyright Milosz Krajewski. No source code is included.
 
 Wwise packed Vorbis WEM files are converted with
 [Ww2Ogg.Core](https://github.com/coconutbird/ww2ogg-core), a .NET port of
-ww2ogg by hcs. BSD 3-Clause, copyright Xiph.org Foundation, Adam Gashlin,
-and the ww2ogg-netcore contributors. No source code is included.
+ww2ogg by hcs. No source code is included.
+
+BSD 3-Clause License
+
+Copyright (c) 2002, Xiph.org Foundation
+Copyright (c) 2009-2016, Adam Gashlin (hcs)
+Copyright (c) 2025, ww2ogg-netcore contributors
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+- Redistributions of source code must retain the above copyright notice,
+  this list of conditions and the following disclaimer.
+- Redistributions in binary form must reproduce the above copyright notice,
+  this list of conditions and the following disclaimer in the documentation
+  and/or other materials provided with the distribution.
+- Neither the name of the Xiph.org Foundation nor the names of its
+  contributors may be used to endorse or promote products derived from this
+  software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ARE DISCLAIMED. IN NO EVENT SHALL THE FOUNDATION OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ## NVorbis
 
 Converted Ogg streams are decoded with
-[NVorbis](https://github.com/NVorbis/NVorbis), MIT. Pulled in by Ww2Ogg.Core.
+[NVorbis](https://github.com/NVorbis/NVorbis), MIT, copyright Andrew Ward.
+Pulled in by Ww2Ogg.Core.

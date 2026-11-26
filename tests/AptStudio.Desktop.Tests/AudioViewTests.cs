@@ -60,6 +60,22 @@ public sealed class AudioViewTests
     }
 
     [Fact]
+    public void ExportStatusRestoresButtons()
+    {
+        using AudioView view = new();
+        view.CreateControl();
+        view.SetAudio(Entry);
+        view.SetBusy("Exporting...");
+        Assert.False(FindButton(view, "Play").Enabled);
+        Assert.False(FindButton(view, "Export Ogg").Enabled);
+
+        view.SetStatus("Exported file.ogg");
+
+        Assert.True(FindButton(view, "Play").Enabled);
+        Assert.True(FindButton(view, "Export Ogg").Enabled);
+    }
+
+    [Fact]
     public void ScalesWithoutThrowing()
     {
         using AudioView view = new();

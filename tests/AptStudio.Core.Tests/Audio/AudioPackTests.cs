@@ -61,6 +61,24 @@ public sealed class AudioPackTests
     }
 
     [Fact]
+    public void RejectsUnknownVersion()
+    {
+        string path = WritePack();
+        try
+        {
+            byte[] bytes = File.ReadAllBytes(path);
+            BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(8), 2u);
+            File.WriteAllBytes(path, bytes);
+            InvalidDataException error = Assert.Throws<InvalidDataException>(() => AudioPack.Read(path));
+            Assert.Contains("version 2", error.Message);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public void RejectsSectionPastFile()
     {
         string path = WritePack();
