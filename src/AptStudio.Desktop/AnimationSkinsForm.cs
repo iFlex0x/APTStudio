@@ -43,6 +43,7 @@ internal sealed class AnimationSkinsForm : Form
         _animation = animation;
 
         Text = $"Animation skins - 0x{animation.NameHash:X16}";
+        Icon = Theme.AppIcon;
         BackColor = Theme.Background;
         ForeColor = Theme.Text;
         StartPosition = FormStartPosition.CenterParent;

@@ -15,4 +15,19 @@ internal static class Theme
     public static readonly Color CheckerLight = Color.FromArgb(56, 56, 56);
     public static readonly Color CheckerDark = Color.FromArgb(42, 42, 42);
     public static readonly Color Error = Color.FromArgb(224, 108, 117);
+
+    public static Icon AppIcon { get; } = LoadAppIcon();
+
+    private static Icon LoadAppIcon()
+    {
+        try
+        {
+            return Icon.ExtractAssociatedIcon(Application.ExecutablePath)
+                ?? SystemIcons.Application;
+        }
+        catch (ArgumentException)
+        {
+            return SystemIcons.Application;
+        }
+    }
 }
