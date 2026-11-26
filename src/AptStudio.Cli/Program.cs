@@ -600,7 +600,7 @@ internal static class Program
                 if (animation.Encoding == AnimationEncoding.Packed)
                 {
                     Console.WriteLine(
-                        $"  bones {animation.Bones.Count}, stream at 0x{animation.PackedStreamOffset:X}, extra {animation.Head.ExtraSize}");
+                        $"  bones {animation.Bones.Count} ({animation.AnimatedBones} animated, {animation.BaseBones} base), stream at 0x{animation.PackedStreamOffset:X}, extra {animation.Head.ExtraSize}");
                 }
                 else
                 {

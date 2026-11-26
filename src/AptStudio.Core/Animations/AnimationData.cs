@@ -25,6 +25,12 @@ public sealed record AnimationData(
 {
     public const int FooterSize = 14;
 
+    public int BaseBones => Bones.Count(bone => bone.BitLength == BaseBlockBits);
+
+    public int AnimatedBones => Bones.Count(bone => bone.BitLength > BaseBlockBits);
+
+    public const uint BaseBlockBits = 142;
+
     public static AnimationData Parse(
         AnimationHead head,
         byte[] body,

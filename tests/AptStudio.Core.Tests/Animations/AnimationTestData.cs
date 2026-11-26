@@ -46,6 +46,21 @@ internal static class AnimationTestData
         return body;
     }
 
+    public static byte[] PackedBaseBody()
+    {
+        // one base block (142 bits) and one animated block (300 bits)
+        byte[] body = new byte[100];
+        BinaryPrimitives.WriteUInt32LittleEndian(body, 2);
+        BinaryPrimitives.WriteUInt64LittleEndian(body.AsSpan(4), 0xAAAA111122223333);
+        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(12), 0);
+        BinaryPrimitives.WriteUInt64LittleEndian(body.AsSpan(16), 0xBBBB444455556666);
+        BinaryPrimitives.WriteUInt32LittleEndian(body.AsSpan(24), 142);
+        body[28] = 0;
+        body[29] = 4;
+        WriteFooter(body, packedBits: 442, duration: 1f, keyCount: 30);
+        return body;
+    }
+
     public static byte[] FrameBody()
     {
         // frame table: 4 entries, two tracks terminated by frame 30
