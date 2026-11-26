@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Drawing.Imaging;
 using System.Globalization;
 using System.Runtime.InteropServices;
+using AptStudio.Core.Animations;
 using AptStudio.Core.Assets;
 using AptStudio.Core.Audio;
 using AptStudio.Core.Games;
@@ -38,6 +39,7 @@ internal sealed class MainForm : Form
     private readonly MeshView _meshView = new();
     private readonly MaterialView _materialPanel = new();
     private readonly SkinView _skinView = new();
+    private readonly AnimationView _animationView = new();
     private readonly LinkView _linkView = new();
     private readonly ToolTip _tips = new();
     private readonly AudioView _audioPanel = new();
@@ -415,6 +417,8 @@ internal sealed class MainForm : Form
         _materialPanel.Visible = false;
         _skinView.Dock = DockStyle.Fill;
         _skinView.Visible = false;
+        _animationView.Dock = DockStyle.Fill;
+        _animationView.Visible = false;
         _linkView.Dock = DockStyle.Fill;
         _linkView.Visible = false;
         _audioPanel.Dock = DockStyle.Fill;
@@ -425,6 +429,7 @@ internal sealed class MainForm : Form
         panel.Controls.Add(_meshView);
         panel.Controls.Add(_materialPanel);
         panel.Controls.Add(_skinView);
+        panel.Controls.Add(_animationView);
         panel.Controls.Add(_linkView);
         panel.Controls.Add(_audioPanel);
         panel.Controls.Add(_infoLabel);
@@ -651,6 +656,7 @@ internal sealed class MainForm : Form
         ScaleGrid();
         _materialPanel.SetDpiScale(DeviceDpi / 96f);
         _skinView.SetDpiScale(DeviceDpi / 96f);
+        _animationView.SetDpiScale(DeviceDpi / 96f);
         _linkView.SetDpiScale(DeviceDpi / 96f);
         _audioPanel.SetDpiScale(DeviceDpi / 96f);
         if (_entries.Count > 0 && !_scanning)
@@ -1343,6 +1349,13 @@ internal sealed class MainForm : Form
             return;
         }
 
+        if (entry.ClassHash == AssetClass.Animation)
+        {
+            ShowAnimationMode();
+            await DecodeAnimationAsync(entry);
+            return;
+        }
+
         ShowTextureMode();
         if (entry.Bitmap is null)
         {
@@ -1374,6 +1387,7 @@ internal sealed class MainForm : Form
         _meshView.Visible = false;
         _materialPanel.Visible = false;
         _skinView.Visible = false;
+        _animationView.Visible = false;
         _audioPanel.Visible = false;
         _linkView.Visible = false;
         _preview.Visible = true;
@@ -1391,6 +1405,7 @@ internal sealed class MainForm : Form
         _preview.Visible = false;
         _materialPanel.Visible = false;
         _skinView.Visible = false;
+        _animationView.Visible = false;
         _audioPanel.Visible = false;
         _linkView.Visible = false;
         _meshView.Visible = true;
@@ -1409,6 +1424,7 @@ internal sealed class MainForm : Form
         _preview.Visible = false;
         _meshView.Visible = false;
         _skinView.Visible = false;
+        _animationView.Visible = false;
         _audioPanel.Visible = false;
         _linkView.Visible = false;
         _materialPanel.Visible = true;
@@ -1429,6 +1445,25 @@ internal sealed class MainForm : Form
         _audioPanel.Visible = false;
         _linkView.Visible = false;
         _skinView.Visible = true;
+        _animationView.Visible = false;
+        _mipCombo.Visible = false;
+        _channelCombo.Visible = false;
+        _zoomLabel.Visible = false;
+        _actualButton.Visible = false;
+        _fitButton.Visible = false;
+        _wireframeCheck.Visible = false;
+        _zoomLabel.Text = "";
+    }
+
+    private void ShowAnimationMode()
+    {
+        _preview.Visible = false;
+        _meshView.Visible = false;
+        _materialPanel.Visible = false;
+        _skinView.Visible = false;
+        _animationView.Visible = true;
+        _audioPanel.Visible = false;
+        _linkView.Visible = false;
         _mipCombo.Visible = false;
         _channelCombo.Visible = false;
         _zoomLabel.Visible = false;
@@ -1444,6 +1479,7 @@ internal sealed class MainForm : Form
         _meshView.Visible = false;
         _materialPanel.Visible = false;
         _skinView.Visible = false;
+        _animationView.Visible = false;
         _linkView.Visible = false;
         _audioPanel.Visible = true;
         _mipCombo.Visible = false;
@@ -1461,6 +1497,7 @@ internal sealed class MainForm : Form
         _meshView.Visible = false;
         _materialPanel.Visible = false;
         _skinView.Visible = false;
+        _animationView.Visible = false;
         _audioPanel.Visible = false;
         _linkView.Visible = true;
         _mipCombo.Visible = false;
@@ -1777,6 +1814,7 @@ internal sealed class MainForm : Form
         _meshView.Visible = false;
         _materialPanel.Visible = false;
         _skinView.Visible = false;
+        _animationView.Visible = false;
         _preview.Visible = true;
         _mipCombo.Visible = false;
         _channelCombo.Visible = false;
@@ -2180,6 +2218,72 @@ internal sealed class MainForm : Form
                     ex.Message,
                     Array.Empty<SkinPartRow>(),
                     0);
+                _previewReady.TrySetResult(true);
+            }
+        }
+    }
+
+    private async Task DecodeAnimationAsync(AssetEntry entry)
+    {
+        CancelPreview();
+        CancellationTokenSource cancel = new();
+        _previewCancel = cancel;
+        _animationView.SetAnimation(
+            $"Animation_Z 0x{entry.NameHash:X16}",
+            "Loading...",
+            Array.Empty<AnimationBoneRow>(),
+            packed: true);
+        _infoLabel.Text =
+            $"{entry.ClassName} | 0x{entry.NameHash:X16} | {Path.GetFileName(entry.ArchivePath)}";
+
+        try
+        {
+            (AnimationData animation, AnimationBoneRow[] bones) = await Task.Run(() =>
+            {
+                using FileStream stream = new(
+                    entry.BodyArchivePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                AnimationData data = AnimationDecoder.Read(stream, entry.BodyArchivePath, entry.Row);
+                AnimationBoneRow[] rows = data.Bones
+                    .Select(bone => new AnimationBoneRow(bone.NameHash, bone.BitOffset, bone.BitLength))
+                    .ToArray();
+                return (data, rows);
+            }, cancel.Token);
+
+            if (IsDisposed || cancel != _previewCancel)
+            {
+                return;
+            }
+
+            string encoding = animation.Encoding == AnimationEncoding.Packed
+                ? $"packed {N(animation.PackedBits)} bits"
+                : $"{N(animation.FrameEntries)} frame entries";
+            string counts = animation.Encoding == AnimationEncoding.Packed
+                ? $"{N(bones.Length)} bones"
+                : $"{N(animation.FrameTracks)} tracks";
+            string subtitle =
+                $"{animation.Duration:0.###}s | {N(animation.KeyCount)} keys | {encoding} | {counts} | {Path.GetFileName(entry.ArchivePath)}";
+            _animationView.SetAnimation(
+                $"Animation_Z 0x{entry.NameHash:X16}",
+                subtitle,
+                bones,
+                animation.Encoding == AnimationEncoding.Packed);
+            _infoLabel.Text =
+                $"Animation_Z | 0x{entry.NameHash:X16} | {animation.Duration:0.###} s | {N(animation.KeyCount)} keys | {Path.GetFileName(entry.ArchivePath)}";
+            _previewReady.TrySetResult(true);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex) when (ex is InvalidDataException or IOException
+            or UnauthorizedAccessException)
+        {
+            if (!IsDisposed && cancel == _previewCancel)
+            {
+                _animationView.SetAnimation(
+                    $"Animation_Z 0x{entry.NameHash:X16}",
+                    ex.Message,
+                    Array.Empty<AnimationBoneRow>(),
+                    packed: true);
                 _previewReady.TrySetResult(true);
             }
         }
@@ -2794,6 +2898,7 @@ internal sealed class MainForm : Form
         _audioStatus = "";
         _audioPanel.Reset();
         _linkView.Reset();
+        _animationView.Reset();
         _materialTextures = null;
         _skinLinks = null;
         _materialTexturesLoading = false;
@@ -3014,6 +3119,7 @@ internal sealed class MainForm : Form
         _materialTexturesLoading = false;
         _skinLinksLoading = false;
         _linkView.Reset();
+        _animationView.Reset();
         CancelPreview();
         _exportCancel?.Cancel();
         _exportCancel?.Dispose();
@@ -3069,6 +3175,7 @@ internal sealed class MainForm : Form
         _materialPanel.Font = _grid.Font;
         _materialPanel.SetDpiScale(scale);
         _skinView.SetDpiScale(scale);
+        _animationView.SetDpiScale(scale);
         _linkView.SetDpiScale(scale);
         _infoLabel.Font = _grid.Font;
         _zoomLabel.Font = _grid.Font;
