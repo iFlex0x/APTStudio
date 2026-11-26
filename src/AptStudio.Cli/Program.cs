@@ -7,6 +7,7 @@ using AptStudio.Core.Games;
 using AptStudio.Core.Links;
 using AptStudio.Core.Materials;
 using AptStudio.Core.Meshes;
+using AptStudio.Core.Skeletons;
 using AptStudio.Core.Skins;
 using AptStudio.Core.Textures;
 
@@ -78,6 +79,29 @@ internal static class Program
             return Skin(args[1], args[2]);
         }
 
+        if ((args.Length == 2 || args.Length == 3)
+            && string.Equals(args[0], "skeletons", StringComparison.OrdinalIgnoreCase))
+        {
+            bool rebuild = false;
+            if (args.Length == 3)
+            {
+                if (!string.Equals(args[2], "--rebuild", StringComparison.OrdinalIgnoreCase))
+                {
+                    Usage();
+                    return 1;
+                }
+
+                rebuild = true;
+            }
+
+            return Skeletons(args[1], rebuild);
+        }
+
+        if (args.Length == 3 && string.Equals(args[0], "skeleton", StringComparison.OrdinalIgnoreCase))
+        {
+            return Skeleton(args[1], args[2]);
+        }
+
         if (args.Length == 2 && string.Equals(args[0], "audio", StringComparison.OrdinalIgnoreCase))
         {
             return Audio(args[1]);
@@ -113,6 +137,8 @@ internal static class Program
         Console.Error.WriteLine("  aptstudio material <gameRoot> <nameHash>");
         Console.Error.WriteLine("  aptstudio skins <gameRoot>");
         Console.Error.WriteLine("  aptstudio skin <gameRoot> <nameHash>");
+        Console.Error.WriteLine("  aptstudio skeletons <gameRoot> [--rebuild]");
+        Console.Error.WriteLine("  aptstudio skeleton <gameRoot> <nameHash>");
         Console.Error.WriteLine("  aptstudio audio <gameRoot>");
         Console.Error.WriteLine("  aptstudio links <gameRoot>");
         Console.Error.WriteLine("  aptstudio audioconvert <gameRoot> <pack> <mediaId> <output.ogg>");
@@ -477,6 +503,10 @@ internal static class Program
                     $"{Path.GetFileName(entry.ArchivePath)} 0x{skin.Head.NameHash:X16} offset {entry.Row.Offset}{external}");
                 Console.WriteLine(
                     $"  version {skin.Head.Version}, {skin.Head.Storage}, body {N(skin.Head.BodySize)}, stored {N(skin.Head.StoredSize)}, meshes {skin.MeshLinks.Length}, parts {skin.Parts.Length}, bones {skin.Bones.Length}");
+                SkinBinding binding = SkinBinding.Read(stream, entry.BodyArchivePath, entry.Row);
+                Console.WriteLine(binding.HasSkeleton
+                    ? $"  skeleton 0x{binding.SkeletonRoot:X16}"
+                    : "  skeleton none");
                 foreach (SkinPart part in skin.Parts)
                 {
                     string packets = part.PacketsParsed
@@ -485,6 +515,118 @@ internal static class Program
                     Console.WriteLine(
                         $"  part {part.Index,2}: mesh 0x{part.MeshHash:X16}, {N(part.VertexCount)} vertices, stride {part.Stride}, {packets}");
                 }
+            }
+
+            return 0;
+        }
+        catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
+        {
+            Console.Error.WriteLine(ex.Message);
+            return 1;
+        }
+    }
+
+    private static int Skeletons(string gameRoot, bool rebuild)
+    {
+        if (!GameProfile.TryDetect(gameRoot, out GameProfile? profile, out string? error) || profile is null)
+        {
+            Console.Error.WriteLine(error);
+            return 1;
+        }
+
+        try
+        {
+            Stopwatch watch = Stopwatch.StartNew();
+            SkeletonCatalog skeletons = SkeletonCatalog.Load(profile, rebuild);
+            int bones = 0;
+            int maxBones = 0;
+            long tails = 0;
+            int failed = 0;
+            List<string> failures = new();
+            foreach (SkeletonEntry entry in skeletons.Entries)
+            {
+                try
+                {
+                    using FileStream stream = new(
+                        entry.ArchivePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                    SkeletonData data = SkeletonDecoder.Read(
+                        stream, entry.ArchivePath, entry.Hit);
+                    bones += data.Bones.Count;
+                    maxBones = Math.Max(maxBones, data.Bones.Count);
+                    tails += data.TailLength;
+                }
+                catch (InvalidDataException ex)
+                {
+                    failed++;
+                    if (failures.Count < 10)
+                    {
+                        failures.Add(ex.Message);
+                    }
+                }
+            }
+
+            watch.Stop();
+            Console.WriteLine(
+                $"skeletons: {N(skeletons.Entries.Count)} objects, {N(skeletons.UniqueNameCount)} names, archives: {N(skeletons.Archives.Count)}, bones: {N(bones)}, max: {N(maxBones)}, tail: {N(tails)} bytes, failed: {N(failed)}, scanned: {N(skeletons.Scanned)}, cached: {N(skeletons.Cached)}, {N(watch.ElapsedMilliseconds)} ms");
+            foreach (string failure in failures)
+            {
+                Console.Error.WriteLine(failure);
+            }
+
+            return failed == 0 ? 0 : 2;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Console.Error.WriteLine(ex.Message);
+            return 1;
+        }
+    }
+
+    private static int Skeleton(string gameRoot, string hashText)
+    {
+        if (!TryHash(hashText, out ulong nameHash))
+        {
+            Console.Error.WriteLine($"'{hashText}' is not a 64-bit hex hash.");
+            return 1;
+        }
+
+        if (!GameProfile.TryDetect(gameRoot, out GameProfile? profile, out string? error) || profile is null)
+        {
+            Console.Error.WriteLine(error);
+            return 1;
+        }
+
+        try
+        {
+            SkeletonCatalog skeletons = SkeletonCatalog.Load(profile);
+            List<SkeletonEntry> matches = skeletons.Entries
+                .Where(entry => entry.NameHash == nameHash)
+                .ToList();
+            if (matches.Count == 0)
+            {
+                Console.Error.WriteLine($"no Skel_Z object named 0x{nameHash:X16}.");
+                return 1;
+            }
+
+            foreach (SkeletonEntry entry in matches)
+            {
+                Console.WriteLine(
+                    $"{Path.GetFileName(entry.ArchivePath)} 0x{entry.NameHash:X16} offset {entry.Offset} body {N(entry.Hit.BodySize)} stored {N(entry.Hit.StoredSize)}");
+            }
+
+            SkeletonEntry first = matches[0];
+            using FileStream stream = new(
+                first.ArchivePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            SkeletonData data = SkeletonDecoder.Read(stream, first.ArchivePath, first.Hit);
+            Console.WriteLine(
+                $"  version {data.Head.Version}, bones {N(data.Bones.Count)}, tail {N(data.TailLength)}");
+            int shown = Math.Min(12, data.Bones.Count);
+            for (int index = 0; index < shown; index++)
+            {
+                SkeletonBone bone = data.Bones[index];
+                var position = bone.Position;
+                Console.WriteLine(
+                    $"  bone {index,3}: 0x{bone.NameHash:X16} parent {bone.ParentIndex,4} first child {bone.FirstChildIndex,4} at ({position.X:F3}, {position.Y:F3}, {position.Z:F3})");
             }
 
             return 0;
