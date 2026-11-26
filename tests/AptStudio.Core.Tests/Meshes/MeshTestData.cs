@@ -11,7 +11,7 @@ internal static class MeshTestData
     public const ulong Link = 0x2222;
     public const int LinkSize = 13;
     public const int PayloadOffset = 0x48;
-    public const int IndexData = 0xC4;
+    public const int IndexData = 0xC0;
 
     public static byte[] Payload(bool secondStream = false, int firstStride = 32, int trailer = 68)
     {
@@ -21,7 +21,7 @@ internal static class MeshTestData
             size += 20 + 4 * 20;
         }
 
-        size += 4 + 20 + 6 * 2 + trailer;
+        size += 4 + 16 + 6 * 2 + trailer;
         byte[] payload = new byte[size];
         BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(0x14), secondStream ? 2u : 1u);
         int at = 0x18;
@@ -44,7 +44,7 @@ internal static class MeshTestData
         BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(at), 6);
         BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(at + 4), 0x0102);
         BinaryPrimitives.WriteUInt64LittleEndian(payload.AsSpan(at + 8), 0xA3);
-        at += 20;
+        at += 16;
         WriteIndex(payload, at, 0);
         WriteIndex(payload, at + 2, 1);
         WriteIndex(payload, at + 4, 2);

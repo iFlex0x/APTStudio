@@ -90,7 +90,7 @@ public sealed record MeshData(
         List<MeshIndexSet> sets = new(setCount);
         for (int index = 0; index < setCount; index++)
         {
-            if (at + 20 > payload.Length)
+            if (at + 16 > payload.Length)
             {
                 throw new InvalidDataException($"{source}: index set {index} descriptor is truncated.");
             }
@@ -98,7 +98,7 @@ public sealed record MeshData(
             int indexCount = ReadCount(payload, at, $"index set {index} count", source);
             ushort flags = BinaryPrimitives.ReadUInt16LittleEndian(payload.AsSpan(at + 4));
             ulong hash = BinaryPrimitives.ReadUInt64LittleEndian(payload.AsSpan(at + 8));
-            at += 20;
+            at += 16;
             if (indexCount == 0 || indexCount % 3 != 0)
             {
                 throw new InvalidDataException(
