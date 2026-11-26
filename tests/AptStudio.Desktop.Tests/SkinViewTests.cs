@@ -63,6 +63,27 @@ public sealed class SkinViewTests
         Assert.Equal(0x99UL, requested);
     }
 
+    [Fact]
+    public void PoseButtonFollowsBinding()
+    {
+        using SkinView view = new();
+        view.CreateControl();
+        Button button = FindButton(view, "Pose")
+            ?? throw new InvalidOperationException("No pose button in the tree.");
+        Assert.False(button.Enabled);
+
+        view.SetSkin("Skin_Z 0x1", "no skeleton", [], 0);
+        Assert.False(button.Enabled);
+
+        view.SetSkin("Skin_Z 0x1", "skeleton 0x99", [], 0x99);
+        Assert.True(button.Enabled);
+
+        ulong? requested = null;
+        view.PoseRequested += hash => requested = hash;
+        button.PerformClick();
+        Assert.Equal(0x99UL, requested);
+    }
+
     private static Button? FindButton(Control root, string text)
     {
         foreach (Control child in root.Controls)

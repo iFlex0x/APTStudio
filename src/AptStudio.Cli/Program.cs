@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.Numerics;
 using AptStudio.Core.Assets;
 using AptStudio.Core.Audio;
 using AptStudio.Core.Containers;
@@ -117,6 +118,13 @@ internal static class Program
             return SkeletonBindings(args[1]);
         }
 
+        if ((args.Length == 5 || args.Length == 6)
+            && string.Equals(args[0], "pose", StringComparison.OrdinalIgnoreCase))
+        {
+            return Pose(
+                args[1], args[2], args[3], args[4], args.Length == 6 ? args[5] : "z");
+        }
+
         if (args.Length == 5 && string.Equals(args[0], "audioconvert", StringComparison.OrdinalIgnoreCase))
         {
             return AudioConvert(args[1], args[2], args[3], args[4]);
@@ -147,6 +155,7 @@ internal static class Program
         Console.Error.WriteLine("  aptstudio audio <gameRoot>");
         Console.Error.WriteLine("  aptstudio links <gameRoot>");
         Console.Error.WriteLine("  aptstudio skelbind <gameRoot>");
+        Console.Error.WriteLine("  aptstudio pose <gameRoot> <skinHash> <boneHash> <degrees> [x|y|z]");
         Console.Error.WriteLine("  aptstudio audioconvert <gameRoot> <pack> <mediaId> <output.ogg>");
         Console.Error.WriteLine("  aptstudio export <gameRoot> <nameHash> <outputPath>");
     }
@@ -532,6 +541,181 @@ internal static class Program
                 }
             }
 
+            return 0;
+        }
+        catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
+        {
+            Console.Error.WriteLine(ex.Message);
+            return 1;
+        }
+    }
+
+    private static int Pose(
+        string gameRoot,
+        string skinText,
+        string boneText,
+        string angleText,
+        string axisText)
+    {
+        if (!TryHash(skinText, out ulong skinHash) || !TryHash(boneText, out ulong boneHash))
+        {
+            Console.Error.WriteLine("skin and bone must be 64-bit hex hashes.");
+            return 1;
+        }
+
+        if (!float.TryParse(angleText, NumberStyles.Float, CultureInfo.InvariantCulture, out float degrees))
+        {
+            Console.Error.WriteLine($"'{angleText}' is not an angle.");
+            return 1;
+        }
+
+        if (!float.IsFinite(degrees))
+        {
+            Console.Error.WriteLine("angle must be finite.");
+            return 1;
+        }
+
+        Vector3 axis = axisText.ToLowerInvariant() switch
+        {
+            "x" => Vector3.UnitX,
+            "y" => Vector3.UnitY,
+            "z" => Vector3.UnitZ,
+            _ => new Vector3(float.NaN),
+        };
+        if (!float.IsFinite(axis.X))
+        {
+            Console.Error.WriteLine($"axis '{axisText}' is not x, y, or z.");
+            return 1;
+        }
+
+        if (!GameProfile.TryDetect(gameRoot, out GameProfile? profile, out string? error) || profile is null)
+        {
+            Console.Error.WriteLine(error);
+            return 1;
+        }
+
+        try
+        {
+            Stopwatch watch = Stopwatch.StartNew();
+            AssetCatalog assets = AssetCatalog.Load(profile);
+            AssetEntry? skinRow = assets.Entries
+                .Where(entry => entry.ClassHash == AssetClass.Skin && entry.NameHash == skinHash)
+                .GroupBy(entry => (entry.BodyArchivePath, entry.Row.BodyOffset))
+                .Select(group => group
+                    .OrderBy(entry => entry.ArchivePath, StringComparer.OrdinalIgnoreCase)
+                    .First())
+                .FirstOrDefault();
+            if (skinRow is null)
+            {
+                Console.Error.WriteLine($"no Skin_Z row named 0x{skinHash:X16}.");
+                return 1;
+            }
+
+            Dictionary<ulong, AssetEntry> meshRows = new();
+            foreach (AssetEntry entry in assets.Entries)
+            {
+                if (entry.ClassHash == AssetClass.Mesh)
+                {
+                    meshRows.TryAdd(entry.NameHash, entry);
+                }
+            }
+
+            Dictionary<ulong, MeshGeometry?> meshes = new();
+            MeshGeometry? Geometry(ulong hash)
+            {
+                if (meshes.TryGetValue(hash, out MeshGeometry? cached))
+                {
+                    return cached;
+                }
+
+                if (!meshRows.TryGetValue(hash, out AssetEntry? row))
+                {
+                    return null;
+                }
+
+                using FileStream stream = new(
+                    row.BodyArchivePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                MeshData data = MeshDecoder.Read(stream, row.BodyArchivePath, row.Row);
+                MeshGeometry geometry = data.Streams.Count == 0
+                    ? new MeshGeometry([], [], Vector3.Zero, Vector3.Zero)
+                    : data.ToGeometry();
+                meshes.Add(hash, geometry);
+                return geometry;
+            }
+
+            int? Verts(ulong hash) => Geometry(hash)?.Positions.Length;
+
+            SkinData skin;
+            SkinBinding binding;
+            using (FileStream stream = new(
+                skinRow.BodyArchivePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+            {
+                skin = SkinDecoder.Read(stream, skinRow.BodyArchivePath, skinRow.Row, Verts);
+                binding = SkinBinding.Read(stream, skinRow.BodyArchivePath, skinRow.Row);
+            }
+
+            if (!binding.HasSkeleton)
+            {
+                Console.Error.WriteLine($"skin 0x{skinHash:X16} has no skeleton.");
+                return 1;
+            }
+
+            SkeletonCatalog skeletons = SkeletonCatalog.Load(profile);
+            SkeletonEntry? skeletonRow = skeletons.Entries
+                .Where(entry => entry.NameHash == binding.SkeletonRoot)
+                .OrderBy(entry => entry.ArchivePath, StringComparer.OrdinalIgnoreCase)
+                .FirstOrDefault();
+            if (skeletonRow is null)
+            {
+                Console.Error.WriteLine($"skeleton 0x{binding.SkeletonRoot:X16} is not in the catalog.");
+                return 1;
+            }
+
+            SkeletonData skeleton;
+            using (FileStream stream = new(
+                skeletonRow.ArchivePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+            {
+                skeleton = SkeletonDecoder.Read(stream, skeletonRow.ArchivePath, skeletonRow.Hit);
+            }
+
+            SkinDeformer deformer = SkinDeformer.Create(skin, skeleton, Geometry);
+            SkinPaletteBone? target = deformer.Bones.FirstOrDefault(
+                bone => bone.NameHash == boneHash);
+            if (target is null)
+            {
+                Console.Error.WriteLine($"bone 0x{boneHash:X16} is not in skin 0x{skinHash:X16}.");
+                return 1;
+            }
+
+            MeshGeometry bind = deformer.Deform(null);
+            MeshGeometry posed = deformer.Deform(new Dictionary<int, Quaternion>
+            {
+                [target.SkeletonBone] = Quaternion.CreateFromAxisAngle(
+                    axis, degrees * MathF.PI / 180f),
+            });
+            int moved = 0;
+            double max = 0;
+            for (int index = 0; index < bind.Positions.Length; index++)
+            {
+                double distance = Vector3.Distance(bind.Positions[index], posed.Positions[index]);
+                if (distance > 1e-4)
+                {
+                    moved++;
+                }
+
+                max = Math.Max(max, distance);
+            }
+
+            Console.WriteLine(
+                $"pose: skin 0x{skin.Head.NameHash:X16} skeleton 0x{skeleton.Head.NameHash:X16}");
+            Console.WriteLine(
+                $"  parts {N(deformer.Parts.Count)} of {N(skin.Parts.Length)}, bones {N(deformer.Bones.Count)} of {N(skin.Bones.Length)}");
+            Console.WriteLine(
+                $"  bone 0x{boneHash:X16} skeleton index {target.SkeletonBone}, axis {axisText.ToLowerInvariant()}, angle {degrees:F1}");
+            Console.WriteLine(
+                $"  bind bounds ({bind.Min.X:F3},{bind.Min.Y:F3},{bind.Min.Z:F3})..({bind.Max.X:F3},{bind.Max.Y:F3},{bind.Max.Z:F3})");
+            Console.WriteLine(
+                $"  posed bounds ({posed.Min.X:F3},{posed.Min.Y:F3},{posed.Min.Z:F3})..({posed.Max.X:F3},{posed.Max.Y:F3},{posed.Max.Z:F3}), moved {N(moved)} of {N(bind.Positions.Length)}, max {max:F3}, {N(watch.ElapsedMilliseconds)} ms");
             return 0;
         }
         catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)

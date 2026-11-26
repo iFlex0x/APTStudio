@@ -92,6 +92,7 @@ internal sealed class MainForm : Form
     private MaterialTextureIndex? _materialTextures;
     private SkinLinkIndex? _skinLinks;
     private SkeletonForm? _skeletonForm;
+    private PoseForm? _poseForm;
     private bool _materialTexturesLoading;
     private bool _skinLinksLoading;
     private string _assetStatus = "No game folder selected.";
@@ -144,6 +145,7 @@ internal sealed class MainForm : Form
         _linksButton.Click += (_, _) => ToggleLinks();
         _skeletonsButton.Click += (_, _) => OpenSkeletons(null);
         _skinView.SkeletonRequested += hash => OpenSkeletons(hash);
+        _skinView.PoseRequested += OpenPose;
         _linkView.BackRequested += () => _ = PreviewSelectionAsync(keepMip: true);
         _linkView.LinkActivated += ActivateLink;
         _audioPanel.PlayRequested += () => _ = PlaySelectedAudioAsync();
@@ -2033,6 +2035,31 @@ internal sealed class MainForm : Form
         form.Show(this);
     }
 
+    private void OpenPose(ulong skeletonRoot)
+    {
+        if (_profile is null)
+        {
+            return;
+        }
+
+        AssetEntry? entry = SelectedEntry();
+        if (entry is not { ClassHash: AssetClass.Skin })
+        {
+            return;
+        }
+
+        if (_poseForm is { IsDisposed: false } open)
+        {
+            open.Close();
+            _poseForm = null;
+        }
+
+        PoseForm form = new(_profile, _entries, entry, skeletonRoot);
+        form.FormClosed += (_, _) => _poseForm = null;
+        _poseForm = form;
+        form.Show(this);
+    }
+
     private void SelectSkin(ulong hash)
     {
         _filterTimer.Stop();
@@ -2745,6 +2772,8 @@ internal sealed class MainForm : Form
         _scanCancel?.Dispose();
         _skeletonForm?.Close();
         _skeletonForm = null;
+        _poseForm?.Close();
+        _poseForm = null;
         CancellationTokenSource cancel = new();
         _scanCancel = cancel;
         _materialCancel?.Cancel();
