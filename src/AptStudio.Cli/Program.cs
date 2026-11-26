@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.Numerics;
+using AptStudio.Core.Animations;
 using AptStudio.Core.Assets;
 using AptStudio.Core.Audio;
 using AptStudio.Core.Containers;
@@ -80,6 +81,11 @@ internal static class Program
             return Skin(args[1], args[2]);
         }
 
+        if (args.Length == 3 && string.Equals(args[0], "animation", StringComparison.OrdinalIgnoreCase))
+        {
+            return Animation(args[1], args[2]);
+        }
+
         if ((args.Length == 2 || args.Length == 3)
             && string.Equals(args[0], "skeletons", StringComparison.OrdinalIgnoreCase))
         {
@@ -150,6 +156,7 @@ internal static class Program
         Console.Error.WriteLine("  aptstudio material <gameRoot> <nameHash>");
         Console.Error.WriteLine("  aptstudio skins <gameRoot>");
         Console.Error.WriteLine("  aptstudio skin <gameRoot> <nameHash>");
+        Console.Error.WriteLine("  aptstudio animation <gameRoot> <nameHash>");
         Console.Error.WriteLine("  aptstudio skeletons <gameRoot> [--rebuild]");
         Console.Error.WriteLine("  aptstudio skeleton <gameRoot> <nameHash>");
         Console.Error.WriteLine("  aptstudio audio <gameRoot>");
@@ -538,6 +545,73 @@ internal static class Program
                         : "packets not measured";
                     Console.WriteLine(
                         $"  part {part.Index,2}: mesh 0x{part.MeshHash:X16}, {N(part.VertexCount)} vertices, stride {part.Stride}, {packets}");
+                }
+            }
+
+            return 0;
+        }
+        catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
+        {
+            Console.Error.WriteLine(ex.Message);
+            return 1;
+        }
+    }
+
+    private static int Animation(string gameRoot, string hashText)
+    {
+        if (!TryHash(hashText, out ulong nameHash))
+        {
+            Console.Error.WriteLine($"'{hashText}' is not a 64-bit hex hash.");
+            return 1;
+        }
+
+        if (!GameProfile.TryDetect(gameRoot, out GameProfile? profile, out string? error) || profile is null)
+        {
+            Console.Error.WriteLine(error);
+            return 1;
+        }
+
+        try
+        {
+            AssetCatalog assets = AssetCatalog.Load(profile);
+            List<AssetEntry> matches = assets.Entries
+                .Where(entry => entry.ClassHash == AssetClass.Animation && entry.NameHash == nameHash)
+                .ToList();
+            if (matches.Count == 0)
+            {
+                Console.Error.WriteLine($"no Animation_Z row named 0x{nameHash:X16}.");
+                return 1;
+            }
+
+            foreach (IGrouping<(string Path, long Offset), AssetEntry> group in matches
+                .GroupBy(entry => (entry.BodyArchivePath, entry.Row.BodyOffset)))
+            {
+                AssetEntry entry = group.First();
+                using FileStream stream = new(
+                    entry.BodyArchivePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                AnimationData animation = AnimationDecoder.Read(stream, entry.BodyArchivePath, entry.Row);
+                string external = entry.IsExternal ? " body COMMON.DPC" : string.Empty;
+                Console.WriteLine(
+                    $"{Path.GetFileName(entry.ArchivePath)} 0x{animation.Head.NameHash:X16} offset {entry.Row.Offset}{external}");
+                Console.WriteLine(
+                    $"  rows {group.Count()} across {group.Select(item => item.ArchivePath).Distinct().Count()} archives");
+                Console.WriteLine(
+                    $"  duration {animation.Duration:0.###}s, keys {N(animation.KeyCount)}, {animation.Encoding}, packed bits {N(animation.PackedBits)}, flags 0x{animation.Flags:X4}");
+                if (animation.Encoding == AnimationEncoding.Packed)
+                {
+                    Console.WriteLine(
+                        $"  bones {animation.Bones.Count}, stream at 0x{animation.PackedStreamOffset:X}, extra {animation.Head.ExtraSize}");
+                }
+                else
+                {
+                    Console.WriteLine(
+                        $"  frame entries {N(animation.FrameEntries)}, tracks {N(animation.FrameTracks)}, extra {animation.Head.ExtraSize}");
+                }
+
+                foreach (AnimationBone bone in animation.Bones.Take(32))
+                {
+                    Console.WriteLine(
+                        $"  bone 0x{bone.NameHash:X16} bits {bone.BitOffset} +{bone.BitLength}");
                 }
             }
 
