@@ -4,6 +4,7 @@ using AptStudio.Core.Assets;
 using AptStudio.Core.Audio;
 using AptStudio.Core.Containers;
 using AptStudio.Core.Games;
+using AptStudio.Core.Links;
 using AptStudio.Core.Materials;
 using AptStudio.Core.Meshes;
 using AptStudio.Core.Skins;
@@ -82,6 +83,11 @@ internal static class Program
             return Audio(args[1]);
         }
 
+        if (args.Length == 2 && string.Equals(args[0], "links", StringComparison.OrdinalIgnoreCase))
+        {
+            return Links(args[1]);
+        }
+
         if (args.Length == 5 && string.Equals(args[0], "audioconvert", StringComparison.OrdinalIgnoreCase))
         {
             return AudioConvert(args[1], args[2], args[3], args[4]);
@@ -108,6 +114,7 @@ internal static class Program
         Console.Error.WriteLine("  aptstudio skins <gameRoot>");
         Console.Error.WriteLine("  aptstudio skin <gameRoot> <nameHash>");
         Console.Error.WriteLine("  aptstudio audio <gameRoot>");
+        Console.Error.WriteLine("  aptstudio links <gameRoot>");
         Console.Error.WriteLine("  aptstudio audioconvert <gameRoot> <pack> <mediaId> <output.ogg>");
         Console.Error.WriteLine("  aptstudio export <gameRoot> <nameHash> <outputPath>");
     }
@@ -481,6 +488,57 @@ internal static class Program
             }
 
             return 0;
+        }
+        catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
+        {
+            Console.Error.WriteLine(ex.Message);
+            return 1;
+        }
+    }
+
+    private static int Links(string gameRoot)
+    {
+        if (!GameProfile.TryDetect(gameRoot, out GameProfile? profile, out string? error) || profile is null)
+        {
+            Console.Error.WriteLine(error);
+            return 1;
+        }
+
+        try
+        {
+            Stopwatch watch = Stopwatch.StartNew();
+            AssetCatalog assets = AssetCatalog.Load(profile);
+            SkinLinkIndex skins = SkinLinkIndex.Load(assets.Entries);
+            long skinMs = watch.ElapsedMilliseconds;
+            watch.Restart();
+            MaterialCatalog materials = MaterialCatalog.Load(profile);
+            MaterialTextureIndex textures = MaterialTextureIndex.Load(materials);
+            long materialMs = watch.ElapsedMilliseconds;
+
+            int sharedMeshes = skins.ByMesh.Count(pair => pair.Value.Count > 1);
+            int maxSkins = skins.ByMesh.Count == 0 ? 0 : skins.ByMesh.Max(pair => pair.Value.Count);
+            int materialEdges = textures.ByTexture.Values.Sum(list => list.Count);
+            int maxMaterials = textures.ByTexture.Count == 0
+                ? 0
+                : textures.ByTexture.Max(pair => pair.Value.Count);
+            Console.WriteLine(
+                $"skins: {N(skins.Entries.Count)} bodies, {N(skins.ByMesh.Count)} meshes, {N(skins.Entries.Sum(entry => entry.Links.MeshLinks.Distinct().Count()))} links, {N(sharedMeshes)} shared, max {N(maxSkins)} skins/mesh, {skins.Failures.Count} failed, {N(skinMs)} ms");
+            Console.WriteLine(
+                $"materials: {N(textures.Materials)} bodies, {N(textures.Slots)} slots, {N(textures.ByTexture.Count)} textures, {N(materialEdges)} edges, max {N(maxMaterials)} materials/texture, {textures.Failures.Count} failed, {N(materialMs)} ms");
+            foreach (KeyValuePair<ulong, IReadOnlyList<MaterialTextureUse>> pair in textures.ByTexture
+                .OrderByDescending(pair => pair.Value.Count)
+                .ThenBy(pair => pair.Key)
+                .Take(5))
+            {
+                Console.WriteLine($"  texture 0x{pair.Key:X16} materials {N(pair.Value.Count)}");
+            }
+
+            foreach (CatalogFailure failure in skins.Failures.Concat(textures.Failures))
+            {
+                Console.Error.WriteLine($"{Path.GetFileName(failure.Path)}: {failure.Message}");
+            }
+
+            return skins.Failures.Count == 0 && textures.Failures.Count == 0 ? 0 : 2;
         }
         catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
         {

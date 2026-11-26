@@ -5,6 +5,7 @@ using System.Runtime.InteropServices;
 using AptStudio.Core.Assets;
 using AptStudio.Core.Audio;
 using AptStudio.Core.Games;
+using AptStudio.Core.Links;
 using AptStudio.Core.Materials;
 using AptStudio.Core.Skins;
 using AptStudio.Core.Meshes;
@@ -37,6 +38,8 @@ internal sealed class MainForm : Form
     private readonly MeshView _meshView = new();
     private readonly MaterialView _materialPanel = new();
     private readonly SkinView _skinView = new();
+    private readonly LinkView _linkView = new();
+    private readonly ToolTip _tips = new();
     private readonly AudioView _audioPanel = new();
     private readonly DarkComboBox _typeCombo = new();
     private readonly DarkComboBox _formatCombo = new();
@@ -52,6 +55,7 @@ internal sealed class MainForm : Form
     private readonly Button _fitButton = MakeButton("Fit", Theme.Text);
     private readonly Button _actualButton = MakeButton("1:1", Theme.Text);
     private readonly Button _clearButton = MakeButton("Clear", Theme.Muted);
+    private readonly Button _linksButton = MakeButton("Used by", Theme.Text);
     private readonly SplitContainer _split = new();
     private Font _monoFont = new("Consolas", 9f);
     private readonly System.Windows.Forms.Timer _selectionTimer = new() { Interval = 120 };
@@ -69,6 +73,8 @@ internal sealed class MainForm : Form
     private CancellationTokenSource? _exportCancel;
     private CancellationTokenSource? _materialCancel;
     private CancellationTokenSource? _audioCancel;
+    private CancellationTokenSource? _materialTexturesCancel;
+    private CancellationTokenSource? _skinLinksCancel;
     private bool _suppressFilters;
     private bool _suppressMip;
     private bool _updatingView;
@@ -82,6 +88,10 @@ internal sealed class MainForm : Form
     private bool _audioLoading;
     private bool _audioBusy;
     private bool _columnsAreAudio;
+    private MaterialTextureIndex? _materialTextures;
+    private SkinLinkIndex? _skinLinks;
+    private bool _materialTexturesLoading;
+    private bool _skinLinksLoading;
     private string _assetStatus = "No game folder selected.";
     private string _materialStatus = "";
     private string _audioStatus = "";
@@ -129,6 +139,9 @@ internal sealed class MainForm : Form
         _materialPanel.SlotSelected += hash => _ = ShowSlotTextureAsync(hash);
         _materialPanel.TextureRequested += OpenTexture;
         _skinView.MeshRequested += OpenMesh;
+        _linksButton.Click += (_, _) => ToggleLinks();
+        _linkView.BackRequested += () => _ = PreviewSelectionAsync(keepMip: true);
+        _linkView.LinkActivated += ActivateLink;
         _audioPanel.PlayRequested += () => _ = PlaySelectedAudioAsync();
         _audioPanel.ExportRequested += () => _ = ExportAudioAsync();
         _clearButton.Click += (_, _) => ClearFilters();
@@ -204,6 +217,9 @@ internal sealed class MainForm : Form
             _exportCancel?.Dispose();
             _materialCancel?.Dispose();
             _audioCancel?.Dispose();
+            _materialTexturesCancel?.Dispose();
+            _skinLinksCancel?.Dispose();
+            _tips.Dispose();
             _selectionTimer.Dispose();
             _filterTimer.Dispose();
             _monoFont.Dispose();
@@ -370,8 +386,11 @@ internal sealed class MainForm : Form
         _wireframeCheck.ForeColor = Theme.Text;
         _wireframeCheck.Margin = new Padding(0, 6, 6, 0);
         _wireframeCheck.Visible = false;
+        _linksButton.Visible = false;
+        _linksButton.Margin = new Padding(2, 0, 0, 0);
+        _linksButton.MinimumSize = new Size(0, 24);
         tools.Controls.AddRange(
-            [_fitButton, _actualButton, _zoomLabel, _mipCombo, _channelCombo, _wireframeCheck]);
+            [_fitButton, _actualButton, _zoomLabel, _mipCombo, _channelCombo, _wireframeCheck, _linksButton]);
         bar.Controls.Add(tools);
 
         _infoLabel.Dock = DockStyle.Bottom;
@@ -388,6 +407,8 @@ internal sealed class MainForm : Form
         _materialPanel.Visible = false;
         _skinView.Dock = DockStyle.Fill;
         _skinView.Visible = false;
+        _linkView.Dock = DockStyle.Fill;
+        _linkView.Visible = false;
         _audioPanel.Dock = DockStyle.Fill;
         _audioPanel.Visible = false;
 
@@ -396,6 +417,7 @@ internal sealed class MainForm : Form
         panel.Controls.Add(_meshView);
         panel.Controls.Add(_materialPanel);
         panel.Controls.Add(_skinView);
+        panel.Controls.Add(_linkView);
         panel.Controls.Add(_audioPanel);
         panel.Controls.Add(_infoLabel);
         panel.Controls.Add(bar);
@@ -621,6 +643,7 @@ internal sealed class MainForm : Form
         ScaleGrid();
         _materialPanel.SetDpiScale(DeviceDpi / 96f);
         _skinView.SetDpiScale(DeviceDpi / 96f);
+        _linkView.SetDpiScale(DeviceDpi / 96f);
         _audioPanel.SetDpiScale(DeviceDpi / 96f);
         if (_entries.Count > 0 && !_scanning)
         {
@@ -774,6 +797,8 @@ internal sealed class MainForm : Form
         bool modeChanged = materials != _viewIsMaterials || audio != _viewIsAudio;
         if (modeChanged)
         {
+            _linkView.Visible = false;
+            HideLinksButton();
             SetColumnMode(audio);
             _formatCombo.Enabled = !materials && !audio;
             _previewableCheck.Enabled = !materials && !audio;
@@ -1240,6 +1265,7 @@ internal sealed class MainForm : Form
     private void ShowNoSelection()
     {
         CancelPreview();
+        HideLinksButton();
         if (_viewIsAudio)
         {
             _audioPanel.StopPlayback();
@@ -1265,6 +1291,7 @@ internal sealed class MainForm : Form
             }
 
             ShowAudioMode();
+            HideLinksButton();
             _audioPanel.SetAudio(media);
             _infoLabel.Text =
                 $"Audio | {media.IdText} | {media.PackName} | {media.Language} | {media.DurationSeconds:0.00} s";
@@ -1281,6 +1308,7 @@ internal sealed class MainForm : Form
                 return;
             }
 
+            HideLinksButton();
             await PreviewMaterialAsync(material);
             return;
         }
@@ -1292,6 +1320,7 @@ internal sealed class MainForm : Form
             return;
         }
 
+        UpdateLinksButton(entry);
         if (entry.ClassHash == AssetClass.Mesh)
         {
             ShowMeshMode();
@@ -1338,6 +1367,7 @@ internal sealed class MainForm : Form
         _materialPanel.Visible = false;
         _skinView.Visible = false;
         _audioPanel.Visible = false;
+        _linkView.Visible = false;
         _preview.Visible = true;
         _mipCombo.Visible = true;
         _channelCombo.Visible = true;
@@ -1354,6 +1384,7 @@ internal sealed class MainForm : Form
         _materialPanel.Visible = false;
         _skinView.Visible = false;
         _audioPanel.Visible = false;
+        _linkView.Visible = false;
         _meshView.Visible = true;
         _mipCombo.Visible = false;
         _channelCombo.Visible = false;
@@ -1371,6 +1402,7 @@ internal sealed class MainForm : Form
         _meshView.Visible = false;
         _skinView.Visible = false;
         _audioPanel.Visible = false;
+        _linkView.Visible = false;
         _materialPanel.Visible = true;
         _mipCombo.Visible = false;
         _channelCombo.Visible = false;
@@ -1387,6 +1419,7 @@ internal sealed class MainForm : Form
         _meshView.Visible = false;
         _materialPanel.Visible = false;
         _audioPanel.Visible = false;
+        _linkView.Visible = false;
         _skinView.Visible = true;
         _mipCombo.Visible = false;
         _channelCombo.Visible = false;
@@ -1403,6 +1436,7 @@ internal sealed class MainForm : Form
         _meshView.Visible = false;
         _materialPanel.Visible = false;
         _skinView.Visible = false;
+        _linkView.Visible = false;
         _audioPanel.Visible = true;
         _mipCombo.Visible = false;
         _channelCombo.Visible = false;
@@ -1411,6 +1445,323 @@ internal sealed class MainForm : Form
         _fitButton.Visible = false;
         _wireframeCheck.Visible = false;
         _zoomLabel.Text = "";
+    }
+
+    private void ShowLinkMode(string title, string subtitle, IReadOnlyList<LinkRow> rows)
+    {
+        _preview.Visible = false;
+        _meshView.Visible = false;
+        _materialPanel.Visible = false;
+        _skinView.Visible = false;
+        _audioPanel.Visible = false;
+        _linkView.Visible = true;
+        _mipCombo.Visible = false;
+        _channelCombo.Visible = false;
+        _zoomLabel.Visible = false;
+        _actualButton.Visible = false;
+        _fitButton.Visible = false;
+        _wireframeCheck.Visible = false;
+        _linksButton.Visible = false;
+        _linkView.SetLinks(title, subtitle, rows);
+        _infoLabel.Text =
+            $"Links | {rows.Count:N0} | {SelectedEntry()?.NameHash:X16} | {SelectedEntry()?.ClassName}";
+    }
+
+    private void HideLinksButton()
+    {
+        _linksButton.Visible = false;
+        _tips.SetToolTip(_linksButton, "");
+    }
+
+    private void UpdateLinksButton(AssetEntry? entry)
+    {
+        if (_viewIsMaterials || _viewIsAudio || entry is null)
+        {
+            HideLinksButton();
+            return;
+        }
+
+        if (entry.IsBitmap)
+        {
+            _linksButton.Visible = true;
+            if (_materialTextures is null)
+            {
+                _linksButton.Text = "Used by...";
+                _linksButton.Enabled = false;
+                _tips.SetToolTip(_linksButton, "indexing materials");
+                EnsureMaterialTextures();
+                return;
+            }
+
+            int count = _materialTextures.ByTexture.TryGetValue(
+                entry.NameHash,
+                out IReadOnlyList<MaterialTextureUse>? uses)
+                ? uses.Count
+                : 0;
+            _linksButton.Text = $"Used by {count:N0}";
+            _linksButton.Enabled = count > 0;
+            _tips.SetToolTip(_linksButton, count > 0 ? "materials that bind this texture" : "");
+            return;
+        }
+
+        if (entry.ClassHash == AssetClass.Mesh)
+        {
+            _linksButton.Visible = true;
+            if (_skinLinks is null)
+            {
+                _linksButton.Text = "Used by...";
+                _linksButton.Enabled = false;
+                _tips.SetToolTip(_linksButton, "indexing skins");
+                EnsureSkinLinks();
+                return;
+            }
+
+            int count = _skinLinks.ByMesh.TryGetValue(entry.NameHash, out IReadOnlyList<SkinLinkEntry>? skins)
+                ? skins.Count
+                : 0;
+            _linksButton.Text = $"Used by {count:N0}";
+            _linksButton.Enabled = count > 0;
+            _tips.SetToolTip(_linksButton, count > 0 ? "skins that link this mesh" : "");
+            return;
+        }
+
+        HideLinksButton();
+    }
+
+    private void ToggleLinks()
+    {
+        if (_linkView.Visible)
+        {
+            _ = PreviewSelectionAsync(keepMip: true);
+            return;
+        }
+
+        AssetEntry? entry = SelectedEntry();
+        if (entry is null)
+        {
+            return;
+        }
+
+        if (entry.IsBitmap && _materialTextures is not null)
+        {
+            if (!_materialTextures.ByTexture.TryGetValue(
+                entry.NameHash, out IReadOnlyList<MaterialTextureUse>? uses) || uses.Count == 0)
+            {
+                return;
+            }
+
+            LinkRow[] rows = uses.Select(use => new LinkRow(
+                LinkKind.Material,
+                use.NameHash,
+                use.ArchiveName,
+                SlotText(use.Slots))).ToArray();
+            ShowLinkMode(
+                $"Used by {rows.Length:N0} materials",
+                $"texture 0x{entry.NameHash:X16} | {Path.GetFileName(entry.ArchivePath)}",
+                rows);
+            return;
+        }
+
+        if (entry.ClassHash == AssetClass.Mesh && _skinLinks is not null)
+        {
+            if (!_skinLinks.ByMesh.TryGetValue(
+                entry.NameHash, out IReadOnlyList<SkinLinkEntry>? skins) || skins.Count == 0)
+            {
+                return;
+            }
+
+            LinkRow[] rows = skins.Select(skin => new LinkRow(
+                LinkKind.Skin,
+                skin.NameHash,
+                skin.ArchiveName,
+                $"{skin.Links.MeshLinks.Count:N0} meshes, {skin.Links.PartCount:N0} parts")).ToArray();
+            ShowLinkMode(
+                $"Used by {rows.Length:N0} skins",
+                $"mesh 0x{entry.NameHash:X16} | {Path.GetFileName(entry.ArchivePath)}",
+                rows);
+        }
+    }
+
+    private static string SlotText(IReadOnlyList<int> slots)
+    {
+        string text = string.Join(
+            ", ",
+            slots.Take(8).Select(slot => slot.ToString(CultureInfo.InvariantCulture)));
+        return slots.Count > 8 ? $"slots {text} +{slots.Count - 8}" : $"slots {text}";
+    }
+
+    private void ActivateLink(LinkRow row)
+    {
+        if (row.Kind == LinkKind.Skin)
+        {
+            FocusRow(row.Hash);
+            return;
+        }
+
+        _ = OpenMaterialAsync(row.Hash);
+    }
+
+    private async Task OpenMaterialAsync(ulong hash)
+    {
+        FilterItem? item = _typeCombo.Items
+            .Cast<FilterItem>()
+            .FirstOrDefault(candidate => candidate.Materials);
+        if (item is null)
+        {
+            return;
+        }
+
+        if (!ReferenceEquals(_typeCombo.SelectedItem, item))
+        {
+            _typeCombo.SelectedItem = item;
+        }
+
+        if (!_materialsLoaded)
+        {
+            _ = LoadMaterialsAsync();
+        }
+
+        for (int i = 0; i < 1200 && !_materialsLoaded && !IsDisposed; i++)
+        {
+            await Task.Delay(50);
+        }
+
+        if (IsDisposed || !_materialsLoaded)
+        {
+            return;
+        }
+
+        _filterText.Text = "";
+        ApplyFilter(false);
+        for (int i = 0; i < _view.Length; i++)
+        {
+            if (_materials[_view[i]].NameHash != hash)
+            {
+                continue;
+            }
+
+            _grid.ClearSelection();
+            DataGridViewRow row = _grid.Rows[i];
+            row.Selected = true;
+            _grid.CurrentCell = row.Cells[0];
+            _grid.FirstDisplayedScrollingRowIndex = Math.Max(0, i - 3);
+            return;
+        }
+
+        _statusLabel.Text = $"Material 0x{hash:X16} is not in the catalog.";
+    }
+
+    private void EnsureMaterialTextures()
+    {
+        if (_materialTextures is not null || _materialTexturesLoading || _profile is null)
+        {
+            return;
+        }
+
+        _materialTexturesLoading = true;
+        _materialTexturesCancel?.Cancel();
+        _materialTexturesCancel?.Dispose();
+        CancellationTokenSource cancel = new();
+        _materialTexturesCancel = cancel;
+        GameProfile profile = _profile;
+        _ = LoadMaterialTexturesAsync(profile, cancel);
+    }
+
+    private async Task LoadMaterialTexturesAsync(GameProfile profile, CancellationTokenSource cancel)
+    {
+        try
+        {
+            MaterialTextureIndex index = await Task.Run(() =>
+            {
+                MaterialCatalog catalog = MaterialCatalog.Load(profile, cancellationToken: cancel.Token);
+                return MaterialTextureIndex.Load(catalog, cancellationToken: cancel.Token);
+            }, cancel.Token);
+
+            if (IsDisposed || cancel != _materialTexturesCancel)
+            {
+                return;
+            }
+
+            _materialTextures = index;
+            _statusLabel.ToolTipText = index.Failures.Count == 0
+                ? $"material textures indexed: {index.Slots:N0} slots"
+                : string.Join(Environment.NewLine, index.Failures.Select(failure => failure.Message));
+            UpdateLinksButton(SelectedEntry());
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex) when (ex is InvalidDataException or IOException
+            or UnauthorizedAccessException)
+        {
+            if (!IsDisposed && cancel == _materialTexturesCancel)
+            {
+                _statusLabel.Text = ex.Message;
+            }
+        }
+        finally
+        {
+            if (cancel == _materialTexturesCancel)
+            {
+                _materialTexturesLoading = false;
+            }
+        }
+    }
+
+    private void EnsureSkinLinks()
+    {
+        if (_skinLinks is not null || _skinLinksLoading || _entries.Count == 0)
+        {
+            return;
+        }
+
+        _skinLinksLoading = true;
+        _skinLinksCancel?.Cancel();
+        _skinLinksCancel?.Dispose();
+        CancellationTokenSource cancel = new();
+        _skinLinksCancel = cancel;
+        IReadOnlyList<AssetEntry> entries = _entries;
+        _ = LoadSkinLinksAsync(entries, cancel);
+    }
+
+    private async Task LoadSkinLinksAsync(
+        IReadOnlyList<AssetEntry> entries,
+        CancellationTokenSource cancel)
+    {
+        try
+        {
+            SkinLinkIndex index = await Task.Run(
+                () => SkinLinkIndex.Load(entries, cancellationToken: cancel.Token),
+                cancel.Token);
+            if (IsDisposed || cancel != _skinLinksCancel)
+            {
+                return;
+            }
+
+            _skinLinks = index;
+            _statusLabel.ToolTipText = index.Failures.Count == 0
+                ? $"{index.Entries.Count:N0} skin bodies indexed"
+                : string.Join(Environment.NewLine, index.Failures.Select(failure => failure.Message));
+            UpdateLinksButton(SelectedEntry());
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex) when (ex is InvalidDataException or IOException
+            or UnauthorizedAccessException)
+        {
+            if (!IsDisposed && cancel == _skinLinksCancel)
+            {
+                _statusLabel.Text = ex.Message;
+            }
+        }
+        finally
+        {
+            if (cancel == _skinLinksCancel)
+            {
+                _skinLinksLoading = false;
+            }
+        }
     }
 
     private void ShowMessageMode()
@@ -2347,6 +2698,11 @@ internal sealed class MainForm : Form
         _viewIsAudio = false;
         _audioStatus = "";
         _audioPanel.Reset();
+        _linkView.Reset();
+        _materialTextures = null;
+        _skinLinks = null;
+        _materialTexturesLoading = false;
+        _skinLinksLoading = false;
         SetScanning(true);
         _statusLabel.Text = "Scanning...";
         _statusLabel.ToolTipText = "";
@@ -2551,6 +2907,17 @@ internal sealed class MainForm : Form
         _audioCancel?.Dispose();
         _audioCancel = null;
         _audioPanel.Reset();
+        _materialTexturesCancel?.Cancel();
+        _materialTexturesCancel?.Dispose();
+        _materialTexturesCancel = null;
+        _skinLinksCancel?.Cancel();
+        _skinLinksCancel?.Dispose();
+        _skinLinksCancel = null;
+        _materialTextures = null;
+        _skinLinks = null;
+        _materialTexturesLoading = false;
+        _skinLinksLoading = false;
+        _linkView.Reset();
         CancelPreview();
         _exportCancel?.Cancel();
         _exportCancel?.Dispose();
@@ -2605,6 +2972,8 @@ internal sealed class MainForm : Form
         _meshView.Font = _grid.Font;
         _materialPanel.Font = _grid.Font;
         _materialPanel.SetDpiScale(scale);
+        _skinView.SetDpiScale(scale);
+        _linkView.SetDpiScale(scale);
         _infoLabel.Font = _grid.Font;
         _zoomLabel.Font = _grid.Font;
         _statusLabel.Font = _grid.Font;
@@ -2699,6 +3068,56 @@ internal sealed class MainForm : Form
         _previewReady = new TaskCompletionSource<bool>(
             TaskCreationOptions.RunContinuationsAsynchronously);
         ApplyFilter(true);
+    }
+
+    internal async Task LinksForShotAsync()
+    {
+        _previewReady = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        AssetEntry? entry = SelectedEntry();
+        if (entry is null)
+        {
+            _previewReady.TrySetResult(true);
+            return;
+        }
+
+        for (int i = 0; i < 1200; i++)
+        {
+            bool ready = entry.IsBitmap
+                ? _materialTextures is not null
+                : entry.ClassHash == AssetClass.Mesh && _skinLinks is not null;
+            if (ready || IsDisposed)
+            {
+                break;
+            }
+
+            await Task.Delay(50);
+        }
+
+        if (IsDisposed)
+        {
+            return;
+        }
+
+        UpdateLinksButton(SelectedEntry());
+        ToggleLinks();
+        _previewReady.TrySetResult(true);
+    }
+
+    internal async Task OpenLinkForShotAsync()
+    {
+        _previewReady = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        _linkView.ActivateFirst();
+        for (int i = 0; i < 1200 && !_viewIsMaterials && !IsDisposed; i++)
+        {
+            await Task.Delay(50);
+        }
+
+        if (!IsDisposed && _viewIsMaterials)
+        {
+            await WaitForPreviewAsync();
+        }
     }
 
     internal async Task PlayAudioForShotAsync()
