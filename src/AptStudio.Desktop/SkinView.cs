@@ -17,8 +17,10 @@ internal sealed class SkinView : Panel
     private readonly Label _subtitle = new();
     private readonly DataGridView _parts = new();
     private readonly Button _open = new();
+    private readonly Button _openSkeleton = new();
     private readonly Label _note = new();
     private float _dpiScale = 1f;
+    private ulong _skeletonRoot;
 
     public SkinView()
     {
@@ -69,6 +71,27 @@ internal sealed class SkinView : Panel
         _open.Enabled = false;
         _open.Click += (_, _) => RequestMesh();
 
+        _openSkeleton.Text = "Open Skeleton";
+        _openSkeleton.AutoSize = true;
+        _openSkeleton.FlatStyle = FlatStyle.Flat;
+        _openSkeleton.BackColor = Theme.Surface;
+        _openSkeleton.ForeColor = Theme.Text;
+        _openSkeleton.Padding = new Padding(8, 0, 8, 0);
+        _openSkeleton.Margin = new Padding(0, 3, 8, 3);
+        _openSkeleton.MinimumSize = new Size(0, 24);
+        _openSkeleton.UseVisualStyleBackColor = false;
+        _openSkeleton.FlatAppearance.BorderSize = 0;
+        _openSkeleton.FlatAppearance.MouseOverBackColor = Theme.SelectionInactive;
+        _openSkeleton.FlatAppearance.MouseDownBackColor = Theme.Selection;
+        _openSkeleton.Enabled = false;
+        _openSkeleton.Click += (_, _) =>
+        {
+            if (_skeletonRoot != 0)
+            {
+                SkeletonRequested?.Invoke(_skeletonRoot);
+            }
+        };
+
         _note.AutoEllipsis = true;
         _note.ForeColor = Theme.Muted;
         _note.TextAlign = ContentAlignment.MiddleLeft;
@@ -79,15 +102,17 @@ internal sealed class SkinView : Panel
         {
             Dock = DockStyle.Bottom,
             AutoSize = true,
-            ColumnCount = 2,
+            ColumnCount = 3,
             RowCount = 1,
             BackColor = Theme.Background,
             Margin = Padding.Empty,
         };
         bar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        bar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         bar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         bar.Controls.Add(_open, 0, 0);
-        bar.Controls.Add(_note, 1, 0);
+        bar.Controls.Add(_openSkeleton, 1, 0);
+        bar.Controls.Add(_note, 2, 0);
 
         TableLayoutPanel layout = new()
         {
@@ -108,6 +133,8 @@ internal sealed class SkinView : Panel
 
     public event Action<ulong>? MeshRequested;
 
+    public event Action<ulong>? SkeletonRequested;
+
     public ulong? SelectedMeshHash
     {
         get
@@ -119,10 +146,16 @@ internal sealed class SkinView : Panel
         }
     }
 
-    public void SetSkin(string title, string subtitle, IReadOnlyList<SkinPartRow> parts)
+    public void SetSkin(
+        string title,
+        string subtitle,
+        IReadOnlyList<SkinPartRow> parts,
+        ulong skeletonRoot)
     {
         _title.Text = title;
         _subtitle.Text = subtitle;
+        _skeletonRoot = skeletonRoot;
+        _openSkeleton.Enabled = skeletonRoot != 0;
         _parts.Rows.Clear();
         foreach (SkinPartRow part in parts)
         {
@@ -163,6 +196,8 @@ internal sealed class SkinView : Panel
     {
         _title.Text = "";
         _subtitle.Text = "";
+        _skeletonRoot = 0;
+        _openSkeleton.Enabled = false;
         _parts.Rows.Clear();
         UpdateOpenEnabled();
     }
