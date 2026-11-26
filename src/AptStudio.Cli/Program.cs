@@ -3,6 +3,7 @@ using System.Globalization;
 using AptStudio.Core.Assets;
 using AptStudio.Core.Containers;
 using AptStudio.Core.Games;
+using AptStudio.Core.Materials;
 using AptStudio.Core.Meshes;
 using AptStudio.Core.Textures;
 
@@ -45,6 +46,25 @@ internal static class Program
             return Mesh(args[1], args[2]);
         }
 
+        if ((args.Length == 2 || args.Length == 3)
+            && string.Equals(args[0], "materials", StringComparison.OrdinalIgnoreCase))
+        {
+            bool rebuild = args.Length == 3
+                && string.Equals(args[2], "--rebuild", StringComparison.OrdinalIgnoreCase);
+            if (args.Length == 3 && !rebuild)
+            {
+                Usage();
+                return 1;
+            }
+
+            return Materials(args[1], rebuild);
+        }
+
+        if (args.Length == 3 && string.Equals(args[0], "material", StringComparison.OrdinalIgnoreCase))
+        {
+            return Material(args[1], args[2]);
+        }
+
         if (args.Length == 4 && string.Equals(args[0], "export", StringComparison.OrdinalIgnoreCase))
         {
             return Export(args[1], args[2], args[3]);
@@ -61,6 +81,8 @@ internal static class Program
         Console.Error.WriteLine("  aptstudio list <gameRoot> [--rebuild]");
         Console.Error.WriteLine("  aptstudio assets <gameRoot>");
         Console.Error.WriteLine("  aptstudio mesh <gameRoot> <nameHash>");
+        Console.Error.WriteLine("  aptstudio materials <gameRoot> [--rebuild]");
+        Console.Error.WriteLine("  aptstudio material <gameRoot> <nameHash>");
         Console.Error.WriteLine("  aptstudio export <gameRoot> <nameHash> <outputPath>");
     }
 
@@ -108,12 +130,171 @@ internal static class Program
         return catalog.Failures.Count == 0 && catalog.BodyErrorCount == 0 ? 0 : 2;
     }
 
+    private static int Materials(string gameRoot, bool rebuild)
+    {
+        if (!GameProfile.TryDetect(gameRoot, out GameProfile? profile, out string? error) || profile is null)
+        {
+            Console.Error.WriteLine(error);
+            return 1;
+        }
+
+        Stopwatch watch = Stopwatch.StartNew();
+        MaterialCatalog materials;
+        AssetCatalog assets;
+        try
+        {
+            materials = MaterialCatalog.Load(profile, rebuild);
+            assets = AssetCatalog.Load(profile);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Console.Error.WriteLine(ex.Message);
+            return 1;
+        }
+
+        Dictionary<ulong, AssetEntry> bitmaps = BitmapByName(assets);
+        long slots = 0;
+        long resolved = 0;
+        int failed = 0;
+        Dictionary<string, int> codes = new();
+        Dictionary<ulong, int> classes = new();
+        List<string> failures = new();
+        foreach (IGrouping<string, MaterialEntry> group in materials.Entries.GroupBy(
+            entry => entry.ArchivePath))
+        {
+            try
+            {
+                using FileStream stream = new(
+                    group.Key, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                foreach (MaterialEntry entry in group)
+                {
+                    try
+                    {
+                        MaterialData material = MaterialDecoder.Read(stream, entry.ArchivePath, entry.Hit);
+                        classes[material.Head.ClassHash] = classes.GetValueOrDefault(material.Head.ClassHash) + 1;
+                        codes[material.Code] = codes.GetValueOrDefault(material.Code) + 1;
+                        slots += material.Slots.Count;
+                        resolved += material.Slots.Count(slot => bitmaps.ContainsKey(slot.TextureHash));
+                    }
+                    catch (InvalidDataException ex)
+                    {
+                        failed++;
+                        if (failures.Count < 10)
+                        {
+                            failures.Add(ex.Message);
+                        }
+                    }
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                failed += group.Count();
+                if (failures.Count < 10)
+                {
+                    failures.Add(ex.Message);
+                }
+            }
+        }
+
+        watch.Stop();
+        int animation = classes.GetValueOrDefault(MaterialHead.AnimClass);
+        Console.WriteLine(
+            $"materials: {N(materials.Entries.Count)} (Material_Z {N(materials.Entries.Count - animation)}, MaterialAnim_Z {N(animation)}), archives: {N(materials.Archives.Count)}, slots: {N(slots)}, resolved: {N(resolved)}, failed: {N(failed)}, scanned: {N(materials.Scanned)}, cached: {N(materials.Cached)}, {N(watch.ElapsedMilliseconds)} ms");
+        foreach ((string code, int count) in codes.OrderByDescending(pair => pair.Value).Take(12))
+        {
+            Console.WriteLine($"  {code,-32} {N(count),8}");
+        }
+
+        foreach (CatalogFailure failure in materials.Failures)
+        {
+            Console.Error.WriteLine(failure.Message);
+        }
+
+        foreach (string failure in failures)
+        {
+            Console.Error.WriteLine(failure);
+        }
+
+        return failed == 0 && materials.Failures.Count == 0 && resolved == slots ? 0 : 2;
+    }
+
+    private static int Material(string gameRoot, string hashText)
+    {
+        if (!TryHash(hashText, out ulong nameHash))
+        {
+            Console.Error.WriteLine($"'{hashText}' is not a 64-bit hex hash.");
+            return 1;
+        }
+
+        if (!GameProfile.TryDetect(gameRoot, out GameProfile? profile, out string? error) || profile is null)
+        {
+            Console.Error.WriteLine(error);
+            return 1;
+        }
+
+        try
+        {
+            MaterialCatalog materials = MaterialCatalog.Load(profile);
+            AssetCatalog assets = AssetCatalog.Load(profile);
+            Dictionary<ulong, AssetEntry> bitmaps = BitmapByName(assets);
+            List<MaterialEntry> matches = materials.Entries
+                .Where(entry => entry.NameHash == nameHash)
+                .ToList();
+            if (matches.Count == 0)
+            {
+                Console.Error.WriteLine($"no Material_Z row named 0x{nameHash:X16}.");
+                return 1;
+            }
+
+            foreach (IGrouping<string, MaterialEntry> group in matches.GroupBy(
+                entry => entry.ArchivePath))
+            {
+                using FileStream stream = new(
+                    group.Key, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                foreach (MaterialEntry entry in group)
+                {
+                    MaterialData material = MaterialDecoder.Read(stream, entry.ArchivePath, entry.Hit);
+                    Console.WriteLine(
+                        $"{Path.GetFileName(entry.ArchivePath)} 0x{entry.NameHash:X16} offset {entry.Offset}");
+                    Console.WriteLine(
+                        $"  {material.Head.ClassHash switch { MaterialHead.MaterialClass => "Material_Z", _ => "MaterialAnim_Z" }}, version {material.Version}, {material.Code}, {material.Slots.Count} slots, mask 0x{material.Mask:X16}");
+                    foreach (MaterialSlot slot in material.Slots)
+                    {
+                        string texture = bitmaps.TryGetValue(slot.TextureHash, out AssetEntry? bitmap)
+                            ? $"{Path.GetFileName(bitmap.ArchivePath)} 0x{slot.TextureHash:X16}"
+                            : $"missing 0x{slot.TextureHash:X16}";
+                        Console.WriteLine(
+                            $"  {slot.Index,2} {slot.Role.Authoring,-28} {slot.Role.Binding,-22} {texture}");
+                    }
+                }
+            }
+
+            return 0;
+        }
+        catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
+        {
+            Console.Error.WriteLine(ex.Message);
+            return 1;
+        }
+    }
+
+    private static Dictionary<ulong, AssetEntry> BitmapByName(AssetCatalog catalog) =>
+        catalog.Entries
+            .Where(entry => entry.IsBitmap)
+            .GroupBy(entry => entry.NameHash)
+            .ToDictionary(group => group.Key, group => group.First());
+
+    private static bool TryHash(string text, out ulong value)
+    {
+        string digits = text.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
+            ? text[2..]
+            : text;
+        return ulong.TryParse(digits, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out value);
+    }
+
     private static int Mesh(string gameRoot, string hashText)
     {
-        string text = hashText.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
-            ? hashText[2..]
-            : hashText;
-        if (!ulong.TryParse(text, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out ulong nameHash))
+        if (!TryHash(hashText, out ulong nameHash))
         {
             Console.Error.WriteLine($"'{hashText}' is not a 64-bit hex hash.");
             return 1;

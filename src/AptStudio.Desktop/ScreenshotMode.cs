@@ -16,10 +16,13 @@ internal static class ScreenshotMode
         int channel = -1;
         int mip = -1;
         int sort = -1;
+        int slot = -1;
         float scale = 1f;
         bool previewable = false;
         bool actual = false;
         bool wire = false;
+        bool materials = false;
+        bool openTexture = false;
         for (int i = 2; i < args.Length; i++)
         {
             if (args[i] == "--game" && i + 1 < args.Length)
@@ -52,6 +55,21 @@ internal static class ScreenshotMode
             else if (args[i] == "--wire")
             {
                 wire = true;
+            }
+            else if (args[i] == "--materials")
+            {
+                materials = true;
+            }
+            else if (args[i] == "--opentexture")
+            {
+                openTexture = true;
+            }
+            else if (args[i] == "--slot"
+                && i + 1 < args.Length
+                && int.TryParse(args[i + 1], NumberStyles.Integer, CultureInfo.InvariantCulture, out int slotValue))
+            {
+                slot = slotValue;
+                i++;
             }
             else if (args[i] == "--sort"
                 && i + 1 < args.Length
@@ -132,9 +150,27 @@ internal static class ScreenshotMode
                     form.WireframeForShot();
                 }
 
+                if (materials)
+                {
+                    await form.MaterialsForShotAsync();
+                    await form.WaitForPreviewAsync();
+                }
+
                 if (sort >= 0)
                 {
                     form.SortForShot(sort);
+                }
+
+                if (slot >= 0)
+                {
+                    form.SlotForShot(slot);
+                    await form.WaitForPreviewAsync();
+                }
+
+                if (openTexture)
+                {
+                    form.OpenTextureForShot();
+                    await form.WaitForPreviewAsync();
                 }
 
                 if (exportFolder is not null)
