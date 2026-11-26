@@ -27,7 +27,11 @@ internal static class SkinTestData
         return header;
     }
 
-    public static byte[] Body(params TestPart[] parts)
+    public static byte[] Body(params TestPart[] parts) => BodyWithBones(
+        parts,
+        parts.Select((_, index) => (0x2000UL + (ulong)index, index)).ToArray());
+
+    public static byte[] BodyWithBones(TestPart[] parts, (ulong Name, int Index)[] bones)
     {
         using MemoryStream stream = new();
         using BinaryWriter writer = new(stream, Encoding.UTF8, true);
@@ -62,11 +66,11 @@ internal static class SkinTestData
             writer.Write(new byte[60]);
         }
 
-        writer.Write((uint)parts.Length);
-        for (int i = 0; i < parts.Length; i++)
+        writer.Write((uint)bones.Length);
+        foreach ((ulong name, int index) in bones)
         {
-            writer.Write(0x2000UL + (ulong)i);
-            writer.Write(i);
+            writer.Write(name);
+            writer.Write(index);
         }
 
         writer.Flush();
