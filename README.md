@@ -7,7 +7,7 @@
 </p>
 
 <p align="center">
-  Read-only asset explorer for <strong>A Plague Tale: Resonance</strong>.<br>
+  Read-only asset explorer for <strong>Resonance: A Plague Tale Legacy</strong>.<br>
   Textures, meshes, materials, skins, skeletons, animation, audio, and the links between them.
 </p>
 
@@ -25,7 +25,7 @@
 
 ## Features
 
-| Asset | What you get |
+| Asset | What it does |
 | --- | --- |
 | Textures | BC1/BC3 mip decoding, channel views, zoom and pan, batch PNG export. |
 | Meshes | Software 3D view with orbit, pan, zoom, and hidden-line wireframe. |
@@ -101,7 +101,7 @@ aptstudio links <gameRoot>
 
 ## Scope
 
-Read-only. APTStudio never patches, injects, installs mods, or writes into the game folder. Exports go wherever you point them.
+Read-only. APTStudio never patches, injects, installs mods, or writes into the game folder. Exports go to the chosen output folder.
 
 Resonance 1.3.0.0 is the current target. Requiem uses the same DPC family with a measured variant layout and comes after Resonance is complete.
 

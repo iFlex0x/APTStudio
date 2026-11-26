@@ -79,7 +79,7 @@ internal sealed class AnimationView : Panel
         _note.Dock = DockStyle.Bottom;
         _note.Height = 24;
         _note.Padding = new Padding(8, 0, 8, 0);
-        _note.Text = "packed key stream is measured but not decoded yet";
+        _note.Text = "packed rotations decode; translations are not applied yet";
 
         TableLayoutPanel layout = new()
         {

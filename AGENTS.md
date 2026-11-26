@@ -1,6 +1,6 @@
 # APTStudio
 
-Viewer and extractor for Resonance: A Plague Tale Legacy DPC archives. Textures only in V1: list rows, preview BC1/BC3, export PNG.
+Viewer and extractor for Resonance: A Plague Tale Legacy DPC archives. Read-only: textures, meshes, materials, skins, skeletons, animation, and audio.
 
 ## Code
 

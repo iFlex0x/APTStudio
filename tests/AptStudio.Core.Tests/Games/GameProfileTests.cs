@@ -82,7 +82,6 @@ public sealed class GameProfileTests : IDisposable
 
         Assert.False(GameProfile.TryDetect(_root, out _, out string? error));
         Assert.Contains("Requiem", error);
-        Assert.Contains("V1", error);
     }
 
     [Theory]

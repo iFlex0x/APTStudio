@@ -59,7 +59,7 @@ public sealed class GameProfile
 
         if (File.Exists(Path.Combine(fullRoot, "APlagueTaleRequiem_x64.exe")))
         {
-            error = "Requiem is not supported in V1.";
+            error = "Requiem is not supported yet.";
             return false;
         }
 
