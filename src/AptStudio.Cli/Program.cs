@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Globalization;
 using AptStudio.Core.Assets;
+using AptStudio.Core.Audio;
 using AptStudio.Core.Containers;
 using AptStudio.Core.Games;
 using AptStudio.Core.Materials;
@@ -76,6 +77,16 @@ internal static class Program
             return Skin(args[1], args[2]);
         }
 
+        if (args.Length == 2 && string.Equals(args[0], "audio", StringComparison.OrdinalIgnoreCase))
+        {
+            return Audio(args[1]);
+        }
+
+        if (args.Length == 5 && string.Equals(args[0], "audioconvert", StringComparison.OrdinalIgnoreCase))
+        {
+            return AudioConvert(args[1], args[2], args[3], args[4]);
+        }
+
         if (args.Length == 4 && string.Equals(args[0], "export", StringComparison.OrdinalIgnoreCase))
         {
             return Export(args[1], args[2], args[3]);
@@ -96,6 +107,8 @@ internal static class Program
         Console.Error.WriteLine("  aptstudio material <gameRoot> <nameHash>");
         Console.Error.WriteLine("  aptstudio skins <gameRoot>");
         Console.Error.WriteLine("  aptstudio skin <gameRoot> <nameHash>");
+        Console.Error.WriteLine("  aptstudio audio <gameRoot>");
+        Console.Error.WriteLine("  aptstudio audioconvert <gameRoot> <pack> <mediaId> <output.ogg>");
         Console.Error.WriteLine("  aptstudio export <gameRoot> <nameHash> <outputPath>");
     }
 
@@ -475,6 +488,144 @@ internal static class Program
             return 1;
         }
     }
+
+    private static int Audio(string gameRoot)
+    {
+        if (!GameProfile.TryDetect(gameRoot, out GameProfile? profile, out string? error) || profile is null)
+        {
+            Console.Error.WriteLine(error);
+            return 1;
+        }
+
+        try
+        {
+            Stopwatch watch = Stopwatch.StartNew();
+            AudioCatalog catalog = AudioCatalog.Load(profile);
+            watch.Stop();
+            Dictionary<string, int> channels = new();
+            Dictionary<string, int> codecs = new();
+            Dictionary<string, int> languages = new();
+            int named = 0;
+            double seconds = 0;
+            foreach (AudioEntry entry in catalog.Entries)
+            {
+                string key = $"{entry.Info.Channels}ch {entry.Info.SampleRate} Hz";
+                channels[key] = channels.GetValueOrDefault(key) + 1;
+                codecs[entry.Info.Codec] = codecs.GetValueOrDefault(entry.Info.Codec) + 1;
+                languages[entry.Language] = languages.GetValueOrDefault(entry.Language) + 1;
+                named += entry.Name is null ? 0 : 1;
+                seconds += entry.DurationSeconds;
+            }
+
+            Console.WriteLine(
+                $"audio: {N(catalog.Entries.Count)} media, {N(catalog.Archives.Count)} packs with media, {N(catalog.Packs)} packs, {N(catalog.Previews)} previews skipped, {N(catalog.Plugins)} plugin skipped, {catalog.Failures.Count} failed, {N(watch.ElapsedMilliseconds)} ms");
+            Console.WriteLine($"  duration {TimeSpan.FromSeconds(seconds):c}, named {N(named)}");
+            Console.WriteLine($"  codecs {FormatCounts(codecs)}");
+            Console.WriteLine($"  channels {FormatCounts(channels)}");
+            Console.WriteLine($"  languages {FormatCounts(languages)}");
+            foreach (AudioArchive archive in catalog.Archives)
+            {
+                Console.WriteLine($"  {Path.GetFileName(archive.Path),-30} {N(archive.Media)}");
+            }
+
+            foreach (CatalogFailure failure in catalog.Failures)
+            {
+                Console.Error.WriteLine($"{Path.GetFileName(failure.Path)}: {failure.Message}");
+            }
+
+            return catalog.Failures.Count == 0 ? 0 : 2;
+        }
+        catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
+        {
+            Console.Error.WriteLine(ex.Message);
+            return 1;
+        }
+    }
+
+    private static int AudioConvert(string gameRoot, string packText, string idText, string outputPath)
+    {
+        if (!TryHash(idText, out ulong id) || id > uint.MaxValue)
+        {
+            Console.Error.WriteLine($"'{idText}' is not a 32-bit media id.");
+            return 1;
+        }
+
+        if (!GameProfile.TryDetect(gameRoot, out GameProfile? profile, out string? error) || profile is null)
+        {
+            Console.Error.WriteLine(error);
+            return 1;
+        }
+
+        try
+        {
+            AudioCatalog catalog = AudioCatalog.Load(profile);
+            string pack = NormalizePack(packText);
+            List<AudioEntry> matches = catalog.Entries
+                .Where(entry => entry.Id == id
+                    && string.Equals(NormalizePack(entry.PackName), pack, StringComparison.OrdinalIgnoreCase))
+                .OrderByDescending(entry => entry.Size)
+                .ToList();
+            if (matches.Count == 0)
+            {
+                Console.Error.WriteLine($"no audio 0x{id:X8} in pack {packText}.");
+                return 1;
+            }
+
+            AudioEntry media = matches[0];
+            byte[] wem = new byte[media.Size];
+            using (FileStream stream = new(
+                media.PackPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+            {
+                stream.Seek(media.Offset, SeekOrigin.Begin);
+                stream.ReadExactly(wem);
+            }
+
+            byte[] ogg = WemConverter.ToOgg(wem);
+            string full = Path.GetFullPath(outputPath);
+            string? directory = Path.GetDirectoryName(full);
+            if (!string.IsNullOrEmpty(directory))
+            {
+                Directory.CreateDirectory(directory);
+            }
+
+            string temp = full + ".tmp";
+            File.WriteAllBytes(temp, ogg);
+            File.Move(temp, full, overwrite: true);
+            Console.WriteLine(
+                $"converted {media.PackName} 0x{media.Id:X8} -> {full} ({N(ogg.Length)} bytes, {media.DurationSeconds:F2}s, {media.Info.Channels}ch {media.Info.SampleRate} Hz, {media.Info.Codec})");
+            if (matches.Count > 1)
+            {
+                Console.WriteLine($"  {N(matches.Count)} copies in the pack, wrote the largest.");
+            }
+
+            return 0;
+        }
+        catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
+        {
+            Console.Error.WriteLine(ex.Message);
+            return 1;
+        }
+    }
+
+    private static string NormalizePack(string text)
+    {
+        string name = Path.GetFileName(text.Trim());
+        foreach (string suffix in new[] { ".PC.PCK", ".PCK", ".PC" })
+        {
+            if (name.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
+            {
+                return name[..^suffix.Length];
+            }
+        }
+
+        return name;
+    }
+
+    private static string FormatCounts(Dictionary<string, int> counts) =>
+        string.Join(", ", counts
+            .OrderByDescending(pair => pair.Value)
+            .ThenBy(pair => pair.Key, StringComparer.Ordinal)
+            .Select(pair => $"{pair.Key}={N(pair.Value)}"));
 
     private static bool TryHash(string text, out ulong value)
     {

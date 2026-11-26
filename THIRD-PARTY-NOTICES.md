@@ -44,3 +44,15 @@ MIT, copyright the .NET Foundation and contributors. Pulled in by BCnEncoder.Net
 
 LZ4 decompression uses [K4os.Compression.LZ4](https://github.com/MiloszKrajewski/K4os.Compression.LZ4),
 MIT, copyright Milosz Krajewski. No source code is included.
+
+## Ww2Ogg.Core
+
+Wwise packed Vorbis WEM files are converted with
+[Ww2Ogg.Core](https://github.com/coconutbird/ww2ogg-core), a .NET port of
+ww2ogg by hcs. BSD 3-Clause, copyright Xiph.org Foundation, Adam Gashlin,
+and the ww2ogg-netcore contributors. No source code is included.
+
+## NVorbis
+
+Converted Ogg streams are decoded with
+[NVorbis](https://github.com/NVorbis/NVorbis), MIT. Pulled in by Ww2Ogg.Core.
