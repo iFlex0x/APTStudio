@@ -55,6 +55,26 @@ internal sealed class MeshView : Control
         Fit();
     }
 
+    public void SetPositions(Vector3[] positions)
+    {
+        ArgumentNullException.ThrowIfNull(positions);
+        if (_mesh is null)
+        {
+            return;
+        }
+
+        if (positions.Length != _points.Length)
+        {
+            throw new ArgumentException(
+                $"expected {_points.Length} positions, got {positions.Length}.",
+                nameof(positions));
+        }
+
+        _points = positions;
+        _dirty = true;
+        Invalidate();
+    }
+
     public void ShowMessage(string text, bool error)
     {
         _mesh = null;
