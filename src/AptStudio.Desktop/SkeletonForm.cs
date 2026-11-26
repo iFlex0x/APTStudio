@@ -42,6 +42,7 @@ internal sealed class SkeletonForm : Form
         _assets = assets;
         _initialName = initialName;
         Text = "Skeletons - APTStudio";
+        Icon = Theme.AppIcon;
         StartPosition = FormStartPosition.CenterParent;
         ClientSize = new Size(1180, 740);
         MinimumSize = new Size(900, 560);

@@ -57,6 +57,7 @@ internal sealed class PoseForm : Form
         _animationHash = animationHash;
 
         Text = $"Pose 0x{skin.NameHash:X16}";
+        Icon = Theme.AppIcon;
         BackColor = Theme.Background;
         ForeColor = Theme.Text;
         StartPosition = FormStartPosition.CenterParent;

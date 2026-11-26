@@ -110,6 +110,7 @@ internal sealed class MainForm : Form
     public MainForm()
     {
         Text = "APTStudio";
+        Icon = Theme.AppIcon;
         StartPosition = FormStartPosition.CenterScreen;
         ClientSize = new Size(1280, 800);
         MinimumSize = new Size(960, 600);
