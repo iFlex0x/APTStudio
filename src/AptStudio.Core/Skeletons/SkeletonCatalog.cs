@@ -7,8 +7,6 @@ public sealed record SkeletonEntry(string ArchivePath, SkeletonHit Hit)
 {
     public ulong NameHash => Hit.NameHash;
 
-    public ulong LinkHash => Hit.LinkHash;
-
     public long Offset => Hit.Offset;
 }
 

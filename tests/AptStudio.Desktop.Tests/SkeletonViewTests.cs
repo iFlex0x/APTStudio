@@ -64,8 +64,7 @@ public sealed class SkeletonViewTests
             head,
             bones,
             4 + 2 * SkeletonData.BoneRecordSize,
-            0,
-            Array.Empty<byte>());
+            0);
     }
 
     private static DataGridView? FindGrid(Control root)

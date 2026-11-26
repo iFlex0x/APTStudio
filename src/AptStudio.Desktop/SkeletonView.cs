@@ -71,14 +71,13 @@ internal sealed class SkeletonView : Panel
         foreach (SkeletonBone bone in data.Bones)
         {
             Vector3 position = bone.Position;
-            int index = _bones.Rows.Add(
+            _bones.Rows.Add(
                 bone.NameHash.ToString("X16", CultureInfo.InvariantCulture),
                 bone.ParentIndex.ToString(CultureInfo.InvariantCulture),
                 bone.FirstChildIndex.ToString(CultureInfo.InvariantCulture),
                 position.X.ToString("F3", CultureInfo.InvariantCulture),
                 position.Y.ToString("F3", CultureInfo.InvariantCulture),
                 position.Z.ToString("F3", CultureInfo.InvariantCulture));
-            _bones.Rows[index].Tag = bone.NameHash;
         }
 
         _canvas.SetBones(data.Bones, data.Head.NameHash);

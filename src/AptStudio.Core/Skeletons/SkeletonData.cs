@@ -17,8 +17,7 @@ public sealed record SkeletonData(
     SkeletonHead Head,
     IReadOnlyList<SkeletonBone> Bones,
     int TailOffset,
-    int TailLength,
-    byte[] Body)
+    int TailLength)
 {
     public const int BoneRecordSize = 296;
     public const int MaxBones = 4096;
@@ -104,8 +103,7 @@ public sealed record SkeletonData(
             head,
             bones,
             (int)recordsEnd,
-            body.Length - (int)recordsEnd,
-            body);
+            body.Length - (int)recordsEnd);
     }
 
     public SkeletonBone? Find(ulong nameHash)
