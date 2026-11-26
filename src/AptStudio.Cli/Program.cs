@@ -112,6 +112,11 @@ internal static class Program
             return Links(args[1]);
         }
 
+        if (args.Length == 2 && string.Equals(args[0], "skelbind", StringComparison.OrdinalIgnoreCase))
+        {
+            return SkeletonBindings(args[1]);
+        }
+
         if (args.Length == 5 && string.Equals(args[0], "audioconvert", StringComparison.OrdinalIgnoreCase))
         {
             return AudioConvert(args[1], args[2], args[3], args[4]);
@@ -141,6 +146,7 @@ internal static class Program
         Console.Error.WriteLine("  aptstudio skeleton <gameRoot> <nameHash>");
         Console.Error.WriteLine("  aptstudio audio <gameRoot>");
         Console.Error.WriteLine("  aptstudio links <gameRoot>");
+        Console.Error.WriteLine("  aptstudio skelbind <gameRoot>");
         Console.Error.WriteLine("  aptstudio audioconvert <gameRoot> <pack> <mediaId> <output.ogg>");
         Console.Error.WriteLine("  aptstudio export <gameRoot> <nameHash> <outputPath>");
     }
@@ -632,6 +638,44 @@ internal static class Program
             return 0;
         }
         catch (Exception ex) when (ex is InvalidDataException or IOException or UnauthorizedAccessException)
+        {
+            Console.Error.WriteLine(ex.Message);
+            return 1;
+        }
+    }
+
+    private static int SkeletonBindings(string gameRoot)
+    {
+        if (!GameProfile.TryDetect(gameRoot, out GameProfile? profile, out string? error) || profile is null)
+        {
+            Console.Error.WriteLine(error);
+            return 1;
+        }
+
+        try
+        {
+            Stopwatch watch = Stopwatch.StartNew();
+            AssetCatalog assets = AssetCatalog.Load(profile);
+            SkinSkeletonIndex skins = SkinSkeletonIndex.Load(assets.Entries);
+            watch.Stop();
+            Console.WriteLine(
+                $"skin skeletons: {N(skins.Entries.Count)} bodies, {N(skins.BoundCount)} bound, {N(skins.NoSkeleton)} none, {N(skins.BySkeleton.Count)} skeletons used, {skins.Failures.Count} failed, {N(watch.ElapsedMilliseconds)} ms");
+            foreach (KeyValuePair<ulong, IReadOnlyList<SkinSkeletonUse>> pair in skins.BySkeleton
+                .OrderByDescending(pair => pair.Value.Count)
+                .ThenBy(pair => pair.Key)
+                .Take(5))
+            {
+                Console.WriteLine($"  skeleton 0x{pair.Key:X16} skins {N(pair.Value.Count)}");
+            }
+
+            foreach (CatalogFailure failure in skins.Failures.Take(10))
+            {
+                Console.Error.WriteLine(failure.Message);
+            }
+
+            return skins.Failures.Count == 0 ? 0 : 2;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             Console.Error.WriteLine(ex.Message);
             return 1;

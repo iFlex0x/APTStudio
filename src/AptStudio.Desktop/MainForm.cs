@@ -56,6 +56,7 @@ internal sealed class MainForm : Form
     private readonly Button _actualButton = MakeButton("1:1", Theme.Text);
     private readonly Button _clearButton = MakeButton("Clear", Theme.Muted);
     private readonly Button _linksButton = MakeButton("Used by", Theme.Text);
+    private readonly Button _skeletonsButton = MakeButton("Skeletons", Theme.Text);
     private readonly SplitContainer _split = new();
     private Font _monoFont = new("Consolas", 9f);
     private readonly System.Windows.Forms.Timer _selectionTimer = new() { Interval = 120 };
@@ -140,6 +141,8 @@ internal sealed class MainForm : Form
         _materialPanel.TextureRequested += OpenTexture;
         _skinView.MeshRequested += OpenMesh;
         _linksButton.Click += (_, _) => ToggleLinks();
+        _skeletonsButton.Click += (_, _) => OpenSkeletons(null);
+        _skinView.SkeletonRequested += hash => OpenSkeletons(hash);
         _linkView.BackRequested += () => _ = PreviewSelectionAsync(keepMip: true);
         _linkView.LinkActivated += ActivateLink;
         _audioPanel.PlayRequested += () => _ = PlaySelectedAudioAsync();
@@ -198,6 +201,7 @@ internal sealed class MainForm : Form
         Controls.Add(BuildToolbar());
         Controls.Add(BuildStatus());
         _exportButton.Enabled = false;
+        _skeletonsButton.Enabled = false;
         _cancelButton.Visible = false;
         _statusLabel.Text = "No game folder selected.";
         _selectionLabel.Text = "0 selected";
@@ -271,7 +275,8 @@ internal sealed class MainForm : Form
             Padding = new Padding(0, 7, 0, 7),
             BackColor = Theme.Surface,
         };
-        buttons.Controls.AddRange([_openButton, _rescanButton, _exportButton, _cancelButton]);
+        buttons.Controls.AddRange(
+            [_openButton, _rescanButton, _skeletonsButton, _exportButton, _cancelButton]);
 
         _pathLabel.Dock = DockStyle.Fill;
         _pathLabel.AutoEllipsis = true;
@@ -2006,18 +2011,48 @@ internal sealed class MainForm : Form
         }
     }
 
+    private void OpenSkeletons(ulong? nameHash)
+    {
+        if (_profile is null)
+        {
+            return;
+        }
+
+        SkeletonForm form = new(_profile, _entries, nameHash);
+        form.SkinRequested += SelectSkin;
+        form.Show(this);
+    }
+
+    private void SelectSkin(ulong hash)
+    {
+        _filterTimer.Stop();
+        _suppressFilters = true;
+        try
+        {
+            _typeCombo.SelectedIndex = 0;
+            _previewableCheck.Checked = false;
+            _filterText.Text = hash.ToString("X16");
+        }
+        finally
+        {
+            _suppressFilters = false;
+        }
+
+        ApplyFilter(true);
+    }
+
     private async Task DecodeSkinAsync(AssetEntry entry)
     {
         CancelPreview();
         CancellationTokenSource cancel = new();
         _previewCancel = cancel;
-        _skinView.SetSkin($"Skin_Z 0x{entry.NameHash:X16}", "Loading...", Array.Empty<SkinPartRow>());
+        _skinView.SetSkin($"Skin_Z 0x{entry.NameHash:X16}", "Loading...", Array.Empty<SkinPartRow>(), 0);
         _infoLabel.Text =
             $"{entry.ClassName} | 0x{entry.NameHash:X16} | {Path.GetFileName(entry.ArchivePath)}";
 
         try
         {
-            (SkinData skin, SkinPartRow[] rows) = await Task.Run(() =>
+            (SkinData skin, SkinBinding binding, SkinPartRow[] rows) = await Task.Run(() =>
             {
                 Dictionary<ulong, int?> counts = new();
                 int? Verts(ulong mesh)
@@ -2054,6 +2089,8 @@ internal sealed class MainForm : Form
                     entry.BodyArchivePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
                 SkinData data = SkinDecoder.Read(
                     stream, entry.BodyArchivePath, entry.Row, Verts);
+                SkinBinding binding = SkinBinding.Read(
+                    stream, entry.BodyArchivePath, entry.Row);
                 SkinPartRow[] parts = data.Parts
                     .Select(part => new SkinPartRow(
                         part.Index,
@@ -2064,7 +2101,7 @@ internal sealed class MainForm : Form
                         part.PacketsParsed,
                         part.MaterialHash))
                     .ToArray();
-                return (data, parts);
+                return (data, binding, parts);
             }, cancel.Token);
 
             if (IsDisposed || cancel != _previewCancel)
@@ -2072,9 +2109,12 @@ internal sealed class MainForm : Form
                 return;
             }
 
+            string skeleton = binding.HasSkeleton
+                ? $"skeleton 0x{binding.SkeletonRoot:X16}"
+                : "no skeleton";
             string subtitle =
-                $"v{skin.Head.Version} | {N(skin.MeshLinks.Length)} meshes | {N(skin.Parts.Length)} parts | {N(skin.Bones.Length)} bones | {Path.GetFileName(entry.ArchivePath)}";
-            _skinView.SetSkin($"Skin_Z 0x{entry.NameHash:X16}", subtitle, rows);
+                $"v{skin.Head.Version} | {N(skin.MeshLinks.Length)} meshes | {N(skin.Parts.Length)} parts | {N(skin.Bones.Length)} bones | {skeleton} | {Path.GetFileName(entry.ArchivePath)}";
+            _skinView.SetSkin($"Skin_Z 0x{entry.NameHash:X16}", subtitle, rows, binding.SkeletonRoot);
             _infoLabel.Text =
                 $"Skin_Z | 0x{entry.NameHash:X16} | {N(skin.SkinnedParts)} skinned parts | {N(rows.Sum(row => row.Vertices))} verts | {Path.GetFileName(entry.ArchivePath)}";
             _previewReady.TrySetResult(true);
@@ -2088,7 +2128,10 @@ internal sealed class MainForm : Form
             if (!IsDisposed && cancel == _previewCancel)
             {
                 _skinView.SetSkin(
-                    $"Skin_Z 0x{entry.NameHash:X16}", ex.Message, Array.Empty<SkinPartRow>());
+                    $"Skin_Z 0x{entry.NameHash:X16}",
+                    ex.Message,
+                    Array.Empty<SkinPartRow>(),
+                    0);
                 _previewReady.TrySetResult(true);
             }
         }
@@ -2830,6 +2873,7 @@ internal sealed class MainForm : Form
         _scanning = scanning;
         _openButton.Enabled = !scanning;
         _rescanButton.Enabled = !scanning && _profile is not null;
+        _skeletonsButton.Enabled = !scanning && _profile is not null;
         _grid.Enabled = !scanning;
         _filterText.Enabled = !scanning;
         _typeCombo.Enabled = !scanning;

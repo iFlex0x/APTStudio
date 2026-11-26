@@ -20,6 +20,13 @@ internal static class Program
             return;
         }
 
+        if (args.Length > 0
+            && string.Equals(args[0], "--skeletonshot", StringComparison.OrdinalIgnoreCase))
+        {
+            SkeletonScreenshotMode.Run(args);
+            return;
+        }
+
         Application.Run(new MainForm());
     }
 }
