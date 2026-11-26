@@ -5,6 +5,7 @@ using System.Runtime.InteropServices;
 using AptStudio.Core.Assets;
 using AptStudio.Core.Games;
 using AptStudio.Core.Materials;
+using AptStudio.Core.Skins;
 using AptStudio.Core.Meshes;
 using AptStudio.Core.Textures;
 
@@ -34,6 +35,7 @@ internal sealed class MainForm : Form
     private readonly PreviewControl _preview = new();
     private readonly MeshView _meshView = new();
     private readonly MaterialView _materialPanel = new();
+    private readonly SkinView _skinView = new();
     private readonly DarkComboBox _typeCombo = new();
     private readonly DarkComboBox _formatCombo = new();
     private readonly DarkComboBox _mipCombo = new();
@@ -56,6 +58,7 @@ internal sealed class MainForm : Form
     private IReadOnlyList<AssetEntry> _entries = Array.Empty<AssetEntry>();
     private IReadOnlyList<MaterialRow> _materials = Array.Empty<MaterialRow>();
     private Dictionary<ulong, AssetEntry> _bitmapByHash = new();
+    private Dictionary<ulong, AssetEntry> _meshByHash = new();
     private int[] _view = Array.Empty<int>();
     private GameProfile? _profile;
     private CancellationTokenSource? _scanCancel;
@@ -115,6 +118,7 @@ internal sealed class MainForm : Form
         _wireframeCheck.CheckedChanged += (_, _) => _meshView.SetWireframe(_wireframeCheck.Checked);
         _materialPanel.SlotSelected += hash => _ = ShowSlotTextureAsync(hash);
         _materialPanel.TextureRequested += OpenTexture;
+        _skinView.MeshRequested += OpenMesh;
         _clearButton.Click += (_, _) => ClearFilters();
         _typeCombo.SelectedIndexChanged += (_, _) =>
         {
@@ -368,11 +372,14 @@ internal sealed class MainForm : Form
         _meshView.Visible = false;
         _materialPanel.Dock = DockStyle.Fill;
         _materialPanel.Visible = false;
+        _skinView.Dock = DockStyle.Fill;
+        _skinView.Visible = false;
 
         Panel panel = new() { Dock = DockStyle.Fill, BackColor = Theme.Background };
         panel.Controls.Add(_preview);
         panel.Controls.Add(_meshView);
         panel.Controls.Add(_materialPanel);
+        panel.Controls.Add(_skinView);
         panel.Controls.Add(_infoLabel);
         panel.Controls.Add(bar);
         return panel;
@@ -572,6 +579,7 @@ internal sealed class MainForm : Form
         ConfigureSplit();
         ScaleGrid();
         _materialPanel.SetDpiScale(DeviceDpi / 96f);
+        _skinView.SetDpiScale(DeviceDpi / 96f);
         if (_entries.Count > 0 && !_scanning)
         {
             ApplyFilter(false);
@@ -1040,6 +1048,13 @@ internal sealed class MainForm : Form
             return;
         }
 
+        if (entry.ClassHash == AssetClass.Skin)
+        {
+            ShowSkinMode();
+            await DecodeSkinAsync(entry);
+            return;
+        }
+
         ShowTextureMode();
         if (entry.Bitmap is null)
         {
@@ -1070,6 +1085,7 @@ internal sealed class MainForm : Form
     {
         _meshView.Visible = false;
         _materialPanel.Visible = false;
+        _skinView.Visible = false;
         _preview.Visible = true;
         _mipCombo.Visible = true;
         _channelCombo.Visible = true;
@@ -1084,6 +1100,7 @@ internal sealed class MainForm : Form
     {
         _preview.Visible = false;
         _materialPanel.Visible = false;
+        _skinView.Visible = false;
         _meshView.Visible = true;
         _mipCombo.Visible = false;
         _channelCombo.Visible = false;
@@ -1099,7 +1116,23 @@ internal sealed class MainForm : Form
     {
         _preview.Visible = false;
         _meshView.Visible = false;
+        _skinView.Visible = false;
         _materialPanel.Visible = true;
+        _mipCombo.Visible = false;
+        _channelCombo.Visible = false;
+        _zoomLabel.Visible = false;
+        _actualButton.Visible = false;
+        _fitButton.Visible = false;
+        _wireframeCheck.Visible = false;
+        _zoomLabel.Text = "";
+    }
+
+    private void ShowSkinMode()
+    {
+        _preview.Visible = false;
+        _meshView.Visible = false;
+        _materialPanel.Visible = false;
+        _skinView.Visible = true;
         _mipCombo.Visible = false;
         _channelCombo.Visible = false;
         _zoomLabel.Visible = false;
@@ -1113,6 +1146,7 @@ internal sealed class MainForm : Form
     {
         _meshView.Visible = false;
         _materialPanel.Visible = false;
+        _skinView.Visible = false;
         _preview.Visible = true;
         _mipCombo.Visible = false;
         _channelCombo.Visible = false;
@@ -1167,6 +1201,94 @@ internal sealed class MainForm : Form
             if (!IsDisposed && cancel == _previewCancel)
             {
                 _meshView.ShowMessage(ex.Message, true);
+                _previewReady.TrySetResult(true);
+            }
+        }
+    }
+
+    private async Task DecodeSkinAsync(AssetEntry entry)
+    {
+        CancelPreview();
+        CancellationTokenSource cancel = new();
+        _previewCancel = cancel;
+        _skinView.SetSkin($"Skin_Z 0x{entry.NameHash:X16}", "Loading...", Array.Empty<SkinPartRow>());
+        _infoLabel.Text =
+            $"{entry.ClassName} | 0x{entry.NameHash:X16} | {Path.GetFileName(entry.ArchivePath)}";
+
+        try
+        {
+            (SkinData skin, SkinPartRow[] rows) = await Task.Run(() =>
+            {
+                Dictionary<ulong, int?> counts = new();
+                int? Verts(ulong mesh)
+                {
+                    if (counts.TryGetValue(mesh, out int? known))
+                    {
+                        return known;
+                    }
+
+                    int? result = null;
+                    if (_meshByHash.TryGetValue(mesh, out AssetEntry? row))
+                    {
+                        try
+                        {
+                            using FileStream stream = new(
+                                row.BodyArchivePath,
+                                FileMode.Open,
+                                FileAccess.Read,
+                                FileShare.ReadWrite);
+                            MeshData data = MeshDecoder.Read(stream, row.BodyArchivePath, row.Row);
+                            result = data.Streams.Count > 0 ? data.Streams[0].VertexCount : 0;
+                        }
+                        catch (InvalidDataException)
+                        {
+                            result = null;
+                        }
+                    }
+
+                    counts[mesh] = result;
+                    return result;
+                }
+
+                using FileStream stream = new(
+                    entry.BodyArchivePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                SkinData data = SkinDecoder.Read(
+                    stream, entry.BodyArchivePath, entry.Row, Verts);
+                SkinPartRow[] parts = data.Parts
+                    .Select(part => new SkinPartRow(
+                        part.Index,
+                        part.MeshHash,
+                        part.VertexCount,
+                        part.Stride,
+                        part.PacketCount,
+                        part.PacketsParsed,
+                        part.MaterialHash))
+                    .ToArray();
+                return (data, parts);
+            }, cancel.Token);
+
+            if (IsDisposed || cancel != _previewCancel)
+            {
+                return;
+            }
+
+            string subtitle =
+                $"v{skin.Head.Version} | {N(skin.MeshLinks.Length)} meshes | {N(skin.Parts.Length)} parts | {N(skin.Bones.Length)} bones | {Path.GetFileName(entry.ArchivePath)}";
+            _skinView.SetSkin($"Skin_Z 0x{entry.NameHash:X16}", subtitle, rows);
+            _infoLabel.Text =
+                $"Skin_Z | 0x{entry.NameHash:X16} | {N(skin.SkinnedParts)} skinned parts | {N(rows.Sum(row => row.Vertices))} verts | {Path.GetFileName(entry.ArchivePath)}";
+            _previewReady.TrySetResult(true);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex) when (ex is InvalidDataException or IOException
+            or UnauthorizedAccessException)
+        {
+            if (!IsDisposed && cancel == _previewCancel)
+            {
+                _skinView.SetSkin(
+                    $"Skin_Z 0x{entry.NameHash:X16}", ex.Message, Array.Empty<SkinPartRow>());
                 _previewReady.TrySetResult(true);
             }
         }
@@ -1520,6 +1642,22 @@ internal sealed class MainForm : Form
             return;
         }
 
+        FocusRow(hash);
+    }
+
+    private void OpenMesh(ulong hash)
+    {
+        if (!_meshByHash.ContainsKey(hash))
+        {
+            _statusLabel.Text = $"Mesh 0x{hash:X16} is not in the asset catalog.";
+            return;
+        }
+
+        FocusRow(hash);
+    }
+
+    private void FocusRow(ulong hash)
+    {
         _suppressFilters = true;
         try
         {
@@ -1781,6 +1919,10 @@ internal sealed class MainForm : Form
                 .ToDictionary(
                     group => group.Key,
                     group => group.OrderByDescending(entry => entry.IsPreviewable).First());
+            _meshByHash = catalog.Entries
+                .Where(entry => entry.ClassHash == AssetClass.Mesh)
+                .GroupBy(entry => entry.NameHash)
+                .ToDictionary(group => group.Key, group => group.First());
             RebuildOptions(catalog);
             SetScanning(false);
             ApplyFilter(true);
@@ -2039,6 +2181,20 @@ internal sealed class MainForm : Form
         if (_materialPanel.SelectedHash is ulong hash)
         {
             OpenTexture(hash);
+        }
+        else
+        {
+            _previewReady.TrySetResult(true);
+        }
+    }
+
+    internal void OpenMeshForShot()
+    {
+        _previewReady = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        if (_skinView.SelectedMeshHash is ulong hash)
+        {
+            OpenMesh(hash);
         }
         else
         {

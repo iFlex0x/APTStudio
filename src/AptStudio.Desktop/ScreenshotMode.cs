@@ -23,6 +23,7 @@ internal static class ScreenshotMode
         bool wire = false;
         bool materials = false;
         bool openTexture = false;
+        bool openMesh = false;
         for (int i = 2; i < args.Length; i++)
         {
             if (args[i] == "--game" && i + 1 < args.Length)
@@ -63,6 +64,10 @@ internal static class ScreenshotMode
             else if (args[i] == "--opentexture")
             {
                 openTexture = true;
+            }
+            else if (args[i] == "--openmesh")
+            {
+                openMesh = true;
             }
             else if (args[i] == "--slot"
                 && i + 1 < args.Length
@@ -170,6 +175,12 @@ internal static class ScreenshotMode
                 if (openTexture)
                 {
                     form.OpenTextureForShot();
+                    await form.WaitForPreviewAsync();
+                }
+
+                if (openMesh)
+                {
+                    form.OpenMeshForShot();
                     await form.WaitForPreviewAsync();
                 }
 
