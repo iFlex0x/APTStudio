@@ -959,16 +959,23 @@ internal sealed class MainForm : Form
 
         try
         {
-            MeshGeometry geometry = await Task.Run(() =>
+            MeshGeometry? geometry = await Task.Run(() =>
             {
                 using FileStream stream = new(
                     entry.BodyArchivePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
                 MeshData mesh = MeshDecoder.Read(stream, entry.BodyArchivePath, entry.Row);
-                return mesh.ToGeometry();
+                return mesh.Streams.Count == 0 ? null : mesh.ToGeometry();
             }, cancel.Token);
 
             if (IsDisposed || cancel != _previewCancel)
             {
+                return;
+            }
+
+            if (geometry is null)
+            {
+                _meshView.ShowMessage("Mesh has no geometry.", false);
+                _previewReady.TrySetResult(true);
                 return;
             }
 

@@ -50,9 +50,9 @@ public sealed record MeshHead(
 
         int extra = version switch
         {
-            3 or 5 or 7 => 0,
+            1 or 3 or 5 or 7 => 0,
             9 => 4,
-            11 or 15 => 8,
+            11 or 13 or 15 => 8,
             _ => throw new InvalidDataException($"{source}: mesh version {version} is not measured."),
         };
 

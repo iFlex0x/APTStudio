@@ -56,6 +56,96 @@ public sealed class MeshDataTests
     }
 
     [Fact]
+    public void AppliesGroupVertexOffsets()
+    {
+        byte[] body = MeshTestData.Body(MeshTestData.Payload(twoGroups: true));
+        using MemoryStream stream = new(body);
+
+        MeshData mesh = MeshDecoder.Read(stream, "TEST.DPC", MeshTestData.Row(body));
+        MeshIndexSet set = Assert.Single(mesh.IndexSets);
+        Assert.Equal(2, set.Groups.Count);
+        MeshGeometry geometry = mesh.ToGeometry();
+
+        Assert.Equal(new[] { 0, 1, 2, 3, 4, 5 }, geometry.Indices);
+        Assert.Equal(new Vector3(0, 0, 1), geometry.Positions[3]);
+    }
+
+    [Fact]
+    public void ReadsWideIndices()
+    {
+        byte[] body = MeshTestData.Body(
+            MeshTestData.Payload(twoGroups: true, wideIndices: true));
+        using MemoryStream stream = new(body);
+
+        MeshData mesh = MeshDecoder.Read(stream, "TEST.DPC", MeshTestData.Row(body));
+        MeshIndexSet set = Assert.Single(mesh.IndexSets);
+        Assert.Equal(4, set.IndexSize);
+        Assert.Equal(2, set.Groups.Count);
+        MeshGeometry geometry = mesh.ToGeometry();
+
+        Assert.Equal(new[] { 0, 1, 2, 3, 4, 5 }, geometry.Indices);
+    }
+
+    [Fact]
+    public void RejectsUnknownIndexFormat()
+    {
+        byte[] payload = MeshTestData.Payload();
+        BinaryPrimitives.WriteUInt16LittleEndian(
+            payload.AsSpan(MeshTestData.IndexDescriptor + 6), 4);
+        byte[] body = MeshTestData.Body(payload);
+        using MemoryStream stream = new(body);
+
+        InvalidDataException error = Assert.Throws<InvalidDataException>(
+            () => MeshDecoder.Read(stream, "TEST.DPC", MeshTestData.Row(body)));
+        Assert.Contains("format 4", error.Message);
+    }
+
+    [Fact]
+    public void ReadsCompactPayload()
+    {
+        byte[] body = MeshTestData.Body(MeshTestData.CompactPayload());
+        using MemoryStream stream = new(body);
+
+        MeshData mesh = MeshDecoder.Read(stream, "TEST.DPC", MeshTestData.Row(body));
+
+        MeshStream vertices = Assert.Single(mesh.Streams);
+        Assert.Equal(4, vertices.VertexCount);
+        Assert.Equal(12, vertices.Stride);
+        MeshIndexSet set = Assert.Single(mesh.IndexSets);
+        Assert.Equal(6, set.IndexCount);
+        MeshGeometry geometry = mesh.ToGeometry();
+        Assert.Equal(new[] { 0, 1, 2, 0, 2, 3 }, geometry.Indices);
+        Assert.Equal(new Vector3(1, 1, 0), geometry.Positions[2]);
+    }
+
+    [Fact]
+    public void EmptyPayloadHasNoGeometry()
+    {
+        byte[] body = MeshTestData.Body(new byte[48]);
+        using MemoryStream stream = new(body);
+
+        MeshData mesh = MeshDecoder.Read(stream, "TEST.DPC", MeshTestData.Row(body));
+
+        Assert.Empty(mesh.Streams);
+        Assert.Empty(mesh.IndexSets);
+        InvalidDataException error = Assert.Throws<InvalidDataException>(() => mesh.ToGeometry());
+        Assert.Contains("no geometry", error.Message);
+    }
+
+    [Fact]
+    public void RejectsBrokenGroupTable()
+    {
+        byte[] payload = MeshTestData.Payload();
+        BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(MeshTestData.GroupTable + 16), 5);
+        byte[] body = MeshTestData.Body(payload);
+        using MemoryStream stream = new(body);
+
+        InvalidDataException error = Assert.Throws<InvalidDataException>(
+            () => MeshDecoder.Read(stream, "TEST.DPC", MeshTestData.Row(body)));
+        Assert.Contains("group", error.Message);
+    }
+
+    [Fact]
     public void RejectsBodyNameMismatch()
     {
         byte[] body = MeshTestData.Body(MeshTestData.Payload(), name: 0x9999);
@@ -78,15 +168,29 @@ public sealed class MeshDataTests
         Assert.Contains("payload ends", error.Message);
     }
 
+    [Theory]
+    [InlineData((ushort)1)]
+    [InlineData((ushort)13)]
+    public void ReadsEveryMeasuredVersion(ushort version)
+    {
+        byte[] body = MeshTestData.Body(MeshTestData.Payload(), version: version);
+        using MemoryStream stream = new(body);
+
+        MeshData mesh = MeshDecoder.Read(stream, "TEST.DPC", MeshTestData.Row(body));
+
+        Assert.Equal(version, mesh.Head.Version);
+        Assert.Equal(6, mesh.IndexSets[0].IndexCount);
+    }
+
     [Fact]
     public void RejectsUnmeasuredVersion()
     {
-        byte[] body = MeshTestData.Body(MeshTestData.Payload(), version: 13);
+        byte[] body = MeshTestData.Body(MeshTestData.Payload(), version: 17);
         using MemoryStream stream = new(body);
 
         InvalidDataException error = Assert.Throws<InvalidDataException>(
             () => MeshDecoder.Read(stream, "TEST.DPC", MeshTestData.Row(body)));
-        Assert.Contains("version 13", error.Message);
+        Assert.Contains("version 17", error.Message);
     }
 
     [Fact]
