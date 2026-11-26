@@ -20,6 +20,7 @@ internal static class PoseScreenshotMode
         float y = 0f;
         float z = 0f;
         float scale = 1f;
+        bool load = false;
         for (int index = 2; index < args.Length; index++)
         {
             if (args[index] == "--game" && index + 1 < args.Length)
@@ -53,6 +54,10 @@ internal static class PoseScreenshotMode
             {
                 frame = parsedFrame;
                 index++;
+            }
+            else if (args[index] == "--load")
+            {
+                load = true;
             }
             else if (args[index] == "--x" && index + 1 < args.Length
                 && float.TryParse(
@@ -166,7 +171,12 @@ internal static class PoseScreenshotMode
             return;
         }
 
-        using PoseForm form = new(profile, assets.Entries, entry, root);
+        using PoseForm form = new(
+            profile,
+            assets.Entries,
+            entry,
+            root,
+            load ? animation ?? 0 : 0);
         form.ScaleForShot(scale);
         form.Shown += async (_, _) =>
         {
@@ -184,7 +194,7 @@ internal static class PoseScreenshotMode
                     }
                 }
 
-                if (animation is ulong clip)
+                if (animation is ulong clip && !load)
                 {
                     if (!form.AnimationForShot(clip, frame))
                     {
@@ -195,7 +205,7 @@ internal static class PoseScreenshotMode
                     }
                 }
 
-                await Task.Delay(300);
+                await Task.Delay(load ? 600 : 300);
                 form.CaptureShot(output);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException

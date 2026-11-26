@@ -1,6 +1,6 @@
 # APTStudio
 
-Read-only asset explorer for Resonance: A Plague Tale Legacy. Indexes every row across the game's DPC archives, previews BC1 and BC3 textures, renders meshes in an orbitable software 3D view, reads material slots and skin parts, browses Wwise audio with playback and Ogg export, shows skeleton bone tables and bind poses, poses skinned skins by rotating individual bones or by playing a decoded animation clip. Cross-links show which materials bind a texture, which skins use a mesh, and which skins name a skeleton.
+Read-only asset explorer for Resonance: A Plague Tale Legacy. Indexes every row across the game's DPC archives, previews BC1 and BC3 textures, renders meshes in an orbitable software 3D view, reads material slots and skin parts, browses Wwise audio with playback and Ogg export, shows skeleton bone tables and bind poses, poses skinned skins by rotating individual bones or by playing a decoded animation clip. An Animation_Z row lists bound skins by shared bone count and opens the pose view on any of them. Cross-links show which materials bind a texture, which skins use a mesh, and which skins name a skeleton.
 
 ## build
 

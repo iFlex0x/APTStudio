@@ -95,6 +95,7 @@ internal sealed class MainForm : Form
     private SkinLinkIndex? _skinLinks;
     private SkeletonForm? _skeletonForm;
     private PoseForm? _poseForm;
+    private AnimationSkinsForm? _animationSkinsForm;
     private bool _materialTexturesLoading;
     private bool _skinLinksLoading;
     private string _assetStatus = "No game folder selected.";
@@ -148,6 +149,7 @@ internal sealed class MainForm : Form
         _skeletonsButton.Click += (_, _) => OpenSkeletons(null);
         _skinView.SkeletonRequested += hash => OpenSkeletons(hash);
         _skinView.PoseRequested += OpenPose;
+        _animationView.SkinsRequested += OpenAnimationSkins;
         _linkView.BackRequested += () => _ = PreviewSelectionAsync(keepMip: true);
         _linkView.LinkActivated += ActivateLink;
         _audioPanel.PlayRequested += () => _ = PlaySelectedAudioAsync();
@@ -2086,15 +2088,51 @@ internal sealed class MainForm : Form
             return;
         }
 
+        OpenPose(entry, skeletonRoot, 0);
+    }
+
+    private void OpenPose(AssetEntry skin, ulong skeletonRoot, ulong animationHash)
+    {
+        if (_profile is null)
+        {
+            return;
+        }
+
         if (_poseForm is { IsDisposed: false } open)
         {
             open.Close();
             _poseForm = null;
         }
 
-        PoseForm form = new(_profile, _entries, entry, skeletonRoot);
+        PoseForm form = new(_profile, _entries, skin, skeletonRoot, animationHash);
         form.FormClosed += (_, _) => _poseForm = null;
         _poseForm = form;
+        form.Show(this);
+    }
+
+    private void OpenAnimationSkins(ulong hash)
+    {
+        if (_profile is null)
+        {
+            return;
+        }
+
+        AssetEntry? entry = SelectedEntry();
+        if (entry is not { ClassHash: AssetClass.Animation } || entry.NameHash != hash)
+        {
+            return;
+        }
+
+        if (_animationSkinsForm is { IsDisposed: false } open)
+        {
+            open.Activate();
+            return;
+        }
+
+        AnimationSkinsForm form = new(_profile, _entries, entry);
+        form.PoseRequested += OpenPose;
+        form.FormClosed += (_, _) => _animationSkinsForm = null;
+        _animationSkinsForm = form;
         form.Show(this);
     }
 
@@ -2229,6 +2267,7 @@ internal sealed class MainForm : Form
         CancellationTokenSource cancel = new();
         _previewCancel = cancel;
         _animationView.SetAnimation(
+            entry.NameHash,
             $"Animation_Z 0x{entry.NameHash:X16}",
             "Loading...",
             Array.Empty<AnimationBoneRow>(),
@@ -2263,6 +2302,7 @@ internal sealed class MainForm : Form
             string subtitle =
                 $"{animation.Duration:0.###}s | {N(animation.KeyCount)} keys | {encoding} | {counts} | {Path.GetFileName(entry.ArchivePath)}";
             _animationView.SetAnimation(
+                entry.NameHash,
                 $"Animation_Z 0x{entry.NameHash:X16}",
                 subtitle,
                 bones,
@@ -2280,6 +2320,7 @@ internal sealed class MainForm : Form
             if (!IsDisposed && cancel == _previewCancel)
             {
                 _animationView.SetAnimation(
+                    entry.NameHash,
                     $"Animation_Z 0x{entry.NameHash:X16}",
                     ex.Message,
                     Array.Empty<AnimationBoneRow>(),
@@ -2878,6 +2919,8 @@ internal sealed class MainForm : Form
         _skeletonForm = null;
         _poseForm?.Close();
         _poseForm = null;
+        _animationSkinsForm?.Close();
+        _animationSkinsForm = null;
         CancellationTokenSource cancel = new();
         _scanCancel = cancel;
         _materialCancel?.Cancel();

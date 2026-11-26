@@ -15,6 +15,7 @@ internal sealed class PoseForm : Form
     private readonly IReadOnlyList<AssetEntry> _assets;
     private readonly AssetEntry _skin;
     private readonly ulong _skeletonRoot;
+    private readonly ulong _animationHash;
     private readonly MeshView _view = new();
     private readonly DataGridView _bones = new();
     private readonly Dictionary<ulong, int> _boneRows = new();
@@ -46,12 +47,14 @@ internal sealed class PoseForm : Form
         GameProfile profile,
         IReadOnlyList<AssetEntry> assets,
         AssetEntry skin,
-        ulong skeletonRoot)
+        ulong skeletonRoot,
+        ulong animationHash = 0)
     {
         _profile = profile;
         _assets = assets;
         _skin = skin;
         _skeletonRoot = skeletonRoot;
+        _animationHash = animationHash;
 
         Text = $"Pose 0x{skin.NameHash:X16}";
         BackColor = Theme.Background;
@@ -106,7 +109,15 @@ internal sealed class PoseForm : Form
 
         _timer.Interval = 33;
         _timer.Tick += (_, _) => AdvanceFrame();
-        Shown += async (_, _) => await LoadAsync();
+        Shown += async (_, _) =>
+        {
+            await LoadAsync();
+            if (_animationHash != 0 && _skeleton is not null && !IsDisposed)
+            {
+                _animationBox.Text = _animationHash.ToString("X16", CultureInfo.InvariantCulture);
+                await UseAnimationAsync();
+            }
+        };
         FormClosed += (_, _) =>
         {
             _timer.Stop();

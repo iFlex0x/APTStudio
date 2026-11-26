@@ -10,6 +10,8 @@ internal sealed class AnimationView : Panel
     private readonly Label _subtitle = new();
     private readonly Label _note = new();
     private readonly DataGridView _bones = new();
+    private readonly Button _skins = new();
+    private ulong _nameHash;
 
     public AnimationView()
     {
@@ -17,6 +19,7 @@ internal sealed class AnimationView : Panel
         DoubleBuffered = true;
 
         _title.AutoEllipsis = true;
+        _title.AutoSize = false;
         _title.Font = new Font("Segoe UI Semibold", 9.5f);
         _title.ForeColor = Theme.Text;
         _title.TextAlign = ContentAlignment.MiddleLeft;
@@ -25,15 +28,48 @@ internal sealed class AnimationView : Panel
         _title.Height = 23;
 
         _subtitle.AutoEllipsis = true;
+        _subtitle.AutoSize = false;
         _subtitle.ForeColor = Theme.Muted;
         _subtitle.TextAlign = ContentAlignment.MiddleLeft;
         _subtitle.Padding = new Padding(8, 0, 8, 0);
         _subtitle.Dock = DockStyle.Top;
         _subtitle.Height = 20;
 
-        Panel header = new() { Dock = DockStyle.Fill, BackColor = Theme.Background };
-        header.Controls.Add(_subtitle);
-        header.Controls.Add(_title);
+        Panel headerText = new() { Dock = DockStyle.Fill, BackColor = Theme.Background };
+        headerText.Controls.Add(_subtitle);
+        headerText.Controls.Add(_title);
+
+        _skins.Text = "Skins";
+        _skins.Dock = DockStyle.Fill;
+        _skins.Margin = new Padding(4, 8, 8, 8);
+        _skins.FlatStyle = FlatStyle.Flat;
+        _skins.BackColor = Theme.Surface;
+        _skins.ForeColor = Theme.Text;
+        _skins.UseVisualStyleBackColor = false;
+        _skins.FlatAppearance.BorderSize = 0;
+        _skins.FlatAppearance.MouseOverBackColor = Theme.SelectionInactive;
+        _skins.FlatAppearance.MouseDownBackColor = Theme.Selection;
+        _skins.Enabled = false;
+        _skins.Click += (_, _) =>
+        {
+            if (_nameHash != 0)
+            {
+                SkinsRequested?.Invoke(_nameHash);
+            }
+        };
+
+        TableLayoutPanel header = new()
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 2,
+            RowCount = 1,
+            BackColor = Theme.Background,
+        };
+        header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        header.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 92));
+        header.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        header.Controls.Add(headerText, 0, 0);
+        header.Controls.Add(_skins, 1, 0);
 
         ConfigureBones();
 
@@ -62,16 +98,21 @@ internal sealed class AnimationView : Panel
         Controls.Add(layout);
     }
 
+    public event Action<ulong>? SkinsRequested;
+
     public void SetAnimation(
+        ulong nameHash,
         string title,
         string subtitle,
         IReadOnlyList<AnimationBoneRow> bones,
         bool packed)
     {
+        _nameHash = nameHash;
+        _skins.Enabled = packed && bones.Count > 0;
         _title.Text = title;
         _subtitle.Text = subtitle;
         _note.Text = packed
-            ? "packed key stream is measured but not decoded yet"
+            ? "rotations decode; translations and root motion are not applied yet"
             : "frame table is measured; key values are not decoded yet";
         _bones.Rows.Clear();
         foreach (AnimationBoneRow bone in bones)
@@ -85,6 +126,8 @@ internal sealed class AnimationView : Panel
 
     public void Reset()
     {
+        _nameHash = 0;
+        _skins.Enabled = false;
         _title.Text = "";
         _subtitle.Text = "";
         _bones.Rows.Clear();
