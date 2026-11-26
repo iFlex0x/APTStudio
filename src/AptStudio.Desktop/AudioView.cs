@@ -114,7 +114,7 @@ internal sealed class AudioView : Panel
         _note.TextAlign = ContentAlignment.TopLeft;
         _note.Padding = new Padding(10, 18, 10, 0);
         _note.Dock = DockStyle.Fill;
-        _note.Text = "Wwise Vorbis is converted to Ogg on demand. Playback goes through the system audio device; export writes a standard Ogg file.";
+        _note.Text = "Wwise Vorbis is converted to Ogg on demand. Playback uses the default audio device; export writes a standard Ogg file.";
 
         TableLayoutPanel layout = new()
         {
