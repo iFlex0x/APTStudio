@@ -245,9 +245,9 @@ internal sealed class LinkView : Panel
 
         AddColumn("Type", 80, false);
         AddColumn("Name", 140, true);
-        AddColumn("Archive", 160, false);
-        DataGridViewTextBoxColumn detail = AddColumn("Detail", 180, false);
-        detail.AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill;
+        DataGridViewTextBoxColumn archive = AddColumn("Archive", 160, false);
+        archive.AutoSizeMode = DataGridViewAutoSizeColumnMode.Fill;
+        AddColumn("Detail", 140, false);
     }
 
     internal int RowCount => _grid.RowCount;

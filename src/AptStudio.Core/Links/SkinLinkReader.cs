@@ -52,9 +52,9 @@ public static class SkinLinkReader
                 + $"!= header {head.BodySize}/{head.StoredSize}.");
         }
 
-        if (unpacked > int.MaxValue || stored > int.MaxValue)
+        if (unpacked > int.MaxValue || stored > int.MaxValue || stored < 8)
         {
-            throw new InvalidDataException($"{source}: body sizes {unpacked}/{stored} are too large.");
+            throw new InvalidDataException($"{source}: body sizes {unpacked}/{stored} are invalid.");
         }
 
         byte[] block = new byte[stored - 8];

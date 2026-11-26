@@ -1493,7 +1493,9 @@ internal sealed class MainForm : Form
                 return;
             }
 
-            int count = _materialTextures.ByTexture.TryGetValue(entry.NameHash, out IReadOnlyList<MaterialTextureUse>? uses)
+            int count = _materialTextures.ByTexture.TryGetValue(
+                entry.NameHash,
+                out IReadOnlyList<MaterialTextureUse>? uses)
                 ? uses.Count
                 : 0;
             _linksButton.Text = $"Used by {count:N0}";
@@ -1582,7 +1584,9 @@ internal sealed class MainForm : Form
 
     private static string SlotText(IReadOnlyList<int> slots)
     {
-        string text = string.Join(", ", slots.Take(8).Select(slot => slot.ToString(CultureInfo.InvariantCulture)));
+        string text = string.Join(
+            ", ",
+            slots.Take(8).Select(slot => slot.ToString(CultureInfo.InvariantCulture)));
         return slots.Count > 8 ? $"slots {text} +{slots.Count - 8}" : $"slots {text}";
     }
 

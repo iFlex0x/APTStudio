@@ -86,6 +86,32 @@ public sealed class SkinLinkTests
         }
     }
 
+    [Fact]
+    public void RejectsShortStoredSize()
+    {
+        byte[] body = SkinTestData.Body(
+            new TestPart(1, 12, 0, Array.Empty<ulong>(), SkinTestData.Rigid(1)));
+        byte[] header = SkinTestData.Header(0x1234, bodySize: (uint)body.Length, storedSize: 4);
+        int payload = 1 * 32 + 0x33 + 12 + 11;
+        byte[] file = new byte[payload + 8];
+        header.CopyTo(file, 32);
+        BinaryPrimitives.WriteUInt32LittleEndian(file.AsSpan(payload), (uint)body.Length);
+        BinaryPrimitives.WriteUInt32LittleEndian(file.AsSpan(payload + 4), 4);
+        string path = Path.Combine(Path.GetTempPath(), $"aptstudio-skin-{Guid.NewGuid():N}.bin");
+        File.WriteAllBytes(path, file);
+        try
+        {
+            using FileStream stream = new(path, FileMode.Open, FileAccess.Read);
+            InvalidDataException error = Assert.Throws<InvalidDataException>(
+                () => SkinLinkReader.Read(stream, path, Row(0x1234, 1)));
+            Assert.Contains("body sizes", error.Message);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
     private static DpcEntry Row(ulong name, uint offset) => new(
         name, SkinHead.SkinClass, name, offset, 0, 0, 0, 0, 0);
 
