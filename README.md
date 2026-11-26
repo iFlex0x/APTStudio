@@ -36,7 +36,7 @@
 | Audio | Wwise bank media, Vorbis playback, and Ogg export. |
 | Links | Texture → material, mesh → skin, skin → skeleton. |
 
-Counts from the installed Resonance 1.3.0.0 build: 486,790 asset rows across 314 DPCs, 16,227 previewable textures, 235,418 materials, 37,815 mesh bodies, 1,724 skin bodies, 1,678 skeleton objects, 202,727 animation rows, 140,888 audio media.
+Counts from the installed Resonance 1.3.0.0 build: 486,790 asset rows across 314 DPCs, including 134,104 texture rows (16,227 unique previewable textures), 235,418 materials, 37,815 mesh bodies, 1,724 skin bodies, 1,678 skeleton objects, 202,727 animation rows, 140,888 audio media.
 
 ## Build
 
