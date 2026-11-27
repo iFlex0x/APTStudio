@@ -20,6 +20,8 @@ internal sealed class BrowserForm : Form
     private readonly AssetList _textureList = new();
     private readonly TextureInspector _textureInspector = new();
     private readonly MaterialChooserView _chooser = new();
+    private readonly MaterialSlotsView _materialSlots = new();
+    private readonly MaterialSlotInspector _slotInspector = new();
     private ThumbnailCache _thumbnailCache = null!;
     private IReadOnlyList<TextureOccurrence> _inspectorCopies = Array.Empty<TextureOccurrence>();
     private readonly Label _resultsTitle = new();
@@ -61,6 +63,11 @@ internal sealed class BrowserForm : Form
     private MaterialTextureIndex? _materialTextures;
     private CancellationTokenSource? _materialCancel;
     private bool _materialLoading;
+    private MaterialEntry? _materialEntry;
+    private MaterialData? _materialData;
+    private IReadOnlyList<TextureOccurrence> _slotCopies = Array.Empty<TextureOccurrence>();
+    private ulong _slotCopyHash;
+    private int _slotCopyIndex;
 
     public BrowserForm(
         GameProfile? initialProfile = null,
@@ -279,7 +286,11 @@ internal sealed class BrowserForm : Form
         _chooser.Dock = DockStyle.Fill;
         _chooser.Visible = false;
 
+        _materialSlots.Dock = DockStyle.Fill;
+        _materialSlots.Visible = false;
+
         _results.Controls.Add(_chooser);
+        _results.Controls.Add(_materialSlots);
         _results.Controls.Add(_textureHost);
         _results.Controls.Add(_resultsBody);
         _results.Controls.Add(_resultsTitle);
@@ -288,7 +299,10 @@ internal sealed class BrowserForm : Form
         _inspector.BackColor = Theme.Surface;
         _textureInspector.Dock = DockStyle.Fill;
         _textureInspector.Visible = false;
+        _slotInspector.Dock = DockStyle.Fill;
+        _slotInspector.Visible = false;
         _inspector.Controls.Add(_textureInspector);
+        _inspector.Controls.Add(_slotInspector);
         _inner.Panel1.Controls.Add(_results);
         _inner.Panel2.Controls.Add(_inspector);
         _outer.Panel2.Controls.Add(_inner);
@@ -407,6 +421,14 @@ internal sealed class BrowserForm : Form
             }
         };
         _chooser.OpenRequested += (_, row) => OpenMaterial(row);
+        _materialSlots.SelectionChanged += (_, _) => OnMaterialSlotSelected();
+        _materialSlots.OpenTextureRequested += (_, slot) =>
+        {
+            _navigation?.SelectSlot(slot);
+            OpenSlotTexture();
+        };
+        _slotInspector.OpenTextureRequested += (_, _) => OpenSlotTexture();
+        _slotInspector.CopyChanged += (_, index) => OnSlotCopyChanged(index);
     }
 
     private async Task OnShownAsync()
@@ -458,6 +480,11 @@ internal sealed class BrowserForm : Form
         _materials = null;
         _materialTextures = null;
         _materialLoading = false;
+        _materialEntry = null;
+        _materialData = null;
+        _slotCopies = Array.Empty<TextureOccurrence>();
+        _slotCopyHash = 0;
+        _slotCopyIndex = 0;
         _chooser.Visible = false;
         _textureInspector.ShowEmpty();
         _loadCancel?.Cancel();
@@ -838,16 +865,26 @@ internal sealed class BrowserForm : Form
             _search.Text = state.Query;
         }
 
-        bool textureView = state.View == BrowserView.Textures;
+        bool textureView = state.View == BrowserView.Textures || state.View == BrowserView.LinkedTexture;
         _textureInspector.Visible = textureView;
-        _inspectorTitle.Visible = !textureView;
-        _inspectorBody.Visible = !textureView;
+        _slotInspector.Visible = state.View == BrowserView.Material;
+        _materialSlots.Visible = state.View == BrowserView.Material
+            || state.View == BrowserView.LinkedTexture;
+        bool labelView = state.View == BrowserView.Animations
+            || state.View == BrowserView.Placeholder;
+        _inspectorTitle.Visible = labelView;
+        _inspectorBody.Visible = labelView;
 
         if (_navigation.IsChooserOpen)
         {
             _textureHost.Visible = false;
             _resultsBody.Visible = false;
             _chooser.Visible = true;
+            _materialSlots.Visible = false;
+            _slotInspector.Visible = false;
+            _textureInspector.Visible = true;
+            _inspectorTitle.Visible = false;
+            _inspectorBody.Visible = false;
             _resultsTitle.Text = "Materials";
             _filterButton.Enabled = false;
             _search.Enabled = false;
@@ -863,7 +900,8 @@ internal sealed class BrowserForm : Form
         _filterButton.Enabled = state.View == BrowserView.Textures;
         UpdateFilterButton(state.Filter);
         _textureHost.Visible = state.View == BrowserView.Textures;
-        _resultsBody.Visible = state.View != BrowserView.Textures;
+        _resultsBody.Visible = state.View == BrowserView.Animations
+            || state.View == BrowserView.Placeholder;
 
         switch (state.View)
         {
@@ -882,21 +920,13 @@ internal sealed class BrowserForm : Form
                 break;
             case BrowserView.Material:
                 _resultsTitle.Text = "Material";
-                _resultsBody.Text = state.Material is null
-                    ? "No material selected."
-                    : $"0x{state.Material.Hash:X16} · {state.Material.Code} · {state.Material.ArchiveName}";
-                _inspectorTitle.Text = "Inspector";
-                _inspectorBody.Text = "Material slots arrive in the next task.";
+                ShowMaterialSlots(state);
+                RenderSlotInspector();
                 break;
             case BrowserView.LinkedTexture:
                 _resultsTitle.Text = "Material";
-                _resultsBody.Text = state.Material is null
-                    ? "No material selected."
-                    : $"0x{state.Material.Hash:X16} · {state.Material.Code} · {state.Material.ArchiveName}";
-                _inspectorTitle.Text = "Linked texture";
-                _inspectorBody.Text = state.LinkedTexture is null
-                    ? "No linked texture."
-                    : $"0x{state.LinkedTexture.Hash:X16} · {state.LinkedTexture.ArchiveName}";
+                ShowMaterialSlots(state);
+                RenderInspector();
                 break;
             default:
                 _resultsTitle.Text = state.PlaceholderName;
@@ -1029,19 +1059,26 @@ internal sealed class BrowserForm : Form
 
     private void RenderInspector()
     {
-        if (_navigation is null || _navigation.State.View != BrowserView.Textures)
+        if (_navigation is null)
         {
             return;
         }
 
         BrowserState state = _navigation.State;
-        if (state.Texture is null)
+        if (state.View is not (BrowserView.Textures or BrowserView.LinkedTexture))
+        {
+            return;
+        }
+
+        TextureOccurrence? occurrence = state.View == BrowserView.Textures
+            ? state.Texture
+            : state.LinkedTexture;
+        if (occurrence is null)
         {
             _textureInspector.ShowEmpty();
             return;
         }
 
-        TextureOccurrence occurrence = state.Texture;
         AssetEntry? entry = FindEntry(occurrence);
         if (entry?.Texture is not { } texture)
         {
@@ -1050,10 +1087,31 @@ internal sealed class BrowserForm : Form
         }
 
         _inspectorCopies = BuildCopies(occurrence);
-        int copyIndex = _inspectorCopies
-            .Select((item, index) => (item, index))
-            .FirstOrDefault(pair => OccurrenceKey(pair.item) == OccurrenceKey(occurrence))
-            .index;
+        int copyIndex = 0;
+        for (int index = 0; index < _inspectorCopies.Count; index++)
+        {
+            if (OccurrenceKey(_inspectorCopies[index]) == OccurrenceKey(occurrence))
+            {
+                copyIndex = index;
+                break;
+            }
+        }
+
+        bool linked = state.View == BrowserView.LinkedTexture;
+        string? context = null;
+        if (linked && state.Material is { } material)
+        {
+            bool local = _inspectorCopies.Any(copy => copy.ArchiveName.Equals(
+                material.ArchiveName, StringComparison.OrdinalIgnoreCase));
+            context = local
+                ? $"Linked from {material.ArchiveName} slot {state.MaterialSlot}"
+                : $"No {material.ArchiveName} copy; showing {occurrence.ArchiveName}";
+            if (occurrence.IsExternal)
+            {
+                context += $" (body {occurrence.BodyArchiveName})";
+            }
+        }
+
         _textureInspector.SetTexture(
             occurrence,
             texture,
@@ -1064,7 +1122,8 @@ internal sealed class BrowserForm : Form
             state.Fit,
             state.Zoom,
             state.Pan,
-            state.View == BrowserView.LinkedTexture);
+            linked);
+        _textureInspector.SetContext(context);
     }
 
     private AssetEntry? FindEntry(TextureOccurrence occurrence) =>
@@ -1110,7 +1169,15 @@ internal sealed class BrowserForm : Form
             return;
         }
 
-        _navigation.SetTextureCopy(_inspectorCopies[index]);
+        if (_navigation.State.View == BrowserView.LinkedTexture)
+        {
+            _navigation.SetLinkedTextureCopy(_inspectorCopies[index]);
+        }
+        else
+        {
+            _navigation.SetTextureCopy(_inspectorCopies[index]);
+        }
+
         RenderInspector();
     }
 
@@ -1157,10 +1224,22 @@ internal sealed class BrowserForm : Form
     private async Task OpenChooserAsync()
     {
         if (_navigation is null
-            || _navigation.State.View != BrowserView.Textures
             || _navigation.IsChooserOpen
-            || _materialLoading
-            || _navigation.State.Texture is not { } source)
+            || _materialLoading)
+        {
+            return;
+        }
+
+        BrowserState initial = _navigation.State;
+        if (initial.View is not (BrowserView.Textures or BrowserView.LinkedTexture))
+        {
+            return;
+        }
+
+        TextureOccurrence? source = initial.View == BrowserView.Textures
+            ? initial.Texture
+            : initial.LinkedTexture;
+        if (source is null)
         {
             return;
         }
@@ -1171,8 +1250,12 @@ internal sealed class BrowserForm : Form
             return;
         }
 
-        if (_navigation.State.Texture is not { } current
-            || OccurrenceKey(current) != OccurrenceKey(source)
+        BrowserState current = _navigation.State;
+        TextureOccurrence? currentSource = current.View == BrowserView.Textures
+            ? current.Texture
+            : current.LinkedTexture;
+        if (currentSource is null
+            || OccurrenceKey(currentSource) != OccurrenceKey(source)
             || _materialTextures is null
             || !_materialTextures.ByTexture.TryGetValue(source.Hash, out IReadOnlyList<MaterialTextureUse>? uses)
             || uses.Count == 0)
@@ -1282,6 +1365,27 @@ internal sealed class BrowserForm : Form
             row.Use.Material.ArchivePath,
             row.Use.Material.Offset,
             row.Code);
+        try
+        {
+            using FileStream stream = new(
+                row.Use.Material.ArchivePath,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.ReadWrite);
+            _materialData = MaterialDecoder.Read(
+                stream, row.Use.Material.ArchivePath, row.Use.Material.Hit);
+            _materialEntry = row.Use.Material;
+        }
+        catch (Exception ex) when (ex is InvalidDataException or IOException
+            or UnauthorizedAccessException)
+        {
+            _status.Text = ex.Message;
+            return;
+        }
+
+        _slotCopies = Array.Empty<TextureOccurrence>();
+        _slotCopyHash = 0;
+        _slotCopyIndex = 0;
         _navigation.OpenMaterial(occurrence, row.Slot);
         RenderState();
     }
@@ -1297,6 +1401,165 @@ internal sealed class BrowserForm : Form
         RenderState();
     }
 
+    private void ShowMaterialSlots(BrowserState state)
+    {
+        if (_materialData is null)
+        {
+            return;
+        }
+
+        Dictionary<ulong, int> counts = new();
+        foreach (MaterialSlot slot in _materialData.Slots)
+        {
+            counts[slot.TextureHash] = BuildCopiesForHash(slot.TextureHash).Count;
+        }
+
+        _materialSlots.SetMaterial(
+            _materialData,
+            state.MaterialSlot,
+            hash => counts.GetValueOrDefault(hash));
+    }
+
+    private void RenderSlotInspector()
+    {
+        if (_navigation is null
+            || _materialData is null
+            || _navigation.State.Material is not { } material)
+        {
+            _slotInspector.ShowEmpty();
+            return;
+        }
+
+        MaterialSlot? slot = _materialData.Slots
+            .FirstOrDefault(item => item.Index == _navigation.State.MaterialSlot);
+        if (slot is null)
+        {
+            _slotInspector.ShowEmpty();
+            return;
+        }
+
+        IReadOnlyList<TextureOccurrence> copies = BuildCopiesForHash(slot.TextureHash);
+        if (copies.Count == 0)
+        {
+            _slotInspector.ShowEmpty();
+            return;
+        }
+
+        if (_slotCopyHash != slot.TextureHash || _slotCopies.Count != copies.Count)
+        {
+            _slotCopies = copies;
+            _slotCopyHash = slot.TextureHash;
+            _slotCopyIndex = ChooseCopyIndex(copies, material.ArchiveName);
+        }
+
+        int index = Math.Clamp(_slotCopyIndex, 0, _slotCopies.Count - 1);
+        TextureOccurrence occurrence = _slotCopies[index];
+        AssetEntry? entry = FindEntry(occurrence);
+        if (entry?.Texture is not { } texture)
+        {
+            _slotInspector.ShowEmpty();
+            return;
+        }
+
+        string context = _slotCopies.Any(copy => copy.ArchiveName.Equals(
+            material.ArchiveName, StringComparison.OrdinalIgnoreCase))
+                ? $"Linked from {material.ArchiveName} slot {slot.Index}"
+                : $"No {material.ArchiveName} copy; showing {occurrence.ArchiveName}";
+        if (occurrence.IsExternal)
+        {
+            context += $" (body {occurrence.BodyArchiveName})";
+        }
+        _slotInspector.SetSlot(
+            _materialData,
+            slot,
+            occurrence,
+            texture,
+            _slotCopies,
+            index,
+            context);
+    }
+
+    private void OnMaterialSlotSelected()
+    {
+        if (_navigation is null)
+        {
+            return;
+        }
+
+        int slot = _materialSlots.SelectedSlot;
+        if (slot < 0)
+        {
+            return;
+        }
+
+        _navigation.SelectSlot(slot);
+        _slotCopyHash = 0;
+        _slotCopies = Array.Empty<TextureOccurrence>();
+        RenderSlotInspector();
+    }
+
+    private void OpenSlotTexture()
+    {
+        if (_navigation is null || _slotCopies.Count == 0)
+        {
+            return;
+        }
+
+        int index = Math.Clamp(_slotCopyIndex, 0, _slotCopies.Count - 1);
+        _navigation.OpenLinkedTexture(_slotCopies[index]);
+        RenderState();
+    }
+
+    private void OnSlotCopyChanged(int index)
+    {
+        if (_slotCopies.Count == 0)
+        {
+            return;
+        }
+
+        _slotCopyIndex = Math.Clamp(index, 0, _slotCopies.Count - 1);
+        RenderSlotInspector();
+    }
+
+    private IReadOnlyList<TextureOccurrence> BuildCopiesForHash(ulong hash)
+    {
+        List<TextureOccurrence> copies = new();
+        HashSet<string> keys = new(StringComparer.Ordinal);
+        foreach (AssetEntry entry in _assets)
+        {
+            if (!entry.IsBitmap || entry.Bitmap is null || entry.NameHash != hash)
+            {
+                continue;
+            }
+
+            TextureOccurrence occurrence = ToOccurrence(entry);
+            if (keys.Add(OccurrenceKey(occurrence)))
+            {
+                copies.Add(occurrence);
+            }
+        }
+
+        copies.Sort((left, right) => string.Compare(
+            left.ArchiveName, right.ArchiveName, StringComparison.OrdinalIgnoreCase));
+        return copies;
+    }
+
+    private static int ChooseCopyIndex(
+        IReadOnlyList<TextureOccurrence> copies,
+        string materialArchive)
+    {
+        for (int index = 0; index < copies.Count; index++)
+        {
+            if (copies[index].ArchiveName.Equals(
+                materialArchive, StringComparison.OrdinalIgnoreCase))
+            {
+                return index;
+            }
+        }
+
+        return 0;
+    }
+
     private void UpdateStatus()
     {
         if (_navigation is null || _loading)
@@ -1310,6 +1573,23 @@ internal sealed class BrowserForm : Form
             _status.Text =
                 $"{Path.GetFileName(state.ArchivePath)} · {_textureList.Rows.Count:N0} of " +
                 $"{ArchiveCount(state.ArchivePath):N0} textures · {_archives.Count:N0} archives";
+            return;
+        }
+
+        if (state.View == BrowserView.Material && state.Material is { } material)
+        {
+            _status.Text =
+                $"{material.ArchiveName} · {material.Code} · " +
+                $"{_materialData?.Slots.Count ?? 0} slots";
+            return;
+        }
+
+        if (state.View == BrowserView.LinkedTexture && state.LinkedTexture is { } linked)
+        {
+            string link = linked.IsExternal
+                ? $"{linked.ArchiveName} → {linked.BodyArchiveName}"
+                : linked.ArchiveName;
+            _status.Text = $"{state.Material?.ArchiveName ?? "Material"} · linked {link}";
             return;
         }
 
@@ -1349,9 +1629,8 @@ internal sealed class BrowserForm : Form
     {
         BrowserView.Textures => "Textures",
         BrowserView.Animations => "Animations",
-        BrowserView.Material => $"Material 0x{state.Material?.Hash:X16}",
-        BrowserView.LinkedTexture =>
-            $"Material 0x{state.Material?.Hash:X16} / Linked 0x{state.LinkedTexture?.Hash:X16}",
+        BrowserView.Material => "Material",
+        BrowserView.LinkedTexture => "Material / Linked texture",
         _ => state.PlaceholderName,
     };
 

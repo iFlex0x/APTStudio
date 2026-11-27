@@ -11,16 +11,17 @@ internal sealed class TextureInspector : Panel
     private readonly Label _type = new();
     private readonly Label _hash = new();
     private readonly Label _subtitle = new();
+    private readonly Label _context = new();
     private readonly PreviewControl _preview = new();
     private readonly ComboBox _mip = new();
     private readonly ComboBox _copies = new();
     private readonly Label _copiesLabel = new();
     private readonly FlowLayoutPanel _channels = new();
+    private readonly FlowLayoutPanel _copyRow = new();
     private readonly FlowLayoutPanel _actions = new();
     private readonly Button _usedBy = new();
     private readonly Button _reveal = new();
     private readonly Button _export = new();
-    private readonly Button _copyHash = new();
     private readonly Button _fit = new();
     private readonly Button _actual = new();
     private readonly Button _details = new();
@@ -59,6 +60,12 @@ internal sealed class TextureInspector : Panel
         _subtitle.Height = 20;
         _subtitle.AutoEllipsis = true;
 
+        _context.ForeColor = Theme.Muted;
+        _context.Dock = DockStyle.Top;
+        _context.Height = 32;
+        _context.AutoEllipsis = true;
+        _context.Visible = false;
+
         _preview.Dock = DockStyle.Fill;
         _preview.ZoomChanged += (_, _) =>
         {
@@ -89,7 +96,7 @@ internal sealed class TextureInspector : Panel
         };
 
         _copies.DropDownStyle = ComboBoxStyle.DropDownList;
-        _copies.Width = 132;
+        _copies.Width = 200;
         StyleCombo(_copies);
         _copies.SelectedIndexChanged += (_, _) =>
         {
@@ -139,8 +146,12 @@ internal sealed class TextureInspector : Panel
         _actual.Click += (_, _) => _preview.ActualSize();
         _channels.Controls.Add(_fit);
         _channels.Controls.Add(_actual);
-        _channels.Controls.Add(_copiesLabel);
-        _channels.Controls.Add(_copies);
+
+        _copyRow.AutoSize = true;
+        _copyRow.WrapContents = false;
+        _copyRow.Margin = new Padding(0, 4, 0, 0);
+        _copyRow.Controls.Add(_copiesLabel);
+        _copyRow.Controls.Add(_copies);
 
         _usedBy.Text = "Used by";
         _usedBy.FlatStyle = FlatStyle.Flat;
@@ -162,23 +173,12 @@ internal sealed class TextureInspector : Panel
         StyleActionButton(_export);
         _export.Click += (_, _) => ExportRequested?.Invoke(this, EventArgs.Empty);
 
-        _copyHash.Text = "Copy hash";
-        StyleActionButton(_copyHash);
-        _copyHash.Click += (_, _) =>
-        {
-            if (_occurrence is not null)
-            {
-                Clipboard.SetText($"0x{_occurrence.Hash:X16}");
-            }
-        };
-
         _actions.AutoSize = true;
         _actions.WrapContents = true;
         _actions.Margin = new Padding(0, 6, 0, 0);
         _actions.Controls.Add(_usedBy);
         _actions.Controls.Add(_reveal);
         _actions.Controls.Add(_export);
-        _actions.Controls.Add(_copyHash);
 
         _details.Text = "Details";
         _details.FlatStyle = FlatStyle.Flat;
@@ -202,7 +202,7 @@ internal sealed class TextureInspector : Panel
         {
             Dock = DockStyle.Fill,
             ColumnCount = 1,
-            RowCount = 6,
+            RowCount = 7,
             BackColor = Theme.Surface,
         };
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -211,12 +211,14 @@ internal sealed class TextureInspector : Panel
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         layout.Controls.Add(HeaderPanel(), 0, 0);
         layout.Controls.Add(_preview, 0, 1);
         layout.Controls.Add(_channels, 0, 2);
-        layout.Controls.Add(_actions, 0, 3);
-        layout.Controls.Add(_details, 0, 4);
-        layout.Controls.Add(_detailsPanel, 0, 5);
+        layout.Controls.Add(_copyRow, 0, 3);
+        layout.Controls.Add(_actions, 0, 4);
+        layout.Controls.Add(_details, 0, 5);
+        layout.Controls.Add(_detailsPanel, 0, 6);
         Controls.Add(layout);
         ShowEmpty();
     }
@@ -254,6 +256,8 @@ internal sealed class TextureInspector : Panel
         _type.Text = "BITMAP_Z · TEXTURE";
         _hash.Text = "";
         _subtitle.Text = "Select a texture to inspect it.";
+        _context.Text = "";
+        _context.Visible = false;
         _preview.ShowMessage("Select a texture.", false);
         _detailsPanel.Visible = false;
     }
@@ -287,10 +291,7 @@ internal sealed class TextureInspector : Panel
 
         _type.Text = "BITMAP_Z · TEXTURE";
         _hash.Text = $"0x{occurrence.Hash:X16}";
-        _subtitle.Text =
-            $"{occurrence.ArchiveName} · {occurrence.Head.Width} × {occurrence.Head.Height} · " +
-            $"{occurrence.Head.MipCount} mips · {occurrence.Head.Format.DisplayName} · " +
-            $"{occurrence.Head.Storage}";
+        _subtitle.Text = Subtitle(occurrence, occurrence.Head.Width, occurrence.Head.Height);
         _usedBy.Enabled = !_busy;
         _usedBy.Text = _busy ? "Loading materials..." : "Used by";
         _reveal.Visible = linked;
@@ -309,7 +310,9 @@ internal sealed class TextureInspector : Panel
             _copies.Items.Clear();
             foreach (TextureOccurrence copy in copies)
             {
-                _copies.Items.Add(copy.ArchiveName);
+                _copies.Items.Add(copy.IsExternal
+                    ? $"{copy.ArchiveName} → {copy.BodyArchiveName}"
+                    : copy.ArchiveName);
             }
 
             if (_copies.Items.Count > 0)
@@ -341,6 +344,12 @@ internal sealed class TextureInspector : Panel
         _usedBy.Text = busy ? "Loading materials..." : "Used by";
     }
 
+    public void SetContext(string? text)
+    {
+        _context.Text = text ?? "";
+        _context.Visible = !string.IsNullOrWhiteSpace(text);
+    }
+
     private Control HeaderPanel()
     {
         TableLayoutPanel header = new()
@@ -348,12 +357,13 @@ internal sealed class TextureInspector : Panel
             Dock = DockStyle.Top,
             AutoSize = true,
             ColumnCount = 1,
-            RowCount = 3,
+            RowCount = 4,
             BackColor = Theme.Surface,
         };
         header.Controls.Add(_type, 0, 0);
         header.Controls.Add(_hash, 0, 1);
         header.Controls.Add(_subtitle, 0, 2);
+        header.Controls.Add(_context, 0, 3);
         return header;
     }
 
@@ -468,15 +478,19 @@ internal sealed class TextureInspector : Panel
 
         if (width > 0)
         {
-            _subtitle.Text =
-                $"{_occurrence?.ArchiveName} · {width} × {height} · " +
-                $"{_occurrence?.Head.MipCount} mips · {_occurrence?.Head.Format.DisplayName} · " +
-                $"{_occurrence?.Head.Storage}";
+            _subtitle.Text = _occurrence is null
+                ? ""
+                : Subtitle(_occurrence, width, height);
         }
 
         ViewChanged?.Invoke(this, new TextureViewState(
             _preview.Zoom, _preview.Origin, _preview.IsFit));
     }
+
+    private static string Subtitle(TextureOccurrence occurrence, int width, int height) =>
+        $"{occurrence.ArchiveName}" +
+        (occurrence.IsExternal ? $" → {occurrence.BodyArchiveName}" : "") +
+        $" · {width} × {height} · {occurrence.Head.MipCount} mips";
 
     private void UpdateDetails(
         TextureOccurrence occurrence,
@@ -488,7 +502,7 @@ internal sealed class TextureInspector : Panel
             Dock = DockStyle.Top,
             AutoSize = true,
             ColumnCount = 2,
-            RowCount = 6,
+            RowCount = 7,
             BackColor = Theme.Surface,
             Padding = new Padding(0, 4, 0, 0),
         };
@@ -498,8 +512,9 @@ internal sealed class TextureInspector : Panel
         AddFact(facts, 1, "Body", occurrence.BodyArchiveName);
         AddFact(facts, 2, "Offset", occurrence.BodyOffset.ToString("N0", CultureInfo.InvariantCulture));
         AddFact(facts, 3, "Mips", occurrence.Head.MipCount.ToString(CultureInfo.InvariantCulture));
-        AddFact(facts, 4, "Copies", copies.Count.ToString(CultureInfo.InvariantCulture));
-        AddFact(facts, 5, "Storage", occurrence.Head.Storage.ToString());
+        AddFact(facts, 4, "Format", occurrence.Head.Format.DisplayName);
+        AddFact(facts, 5, "Copies", copies.Count.ToString(CultureInfo.InvariantCulture));
+        AddFact(facts, 6, "Storage", occurrence.Head.Storage.ToString());
         _detailsPanel.Controls.Add(facts);
     }
 

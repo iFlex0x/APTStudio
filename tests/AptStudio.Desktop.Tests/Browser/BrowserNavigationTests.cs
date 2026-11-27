@@ -137,6 +137,30 @@ public sealed class BrowserNavigationTests
     }
 
     [Fact]
+    public void ChangingLinkedCopyDoesNotAddHistory()
+    {
+        BrowserNavigation navigation = new(TextureState());
+        navigation.OpenChooser();
+        navigation.OpenMaterial(ApocalypseEye, 13);
+        navigation.OpenLinkedTexture(CommonEye);
+        TextureOccurrence other = new(
+            0xF037E191BA17A32A,
+            "COMMON.DPC",
+            "COMMON.DPC",
+            256567616,
+            Head(256, 256, 9, 0x1D));
+
+        navigation.SetLinkedTextureCopy(other);
+
+        Assert.Equal(other, navigation.State.LinkedTexture);
+        Assert.Equal(BrowserView.LinkedTexture, navigation.State.View);
+
+        navigation.Back();
+        Assert.Equal(BrowserView.Material, navigation.State.View);
+        Assert.Equal(13, navigation.State.MaterialSlot);
+    }
+
+    [Fact]
     public void SwitchScopeClearsHistory()
     {
         BrowserNavigation navigation = new(TextureState());
