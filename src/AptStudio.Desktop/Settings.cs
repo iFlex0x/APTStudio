@@ -5,6 +5,8 @@ namespace AptStudio.Desktop;
 internal static class Settings
 {
     private const string LastGameRootKey = "lastGameRoot";
+    private const string SidebarWidthKey = "browserSidebarWidth";
+    private const string InspectorWidthKey = "browserInspectorWidth";
 
     private static string FilePath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -13,36 +15,70 @@ internal static class Settings
 
     public static string? LoadLastGameRoot()
     {
+        Dictionary<string, string> values = LoadValues();
+        return values.TryGetValue(LastGameRootKey, out string? root)
+            && !string.IsNullOrWhiteSpace(root)
+                ? root
+                : null;
+    }
+
+    public static void SaveLastGameRoot(string root)
+    {
+        Dictionary<string, string> values = LoadValues();
+        values[LastGameRootKey] = root;
+        SaveValues(values);
+    }
+
+    public static (int Sidebar, int Inspector) LoadBrowserLayout()
+    {
+        Dictionary<string, string> values = LoadValues();
+        return (ReadInt(values, SidebarWidthKey, 216), ReadInt(values, InspectorWidthKey, 420));
+    }
+
+    public static void SaveBrowserLayout(int sidebar, int inspector)
+    {
+        Dictionary<string, string> values = LoadValues();
+        values[SidebarWidthKey] = sidebar.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        values[InspectorWidthKey] = inspector.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        SaveValues(values);
+    }
+
+    private static int ReadInt(Dictionary<string, string> values, string key, int fallback) =>
+        values.TryGetValue(key, out string? text)
+            && int.TryParse(
+                text,
+                System.Globalization.NumberStyles.Integer,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out int value)
+                ? value
+                : fallback;
+
+    private static Dictionary<string, string> LoadValues()
+    {
         try
         {
             if (!File.Exists(FilePath))
             {
-                return null;
+                return new Dictionary<string, string>();
             }
 
-            Dictionary<string, string>? values =
-                JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(FilePath));
-            return values is not null
-                && values.TryGetValue(LastGameRootKey, out string? root)
-                && !string.IsNullOrWhiteSpace(root)
-                    ? root
-                    : null;
+            return JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(FilePath))
+                ?? new Dictionary<string, string>();
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
         {
-            return null;
+            return new Dictionary<string, string>();
         }
     }
 
-    public static void SaveLastGameRoot(string root)
+    private static void SaveValues(Dictionary<string, string> values)
     {
         try
         {
             string path = FilePath;
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             string temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
-            File.WriteAllText(temp, JsonSerializer.Serialize(
-                new Dictionary<string, string> { [LastGameRootKey] = root }));
+            File.WriteAllText(temp, JsonSerializer.Serialize(values));
             File.Move(temp, path, overwrite: true);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
