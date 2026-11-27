@@ -45,6 +45,12 @@ internal sealed class BrowserNavigation
         };
     }
 
+    public void SetTextureCopy(TextureOccurrence texture)
+    {
+        ArgumentNullException.ThrowIfNull(texture);
+        State = State with { Texture = texture };
+    }
+
     public void SetListIndex(int index)
     {
         State = State with { ListIndex = index };

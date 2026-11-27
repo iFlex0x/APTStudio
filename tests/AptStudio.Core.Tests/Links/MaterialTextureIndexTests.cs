@@ -29,6 +29,7 @@ public sealed class MaterialTextureIndexTests
             Assert.Equal(2, shared.Count);
             Assert.Equal([2], shared.Single(use => use.NameHash == 0xAAAA).Slots);
             Assert.Equal([0], shared.Single(use => use.NameHash == 0xBBBB).Slots);
+            Assert.Equal(MaterialTestData.Code, shared[0].Code);
             Assert.Single(index.ByTexture[0x2222]);
         }
         finally

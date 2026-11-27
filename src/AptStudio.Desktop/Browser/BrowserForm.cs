@@ -2,6 +2,8 @@ using System.Diagnostics;
 using System.Globalization;
 using AptStudio.Core.Assets;
 using AptStudio.Core.Games;
+using AptStudio.Core.Links;
+using AptStudio.Core.Materials;
 using AptStudio.Core.Textures;
 
 namespace AptStudio.Desktop.Browser;
@@ -16,7 +18,10 @@ internal sealed class BrowserForm : Form
     private readonly Panel _textureHost = new();
     private readonly AssetListHeader _textureHeader = new();
     private readonly AssetList _textureList = new();
+    private readonly TextureInspector _textureInspector = new();
+    private readonly MaterialChooserView _chooser = new();
     private ThumbnailCache _thumbnailCache = null!;
+    private IReadOnlyList<TextureOccurrence> _inspectorCopies = Array.Empty<TextureOccurrence>();
     private readonly Label _resultsTitle = new();
     private readonly Label _resultsBody = new();
     private readonly Label _inspectorTitle = new();
@@ -52,6 +57,10 @@ internal sealed class BrowserForm : Form
     private bool _scopeOpen = true;
     private bool _lastNarrow;
     private bool _loading;
+    private MaterialCatalog? _materials;
+    private MaterialTextureIndex? _materialTextures;
+    private CancellationTokenSource? _materialCancel;
+    private bool _materialLoading;
 
     public BrowserForm(
         GameProfile? initialProfile = null,
@@ -83,6 +92,7 @@ internal sealed class BrowserForm : Form
         BuildLayout();
         WireScope();
         WireTextureList();
+        WireInspector();
         _back.Click += (_, _) => Back();
         _forward.Click += (_, _) => Forward();
         _scopeButton.Click += (_, _) => ToggleScope();
@@ -98,6 +108,7 @@ internal sealed class BrowserForm : Form
         FormClosing += (_, _) =>
         {
             _loadCancel?.Cancel();
+            _materialCancel?.Cancel();
             SaveLayout();
         };
     }
@@ -108,6 +119,7 @@ internal sealed class BrowserForm : Form
         {
             _thumbnailCache?.Dispose();
             _loadCancel?.Dispose();
+            _materialCancel?.Dispose();
             _searchTimer.Dispose();
         }
 
@@ -264,12 +276,19 @@ internal sealed class BrowserForm : Form
         _textureHost.Controls.Add(_textureList);
         _textureHost.Controls.Add(_textureHeader);
 
+        _chooser.Dock = DockStyle.Fill;
+        _chooser.Visible = false;
+
+        _results.Controls.Add(_chooser);
         _results.Controls.Add(_textureHost);
         _results.Controls.Add(_resultsBody);
         _results.Controls.Add(_resultsTitle);
 
         ConfigurePanel(_inspector, _inspectorTitle, _inspectorBody);
         _inspector.BackColor = Theme.Surface;
+        _textureInspector.Dock = DockStyle.Fill;
+        _textureInspector.Visible = false;
+        _inspector.Controls.Add(_textureInspector);
         _inner.Panel1.Controls.Add(_results);
         _inner.Panel2.Controls.Add(_inspector);
         _outer.Panel2.Controls.Add(_inner);
@@ -363,6 +382,33 @@ internal sealed class BrowserForm : Form
         UpdateStatus();
     }
 
+    private void WireInspector()
+    {
+        _textureInspector.UsedByRequested += async (_, _) => await OpenChooserAsync();
+        _textureInspector.RevealRequested += (_, _) => RevealLinkedTexture();
+        _textureInspector.ExportRequested += (_, _) => ExportTexture();
+        _textureInspector.MipChanged += (_, mip) => _navigation?.SetMip(mip);
+        _textureInspector.ChannelChanged += (_, channel) => _navigation?.SetChannel(channel);
+        _textureInspector.CopyChanged += (_, index) => OnCopyChanged(index);
+        _textureInspector.ViewChanged += (_, view) =>
+        {
+            if (_navigation is null)
+            {
+                return;
+            }
+
+            if (view.Fit)
+            {
+                _navigation.SetFit(true);
+            }
+            else
+            {
+                _navigation.SetView(view.Zoom, view.Pan);
+            }
+        };
+        _chooser.OpenRequested += (_, row) => OpenMaterial(row);
+    }
+
     private async Task OnShownAsync()
     {
         ApplySplitterLayout();
@@ -406,6 +452,14 @@ internal sealed class BrowserForm : Form
             return;
         }
 
+        _materialCancel?.Cancel();
+        _materialCancel?.Dispose();
+        _materialCancel = null;
+        _materials = null;
+        _materialTextures = null;
+        _materialLoading = false;
+        _chooser.Visible = false;
+        _textureInspector.ShowEmpty();
         _loadCancel?.Cancel();
         _loadCancel?.Dispose();
         CancellationTokenSource cancel = new();
@@ -436,8 +490,33 @@ internal sealed class BrowserForm : Form
 
             watch.Stop();
             _assets = catalog.Entries;
+            Dictionary<string, HashSet<(ulong Name, long Offset)>> textureKeys =
+                new(StringComparer.OrdinalIgnoreCase);
+            Dictionary<string, int> textureCounts =
+                new(StringComparer.OrdinalIgnoreCase);
+            foreach (AssetEntry entry in _assets)
+            {
+                if (!entry.IsBitmap || entry.Bitmap is null)
+                {
+                    continue;
+                }
+
+                if (!textureKeys.TryGetValue(entry.ArchivePath, out HashSet<(ulong, long)>? keys))
+                {
+                    keys = new HashSet<(ulong, long)>();
+                    textureKeys[entry.ArchivePath] = keys;
+                }
+
+                if (keys.Add((entry.NameHash, entry.Row.BodyOffset)))
+                {
+                    textureCounts[entry.ArchivePath] = keys.Count;
+                }
+            }
+
             _archives = catalog.Archives
-                .Select(archive => new ArchiveChoice(archive.Path, archive.BitmapCount))
+                .Select(archive => new ArchiveChoice(
+                    archive.Path,
+                    textureCounts.GetValueOrDefault(archive.Path)))
                 .OrderBy(archive => archive.Name, StringComparer.OrdinalIgnoreCase)
                 .ToArray();
             _animationCounts = _assets
@@ -753,12 +832,34 @@ internal sealed class BrowserForm : Form
         _scopeButton.Text = ScopeLabel(state);
         _back.Enabled = _navigation.CanBack;
         _forward.Enabled = _navigation.CanForward;
-        _crumbs.Text = Crumbs(state);
+        _crumbs.Text = _navigation.IsChooserOpen ? "Textures / Materials" : Crumbs(state);
         if (_search.Text != state.Query)
         {
             _search.Text = state.Query;
         }
 
+        bool textureView = state.View == BrowserView.Textures;
+        _textureInspector.Visible = textureView;
+        _inspectorTitle.Visible = !textureView;
+        _inspectorBody.Visible = !textureView;
+
+        if (_navigation.IsChooserOpen)
+        {
+            _textureHost.Visible = false;
+            _resultsBody.Visible = false;
+            _chooser.Visible = true;
+            _resultsTitle.Text = "Materials";
+            _filterButton.Enabled = false;
+            _search.Enabled = false;
+            RenderInspector();
+            _status.Text =
+                $"{Path.GetFileName(state.ArchivePath)} · {_chooser.RowCount:N0} material uses · " +
+                "all archives";
+            return;
+        }
+
+        _chooser.Visible = false;
+        _search.Enabled = true;
         _filterButton.Enabled = state.View == BrowserView.Textures;
         UpdateFilterButton(state.Filter);
         _textureHost.Visible = state.View == BrowserView.Textures;
@@ -818,8 +919,9 @@ internal sealed class BrowserForm : Form
         IReadOnlyList<AssetRow> rows = BuildTextureRows(state);
         string? keep = state.Texture is null ? null : OccurrenceKey(state.Texture);
         _textureList.SetRows(rows, keep);
-        if (_textureList.SelectedRow is null
-            || (keep is not null && !_textureList.SelectedRow.Key.Equals(keep, StringComparison.Ordinal)))
+        bool keepFound = keep is not null
+            && _textureList.SelectedRow?.Key.Equals(keep, StringComparison.Ordinal) == true;
+        if (!keepFound)
         {
             int first = -1;
             for (int index = 0; index < rows.Count; index++)
@@ -837,11 +939,22 @@ internal sealed class BrowserForm : Form
             }
 
             _textureList.SelectedIndex = first;
+            if (first >= 0)
+            {
+                OnTextureSelected();
+            }
         }
 
         _textureList.TopIndex = state.ListIndex;
         _textureList.EnsureVisible(_textureList.SelectedIndex);
-        RenderInspector();
+        if (rows.Count == 0)
+        {
+            _textureInspector.ShowEmpty();
+        }
+        else
+        {
+            RenderInspector();
+        }
     }
 
     private IReadOnlyList<AssetRow> BuildTextureRows(BrowserState state)
@@ -924,20 +1037,264 @@ internal sealed class BrowserForm : Form
         BrowserState state = _navigation.State;
         if (state.Texture is null)
         {
-            _inspectorTitle.Text = "Inspector";
-            _inspectorBody.Text = "Select a texture to inspect it.";
+            _textureInspector.ShowEmpty();
             return;
         }
 
-        TextureOccurrence texture = state.Texture;
-        BitmapHead head = texture.Head;
-        int copies = _assets.Count(entry => entry.IsBitmap && entry.NameHash == texture.Hash);
-        _inspectorTitle.Text = $"Bitmap_Z 0x{texture.Hash:X16}";
-        _inspectorBody.Text =
-            $"{texture.ArchiveName} · {head.Width} × {head.Height} · {head.MipCount} mips · " +
-            $"{head.Format.DisplayName} · {head.Storage}\n" +
-            $"Copies: {copies:N0}\n" +
-            "Preview controls arrive in the next task.";
+        TextureOccurrence occurrence = state.Texture;
+        AssetEntry? entry = FindEntry(occurrence);
+        if (entry?.Texture is not { } texture)
+        {
+            _textureInspector.ShowEmpty();
+            return;
+        }
+
+        _inspectorCopies = BuildCopies(occurrence);
+        int copyIndex = _inspectorCopies
+            .Select((item, index) => (item, index))
+            .FirstOrDefault(pair => OccurrenceKey(pair.item) == OccurrenceKey(occurrence))
+            .index;
+        _textureInspector.SetTexture(
+            occurrence,
+            texture,
+            _inspectorCopies,
+            copyIndex,
+            state.Mip,
+            state.Channel,
+            state.Fit,
+            state.Zoom,
+            state.Pan,
+            state.View == BrowserView.LinkedTexture);
+    }
+
+    private AssetEntry? FindEntry(TextureOccurrence occurrence) =>
+        _assets.FirstOrDefault(entry =>
+            entry.IsBitmap
+            && entry.Bitmap is not null
+            && entry.NameHash == occurrence.Hash
+            && entry.ArchivePath.Equals(occurrence.ArchivePath, StringComparison.OrdinalIgnoreCase)
+            && entry.BodyArchivePath.Equals(
+                occurrence.BodyArchivePath, StringComparison.OrdinalIgnoreCase)
+            && entry.Row.BodyOffset == occurrence.BodyOffset);
+
+    private IReadOnlyList<TextureOccurrence> BuildCopies(TextureOccurrence selected)
+    {
+        List<TextureOccurrence> copies = new();
+        HashSet<string> keys = new(StringComparer.Ordinal);
+        void Add(TextureOccurrence occurrence)
+        {
+            if (keys.Add(OccurrenceKey(occurrence)))
+            {
+                copies.Add(occurrence);
+            }
+        }
+
+        Add(selected);
+        foreach (AssetEntry entry in _assets)
+        {
+            if (entry.IsBitmap && entry.Bitmap is not null && entry.NameHash == selected.Hash)
+            {
+                Add(ToOccurrence(entry));
+            }
+        }
+
+        copies.Sort((left, right) => string.Compare(
+            left.ArchiveName, right.ArchiveName, StringComparison.OrdinalIgnoreCase));
+        return copies;
+    }
+
+    private void OnCopyChanged(int index)
+    {
+        if (_navigation is null || index < 0 || index >= _inspectorCopies.Count)
+        {
+            return;
+        }
+
+        _navigation.SetTextureCopy(_inspectorCopies[index]);
+        RenderInspector();
+    }
+
+    private void ExportTexture()
+    {
+        if (_textureInspector.Texture is not { } texture
+            || _textureInspector.Occurrence is not { } occurrence
+            || _profile is null)
+        {
+            return;
+        }
+
+        using SaveFileDialog dialog = new()
+        {
+            Filter = "PNG (*.png)|*.png",
+            FileName = $"{Path.GetFileNameWithoutExtension(occurrence.ArchivePath)}_" +
+                $"{occurrence.Hash:X16}.png",
+            Title = "Export PNG",
+        };
+        if (dialog.ShowDialog(this) != DialogResult.OK)
+        {
+            return;
+        }
+
+        string? folder = Path.GetDirectoryName(dialog.FileName);
+        if (folder is null || GameFolderGuard.IsInside(_profile.Root, folder))
+        {
+            _status.Text = "Refusing to write inside the game folder.";
+            return;
+        }
+
+        try
+        {
+            TextureExport.ExportPng(texture, dialog.FileName);
+            _status.Text = $"Exported {Path.GetFileName(dialog.FileName)}";
+        }
+        catch (Exception ex) when (ex is InvalidDataException or NotSupportedException
+            or IOException or UnauthorizedAccessException)
+        {
+            _status.Text = ex.Message;
+        }
+    }
+
+    private async Task OpenChooserAsync()
+    {
+        if (_navigation is null
+            || _navigation.State.View != BrowserView.Textures
+            || _navigation.IsChooserOpen
+            || _materialLoading
+            || _navigation.State.Texture is not { } source)
+        {
+            return;
+        }
+
+        _navigation.SetListIndex(_textureList.TopIndex);
+        if (_materialTextures is null && !await LoadMaterialIndexAsync())
+        {
+            return;
+        }
+
+        if (_navigation.State.Texture is not { } current
+            || OccurrenceKey(current) != OccurrenceKey(source)
+            || _materialTextures is null
+            || !_materialTextures.ByTexture.TryGetValue(source.Hash, out IReadOnlyList<MaterialTextureUse>? uses)
+            || uses.Count == 0)
+        {
+            _status.Text = "No material uses.";
+            return;
+        }
+
+        List<MaterialUseRow> rows = new();
+        foreach (MaterialTextureUse use in uses)
+        {
+            foreach (int slot in use.Slots)
+            {
+                rows.Add(new MaterialUseRow(use, slot));
+            }
+        }
+
+        if (rows.Count == 0)
+        {
+            _status.Text = "No material uses.";
+            return;
+        }
+
+        int archiveCount = rows
+            .Select(row => row.Archive)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Count();
+        _navigation.OpenChooser();
+        _chooser.SetRows(rows, source.Hash, archiveCount);
+        RenderState();
+        _chooser.FocusList();
+    }
+
+    private async Task<bool> LoadMaterialIndexAsync()
+    {
+        if (_profile is null)
+        {
+            return false;
+        }
+
+        _materialLoading = true;
+        _textureInspector.SetBusy(true);
+        _status.Text = "Loading materials...";
+        _materialCancel?.Cancel();
+        _materialCancel?.Dispose();
+        CancellationTokenSource cancel = new();
+        _materialCancel = cancel;
+        IProgress<CatalogProgress> progress = new Progress<CatalogProgress>(item =>
+        {
+            if (!IsDisposed && cancel == _materialCancel)
+            {
+                _status.Text =
+                    $"Materials {Path.GetFileName(item.ArchivePath)} {item.Index}/{item.Total}";
+            }
+        });
+
+        try
+        {
+            MaterialCatalog catalog = await Task.Run(
+                () => MaterialCatalog.Load(_profile, false, progress, cancel.Token),
+                cancel.Token);
+            MaterialTextureIndex index = await Task.Run(
+                () => MaterialTextureIndex.Load(catalog, progress, cancel.Token),
+                cancel.Token);
+            if (IsDisposed || cancel != _materialCancel)
+            {
+                return false;
+            }
+
+            _materials = catalog;
+            _materialTextures = index;
+            return true;
+        }
+        catch (OperationCanceledException)
+        {
+            return false;
+        }
+        catch (Exception ex) when (ex is InvalidDataException or IOException
+            or UnauthorizedAccessException)
+        {
+            if (!IsDisposed && cancel == _materialCancel)
+            {
+                _status.Text = ex.Message;
+            }
+
+            return false;
+        }
+        finally
+        {
+            if (cancel == _materialCancel)
+            {
+                _materialLoading = false;
+                _textureInspector.SetBusy(false);
+            }
+        }
+    }
+
+    private void OpenMaterial(MaterialUseRow row)
+    {
+        if (_navigation is null)
+        {
+            return;
+        }
+
+        MaterialOccurrence occurrence = new(
+            row.Hash,
+            row.Use.Material.ArchivePath,
+            row.Use.Material.Offset,
+            row.Code);
+        _navigation.OpenMaterial(occurrence, row.Slot);
+        RenderState();
+    }
+
+    private void RevealLinkedTexture()
+    {
+        if (_navigation is null || _navigation.State.View != BrowserView.LinkedTexture)
+        {
+            return;
+        }
+
+        _navigation.RevealLinkedTexture();
+        RenderState();
     }
 
     private void UpdateStatus()

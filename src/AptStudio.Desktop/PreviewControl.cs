@@ -136,6 +136,22 @@ internal sealed class PreviewControl : Control
         ZoomChanged?.Invoke(this, EventArgs.Empty);
     }
 
+    public PointF Origin => _origin;
+
+    internal void SetView(float zoom, PointF origin)
+    {
+        if (_image is null)
+        {
+            return;
+        }
+
+        _scale = Math.Clamp(zoom, 0.02f, 32f);
+        _origin = origin;
+        _fit = false;
+        ZoomChanged?.Invoke(this, EventArgs.Empty);
+        Invalidate();
+    }
+
     protected override void OnResize(EventArgs e)
     {
         base.OnResize(e);

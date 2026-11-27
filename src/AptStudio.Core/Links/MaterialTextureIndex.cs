@@ -3,7 +3,10 @@ using AptStudio.Core.Textures;
 
 namespace AptStudio.Core.Links;
 
-public sealed record MaterialTextureUse(MaterialEntry Material, IReadOnlyList<int> Slots)
+public sealed record MaterialTextureUse(
+    MaterialEntry Material,
+    string Code,
+    IReadOnlyList<int> Slots)
 {
     public ulong NameHash => Material.NameHash;
 
@@ -32,6 +35,7 @@ public sealed record MaterialTextureIndex(
     {
         List<CatalogFailure> failures = new();
         Dictionary<ulong, Dictionary<MaterialEntry, List<int>>> found = new();
+        Dictionary<MaterialEntry, string> codes = new();
         Dictionary<string, FileStream> streams = new(StringComparer.OrdinalIgnoreCase);
         int materials = 0;
         int slots = 0;
@@ -56,6 +60,7 @@ public sealed record MaterialTextureIndex(
                     {
                         MaterialData data = MaterialDecoder.Read(stream, archive.Key, entry.Hit);
                         materials++;
+                        codes.TryAdd(entry, data.Code);
                         foreach (MaterialSlot slot in data.Slots)
                         {
                             slots++;
@@ -96,7 +101,9 @@ public sealed record MaterialTextureIndex(
             pair => pair.Key,
             pair => (IReadOnlyList<MaterialTextureUse>)pair.Value
                 .Select(item => new MaterialTextureUse(
-                    item.Key, (IReadOnlyList<int>)item.Value.OrderBy(slot => slot).ToList()))
+                    item.Key,
+                    codes[item.Key],
+                    (IReadOnlyList<int>)item.Value.OrderBy(slot => slot).ToList()))
                 .OrderBy(use => use.NameHash)
                 .ThenBy(use => use.ArchiveName, StringComparer.OrdinalIgnoreCase)
                 .ToList());
