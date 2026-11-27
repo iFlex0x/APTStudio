@@ -186,6 +186,30 @@ internal sealed class MaterialChooserView : Panel
             FillWeight = 8,
             DefaultCellStyle = { Alignment = DataGridViewContentAlignment.MiddleRight },
         });
+        _grid.CellFormatting += (_, e) =>
+        {
+            if (e.RowIndex < 0 || e.ColumnIndex != 2 || e.Value is not string text)
+            {
+                return;
+            }
+
+            int width = _grid.Columns[2].Width - 20;
+            if (width <= 0)
+            {
+                return;
+            }
+
+            e.Value = BrowserVisual.EllipsizeMiddle(text, _grid.Font, width);
+            e.FormattingApplied = true;
+        };
+        _grid.CellToolTipTextNeeded += (_, e) =>
+        {
+            if (e.RowIndex >= 0 && e.ColumnIndex == 2
+                && _grid.Rows[e.RowIndex].Tag is MaterialUseRow row)
+            {
+                e.ToolTipText = row.Archive;
+            }
+        };
         _grid.SelectionChanged += (_, _) =>
         {
             if (!_suppress)

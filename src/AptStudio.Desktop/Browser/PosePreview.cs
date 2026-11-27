@@ -12,6 +12,7 @@ internal sealed class PosePreview : Panel
     private PoseScene? _scene;
     private AnimationClipBinding? _binding;
     private int _frame;
+    private bool _applied;
 
     public PosePreview()
     {
@@ -22,6 +23,8 @@ internal sealed class PosePreview : Panel
     }
 
     public bool HasPose => _scene is not null && _binding is not null;
+
+    public bool IsApplied => _applied;
 
     public int Frame => _frame;
 
@@ -66,7 +69,8 @@ internal sealed class PosePreview : Panel
             _scene = result.Scene;
             _binding = _scene.Binding;
             _view.SetMesh(_scene.BindPose);
-            SetFrame(0);
+            _frame = 0;
+            _applied = false;
         }
         catch (OperationCanceledException)
         {
@@ -89,7 +93,20 @@ internal sealed class PosePreview : Panel
         }
 
         _frame = Math.Clamp(frame, 0, Math.Max(0, _binding.FrameCount - 1));
+        _applied = true;
         _view.SetPositions(_scene.Deform(_frame).Positions);
+    }
+
+    public void ShowBind()
+    {
+        if (_scene is null)
+        {
+            return;
+        }
+
+        _frame = 0;
+        _applied = false;
+        _view.SetMesh(_scene.BindPose);
     }
 
     public void SetWireframe(bool wireframe) => _view.SetWireframe(wireframe);
@@ -105,5 +122,6 @@ internal sealed class PosePreview : Panel
 
         _view.SetMesh(_scene.BindPose);
         _frame = 0;
+        _applied = false;
     }
 }

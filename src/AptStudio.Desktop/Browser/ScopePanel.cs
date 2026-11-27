@@ -23,6 +23,7 @@ internal sealed class ScopePanel : Panel
     private readonly FlowLayoutPanel _types = new();
     private readonly Label _legacy = new();
     private readonly List<ScopeRow> _typeRows = new();
+    private readonly Dictionary<(string Text, int Width), string> _archiveLabels = new();
     private readonly ToolTip _tip = new();
     private int _hoverIndex = -1;
     private bool _suppress;
@@ -312,6 +313,24 @@ internal sealed class ScopePanel : Panel
         _archives.Invalidate();
     }
 
+    private string ArchiveLabel(string name, int width)
+    {
+        (string Text, int Width) key = (name, width);
+        if (_archiveLabels.TryGetValue(key, out string? label))
+        {
+            return label;
+        }
+
+        if (_archiveLabels.Count > 256)
+        {
+            _archiveLabels.Clear();
+        }
+
+        label = BrowserVisual.EllipsizeMiddle(name, BrowserVisual.Row, width);
+        _archiveLabels[key] = label;
+        return label;
+    }
+
     protected override void Dispose(bool disposing)
     {
         if (disposing)
@@ -352,20 +371,16 @@ internal sealed class ScopePanel : Panel
                 e.Bounds.Height - 1);
         }
 
-        int countWidth = choice.Count > 0 ? 52 : 0;
-        int countX = e.Bounds.Right - countWidth - 38;
+        int countWidth = choice.Count > 0 ? 44 : 0;
+        int countX = e.Bounds.Right - countWidth - 12;
+        int nameWidth = Math.Max(20, countX - e.Bounds.X - 8);
         TextRenderer.DrawText(
             e.Graphics,
-            choice.Name,
+            ArchiveLabel(choice.Name, nameWidth),
             BrowserVisual.Row,
-            new Rectangle(
-                e.Bounds.X + 8,
-                e.Bounds.Y,
-                Math.Max(20, countX - e.Bounds.X - 8),
-                e.Bounds.Height),
+            new Rectangle(e.Bounds.X + 8, e.Bounds.Y, nameWidth, e.Bounds.Height),
             selected ? Theme.Text : Theme.Muted,
-            TextFormatFlags.Left | TextFormatFlags.VerticalCenter
-                | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+            TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
         if (choice.Count > 0)
         {
             TextRenderer.DrawText(

@@ -12,9 +12,11 @@ internal sealed class AnimationInspector : Panel
     private readonly Label _hash = new();
     private readonly Label _subtitle = new();
     private readonly Label _candidate = new();
+    private readonly Label _hint = new();
     private readonly PosePreview _preview = new();
     private readonly Button _play = new();
     private readonly Button _large = new();
+    private readonly Button _bind = new();
     private readonly TrackBar _scrub = new();
     private readonly Label _frame = new();
     private readonly ComboBox _skin = new();
@@ -59,6 +61,12 @@ internal sealed class AnimationInspector : Panel
         _candidate.Dock = DockStyle.Top;
         _candidate.Height = 18;
         _candidate.AutoEllipsis = true;
+
+        _hint.Font = BrowserVisual.RowSmall;
+        _hint.ForeColor = BrowserVisual.Faint;
+        _hint.Dock = DockStyle.Top;
+        _hint.Height = 16;
+        _hint.AutoEllipsis = true;
 
         _preview.Dock = DockStyle.Fill;
         BrowserVisual.Frame(_preview);
@@ -111,7 +119,7 @@ internal sealed class AnimationInspector : Panel
         _frame.Anchor = AnchorStyles.Right;
         _frame.Margin = new Padding(0);
 
-        _skinLabel.Text = "Preview skin";
+        _skinLabel.Text = "Skin by name";
         _skinLabel.Font = BrowserVisual.RowSmall;
         _skinLabel.ForeColor = Theme.Muted;
         _skinLabel.AutoSize = true;
@@ -119,6 +127,7 @@ internal sealed class AnimationInspector : Panel
 
         _skin.DropDownStyle = ComboBoxStyle.DropDownList;
         _skin.Width = 210;
+        _skin.DropDownWidth = 320;
         _skin.Font = BrowserVisual.UiSmall;
         _skin.BackColor = Theme.Background;
         _skin.ForeColor = Theme.Text;
@@ -152,6 +161,22 @@ internal sealed class AnimationInspector : Panel
         _large.Padding = new Padding(8, 3, 8, 3);
         _large.Enabled = false;
         _large.Click += (_, _) => OpenLargePreview();
+
+        _bind.Text = "Bind pose";
+        _bind.FlatStyle = FlatStyle.Flat;
+        _bind.BackColor = Theme.Surface;
+        _bind.ForeColor = Theme.Muted;
+        _bind.Font = BrowserVisual.UiSmall;
+        _bind.UseVisualStyleBackColor = false;
+        _bind.FlatAppearance.BorderSize = 1;
+        _bind.FlatAppearance.BorderColor = BrowserVisual.BorderStrong;
+        _bind.FlatAppearance.MouseOverBackColor = BrowserVisual.SurfaceHover;
+        _bind.AutoSize = true;
+        _bind.MinimumSize = new Size(0, 26);
+        _bind.MaximumSize = new Size(int.MaxValue, 26);
+        _bind.Padding = new Padding(8, 3, 8, 3);
+        _bind.Enabled = false;
+        _bind.Click += (_, _) => ShowBind();
 
         TableLayoutPanel playRow = new()
         {
@@ -194,6 +219,7 @@ internal sealed class AnimationInspector : Panel
             Padding = new Padding(0, 8, 0, 0),
         };
         actions.Controls.Add(_large);
+        actions.Controls.Add(_bind);
 
         TableLayoutPanel layout = new()
         {
@@ -213,13 +239,14 @@ internal sealed class AnimationInspector : Panel
             Dock = DockStyle.Top,
             AutoSize = true,
             ColumnCount = 1,
-            RowCount = 4,
+            RowCount = 5,
             BackColor = Theme.Surface,
         };
         header.Controls.Add(_type, 0, 0);
         header.Controls.Add(_hash, 0, 1);
         header.Controls.Add(_subtitle, 0, 2);
         header.Controls.Add(_candidate, 0, 3);
+        header.Controls.Add(_hint, 0, 4);
         layout.Controls.Add(header, 0, 0);
         layout.Controls.Add(_preview, 0, 1);
         layout.Controls.Add(playRow, 0, 2);
@@ -253,9 +280,11 @@ internal sealed class AnimationInspector : Panel
         _scrub.Enabled = false;
         _skin.Enabled = false;
         _large.Enabled = false;
+        _bind.Enabled = false;
         _hash.Text = "";
         _subtitle.Text = "Select a clip.";
         _candidate.Text = "";
+        _hint.Text = "";
         _frame.Text = "frame -";
         _preview.ShowMessage("Select an animation clip.", false);
     }
@@ -281,11 +310,13 @@ internal sealed class AnimationInspector : Panel
         _profile = profile;
         _hash.Text = $"0x{animation.NameHash:X16}";
         _subtitle.Text = $"{Path.GetFileName(animation.ArchivePath)} · reading clip...";
-        _candidate.Text = "Finding compatible skins...";
+        _candidate.Text = "Finding skins by bone name...";
+        _hint.Text = "";
         _play.Enabled = false;
         _scrub.Enabled = false;
         _skin.Enabled = false;
         _large.Enabled = false;
+        _bind.Enabled = false;
         _preview.ShowMessage("Loading animation...", false);
         _ = LoadAsync();
     }
@@ -324,7 +355,8 @@ internal sealed class AnimationInspector : Panel
             foreach (AnimationSkinCandidate candidate in candidates)
             {
                 _skin.Items.Add(
-                    $"0x{candidate.SkinHash:X16} · {candidate.Matched}/{candidate.AnimationBones}");
+                    $"0x{candidate.SkinHash:X16} · " +
+                    $"{candidate.Matched}/{candidate.AnimationBones} names");
             }
 
             AnimationData data = ReadData();
@@ -335,8 +367,8 @@ internal sealed class AnimationInspector : Panel
                 $"{data.Bones.Count} bones";
             if (candidates.Count == 0)
             {
-                _candidate.Text = "No compatible skin.";
-                _preview.ShowMessage("No compatible skin found for this clip.", true);
+                _candidate.Text = "No skin shares these bone names.";
+                _preview.ShowMessage("No skin shares this clip's bone names.", true);
                 return;
             }
 
@@ -403,6 +435,7 @@ internal sealed class AnimationInspector : Panel
             _scrub.Enabled = _preview.FrameCount > 1;
             _play.Enabled = _preview.FrameCount > 1;
             _large.Enabled = true;
+            _bind.Enabled = true;
             _subtitle.Text =
                 $"{Path.GetFileName(_animation.ArchivePath)} · {_duration:F3} s · " +
                 $"{_preview.FrameCount} frames · {_boneCount} bones";
@@ -423,6 +456,12 @@ internal sealed class AnimationInspector : Panel
         if (!_preview.HasPose || _preview.FrameCount <= 1)
         {
             return;
+        }
+
+        if (!_preview.IsApplied)
+        {
+            _preview.SetFrame(0);
+            UpdateFrameLabel();
         }
 
         _playing = !_playing;
@@ -447,7 +486,9 @@ internal sealed class AnimationInspector : Panel
     {
         _frame.Text = _preview.FrameCount == 0
             ? "frame -"
-            : $"frame {_preview.Frame} / {_preview.FrameCount - 1}";
+            : _preview.IsApplied
+                ? $"frame {_preview.Frame} / {_preview.FrameCount - 1}"
+                : "bind pose";
         _suppressScrub = true;
         try
         {
@@ -462,8 +503,30 @@ internal sealed class AnimationInspector : Panel
     private void UpdateCandidateLabel(AnimationSkinCandidate candidate)
     {
         _candidate.Text =
-            $"Preview skin: 0x{candidate.SkinHash:X16} · candidate · " +
-            $"{candidate.Matched}/{candidate.AnimationBones} bones";
+            $"Bone names: {candidate.Matched}/{candidate.AnimationBones} · " +
+            $"preview skin 0x{candidate.SkinHash:X16}";
+        _hint.Text =
+            $"Rig fit not verified · skeleton 0x{candidate.SkeletonRoot:X16} · " +
+            $"{candidate.SkeletonBones} bones";
+    }
+
+    private void ShowBind()
+    {
+        _playing = false;
+        _timer.Stop();
+        _play.Text = "Play";
+        _preview.ShowBind();
+        _suppressScrub = true;
+        try
+        {
+            _scrub.Value = 0;
+        }
+        finally
+        {
+            _suppressScrub = false;
+        }
+
+        UpdateFrameLabel();
     }
 
     private void OpenLargePreview()

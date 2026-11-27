@@ -82,4 +82,128 @@ internal static class BrowserVisual
                 border, 0, 0, control.ClientSize.Width - 1, control.ClientSize.Height - 1);
         };
     }
+
+    public static string EllipsizeMiddle(string text, Font font, int maxWidth)
+    {
+        if (string.IsNullOrEmpty(text) || maxWidth <= 0)
+        {
+            return text;
+        }
+
+        int limit = Math.Max(0, maxWidth - 4);
+        if (Measure(text, font) <= limit)
+        {
+            return text;
+        }
+
+        const string dots = "...";
+        int dotsWidth = Measure(dots, font);
+        if (dotsWidth >= limit)
+        {
+            return dots;
+        }
+
+        int budget = limit - dotsWidth;
+        int suffix = TokenSuffix(text, font, Math.Max(3, budget * 2 / 3));
+        if (suffix <= 0)
+        {
+            suffix = LongestSuffix(text, font, Math.Max(3, budget * 2 / 3));
+        }
+        int prefix = 0;
+        while (suffix > 3)
+        {
+            prefix = LongestPrefix(
+                text,
+                font,
+                budget - Measure(text[^suffix..], font),
+                text.Length - suffix);
+            if (prefix >= 3)
+            {
+                break;
+            }
+
+            suffix--;
+        }
+
+        suffix = Math.Clamp(suffix, 3, text.Length);
+        prefix = LongestPrefix(
+            text,
+            font,
+            budget - Measure(text[^suffix..], font),
+            text.Length - suffix);
+        if (prefix <= 0 || prefix + suffix >= text.Length)
+        {
+            return dots + text[^Math.Min(suffix, text.Length)..];
+        }
+
+        return text[..prefix] + dots + text[^suffix..];
+    }
+
+    private static int Measure(string text, Font font) =>
+        string.IsNullOrEmpty(text)
+            ? 0
+            : TextRenderer.MeasureText(
+                text,
+                font,
+                new Size(int.MaxValue, int.MaxValue),
+                TextFormatFlags.NoPadding | TextFormatFlags.SingleLine).Width;
+
+    private static int LongestPrefix(string text, Font font, int width, int limit)
+    {
+        int low = 0;
+        int high = Math.Clamp(limit, 0, text.Length);
+        while (low < high)
+        {
+            int middle = (low + high + 1) / 2;
+            if (Measure(text[..middle], font) <= width)
+            {
+                low = middle;
+            }
+            else
+            {
+                high = middle - 1;
+            }
+        }
+
+        return low;
+    }
+
+    private static int TokenSuffix(string text, Font font, int width)
+    {
+        for (int index = 1; index < text.Length - 3; index++)
+        {
+            if (text[index - 1] != '_' || text[index] == '_')
+            {
+                continue;
+            }
+
+            string suffix = text[index..];
+            if (Measure(suffix, font) <= width)
+            {
+                return suffix.Length;
+            }
+        }
+
+        return 0;
+    }
+
+    private static int LongestSuffix(string text, Font font, int width)
+    {
+        int low = 0;
+        int high = text.Length;
+        while (low < high)
+        {
+            int middle = (low + high + 1) / 2;
+            if (Measure(text[^middle..], font) <= width)
+            {
+                low = middle;
+            }
+            else
+            {
+                high = middle - 1;
+            }
+        }
+
+        return low;
+    }
 }

@@ -6,6 +6,9 @@ namespace AptStudio.Desktop.Browser;
 internal sealed class MaterialSlotsView : Panel
 {
     private readonly DataGridView _grid = new();
+    private readonly TableLayoutPanel _detail = new();
+    private readonly Label _role = new();
+    private readonly Label _binding = new();
     private readonly Font _monoFont = new("Consolas", 8.625f);
     private MaterialData? _data;
     private int _selectedSlot = -1;
@@ -15,7 +18,22 @@ internal sealed class MaterialSlotsView : Panel
     {
         BackColor = Theme.Background;
         ConfigureGrid();
-        Controls.Add(_grid);
+        ConfigureDetail();
+
+        TableLayoutPanel root = new()
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 2,
+            BackColor = Theme.Background,
+        };
+        root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        root.Controls.Add(_grid, 0, 0);
+        root.Controls.Add(_detail, 0, 1);
+        Controls.Add(root);
+        Resize += (_, _) => UpdateDetailWidth();
+        UpdateDetailWidth();
     }
 
     public event EventHandler? SelectionChanged;
@@ -57,6 +75,8 @@ internal sealed class MaterialSlotsView : Panel
         {
             _suppress = false;
         }
+
+        UpdateDetail();
     }
 
     public void SelectSlot(int slot)
@@ -78,6 +98,8 @@ internal sealed class MaterialSlotsView : Panel
         {
             _suppress = false;
         }
+
+        UpdateDetail();
     }
 
     public void FocusList()
@@ -97,6 +119,65 @@ internal sealed class MaterialSlotsView : Panel
         }
 
         base.Dispose(disposing);
+    }
+
+    private void ConfigureDetail()
+    {
+        _detail.AutoSize = true;
+        _detail.Dock = DockStyle.Fill;
+        _detail.ColumnCount = 2;
+        _detail.RowCount = 2;
+        _detail.BackColor = Theme.Surface;
+        _detail.Padding = new Padding(8, 6, 8, 6);
+        _detail.Margin = new Padding(0);
+        _detail.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 68));
+        _detail.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        AddDetailRow(0, "Role", _role);
+        AddDetailRow(1, "Binding", _binding);
+        _detail.Paint += (_, e) =>
+        {
+            using Pen border = new(BrowserVisual.RowBorder);
+            e.Graphics.DrawLine(border, 0, 0, _detail.Width, 0);
+        };
+    }
+
+    private void AddDetailRow(int row, string name, Label value)
+    {
+        _detail.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        _detail.Controls.Add(new Label
+        {
+            Text = name,
+            Font = BrowserVisual.RowSmall,
+            ForeColor = BrowserVisual.Faint,
+            AutoSize = true,
+            Margin = new Padding(0, 2, 6, 2),
+        }, 0, row);
+        value.Font = BrowserVisual.UiSmall;
+        value.ForeColor = Theme.Text;
+        value.AutoSize = true;
+        value.MaximumSize = new Size(120, 0);
+        value.Margin = new Padding(0, 2, 0, 2);
+        _detail.Controls.Add(value, 1, row);
+    }
+
+    private void UpdateDetailWidth()
+    {
+        int width = Math.Max(80, ClientSize.Width - 96);
+        _role.MaximumSize = new Size(width, 0);
+        _binding.MaximumSize = new Size(width, 0);
+    }
+
+    private void UpdateDetail()
+    {
+        if (_grid.CurrentRow is null)
+        {
+            _role.Text = "";
+            _binding.Text = "";
+            return;
+        }
+
+        _role.Text = _grid.CurrentRow.Cells[1].Value?.ToString() ?? "";
+        _binding.Text = _grid.CurrentRow.Cells[2].Value?.ToString() ?? "";
     }
 
     private int RowForSlot(int slot)
@@ -155,6 +236,7 @@ internal sealed class MaterialSlotsView : Panel
             }
 
             _selectedSlot = slot;
+            UpdateDetail();
             SelectionChanged?.Invoke(this, EventArgs.Empty);
         };
         _grid.CellDoubleClick += (_, e) =>
