@@ -36,27 +36,36 @@ public sealed record MaterialTextureIndex(
         List<CatalogFailure> failures = new();
         Dictionary<ulong, Dictionary<MaterialEntry, List<int>>> found = new();
         Dictionary<MaterialEntry, string> codes = new();
-        Dictionary<string, FileStream> streams = new(StringComparer.OrdinalIgnoreCase);
         int materials = 0;
         int slots = 0;
-        try
+        IReadOnlyList<IGrouping<string, MaterialEntry>> archives = entries
+            .GroupBy(entry => entry.ArchivePath, StringComparer.OrdinalIgnoreCase)
+            .OrderBy(group => group.Key, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        for (int index = 0; index < archives.Count; index++)
         {
-            IReadOnlyList<IGrouping<string, MaterialEntry>> archives = entries
-                .GroupBy(entry => entry.ArchivePath, StringComparer.OrdinalIgnoreCase)
-                .OrderBy(group => group.Key, StringComparer.OrdinalIgnoreCase)
-                .ToList();
-            for (int index = 0; index < archives.Count; index++)
+            cancellationToken.ThrowIfCancellationRequested();
+            IGrouping<string, MaterialEntry> archive = archives[index];
+            progress?.Report(new CatalogProgress(
+                index + 1, archives.Count, Path.GetFileName(archive.Key)));
+            FileStream stream;
+            try
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                IGrouping<string, MaterialEntry> archive = archives[index];
-                progress?.Report(new CatalogProgress(
-                    index + 1, archives.Count, Path.GetFileName(archive.Key)));
-                try
+                stream = new FileStream(
+                    archive.Key, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                failures.Add(new CatalogFailure(archive.Key, ex.Message));
+                continue;
+            }
+
+            using (stream)
+            {
+                foreach (MaterialEntry entry in archive)
                 {
-                    FileStream stream = new(
-                        archive.Key, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-                    streams.Add(archive.Key, stream);
-                    foreach (MaterialEntry entry in archive)
+                    cancellationToken.ThrowIfCancellationRequested();
+                    try
                     {
                         MaterialData data = MaterialDecoder.Read(stream, archive.Key, entry.Hit);
                         materials++;
@@ -81,19 +90,12 @@ public sealed record MaterialTextureIndex(
                             slotList.Add(slot.Index);
                         }
                     }
+                    catch (Exception ex) when (ex is InvalidDataException or IOException
+                        or UnauthorizedAccessException)
+                    {
+                        failures.Add(new CatalogFailure(archive.Key, ex.Message));
+                    }
                 }
-                catch (Exception ex) when (ex is InvalidDataException or IOException
-                    or UnauthorizedAccessException)
-                {
-                    failures.Add(new CatalogFailure(archive.Key, ex.Message));
-                }
-            }
-        }
-        finally
-        {
-            foreach (FileStream stream in streams.Values)
-            {
-                stream.Dispose();
             }
         }
 

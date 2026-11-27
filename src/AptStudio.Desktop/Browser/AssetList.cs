@@ -115,9 +115,23 @@ internal sealed class AssetList : ScrollableControl
         }
     }
 
-    public int RowHeight { get; }
+    public int RowHeight { get; private set; }
 
     public IReadOnlyList<AssetRow> Rows => _rows;
+
+    public void SetRowHeight(int height)
+    {
+        int clamped = Math.Clamp(height, 24, 64);
+        if (clamped == RowHeight)
+        {
+            return;
+        }
+
+        RowHeight = clamped;
+        _scrollY = Math.Clamp(_scrollY, 0, MaxScrollY);
+        _visibleRowsVersion = -1;
+        Invalidate();
+    }
 
     public AssetRow? SelectedRow =>
         _selectedIndex >= 0 && _selectedIndex < _rows.Count ? _rows[_selectedIndex] : null;
@@ -128,7 +142,9 @@ internal sealed class AssetList : ScrollableControl
         get => _selectedIndex;
         set
         {
-            int next = _rows.Count == 0 ? -1 : Math.Clamp(value, 0, _rows.Count - 1);
+            int next = value < 0 || _rows.Count == 0
+                ? -1
+                : Math.Clamp(value, 0, _rows.Count - 1);
             string? key = next >= 0 ? _rows[next].Key : null;
             if (next == _selectedIndex
                 && _selectedKeys.Count == (next >= 0 ? 1 : 0)

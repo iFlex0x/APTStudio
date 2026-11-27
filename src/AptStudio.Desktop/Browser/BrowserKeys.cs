@@ -7,23 +7,20 @@ namespace AptStudio.Desktop.Browser;
 
 internal static class BrowserKeys
 {
-    public static string Texture(AssetEntry entry) =>
-        $"{entry.ArchivePath}|{entry.Row.BodyOffset}|{entry.NameHash:X16}";
+    public static string Texture(AssetEntry entry) => Entry(entry);
 
     public static string Texture(TextureOccurrence occurrence) =>
-        $"{occurrence.ArchivePath}|{occurrence.BodyOffset}|{occurrence.Hash:X16}";
+        Occurrence(occurrence.ArchivePath, occurrence.BodyOffset, occurrence.Hash);
 
-    public static string Mesh(AssetEntry entry) =>
-        $"{entry.ArchivePath}|{entry.Row.BodyOffset}|{entry.NameHash:X16}";
+    public static string Mesh(AssetEntry entry) => Entry(entry);
 
     public static string Mesh(MeshOccurrence occurrence) =>
-        $"{occurrence.ArchivePath}|{occurrence.BodyOffset}|{occurrence.Hash:X16}";
+        Occurrence(occurrence.ArchivePath, occurrence.BodyOffset, occurrence.Hash);
 
-    public static string Skin(AssetEntry entry) =>
-        $"{entry.ArchivePath}|{entry.Row.BodyOffset}|{entry.NameHash:X16}";
+    public static string Skin(AssetEntry entry) => Entry(entry);
 
     public static string Skin(SkinOccurrence occurrence) =>
-        $"{occurrence.ArchivePath}|{occurrence.BodyOffset}|{occurrence.Hash:X16}";
+        Occurrence(occurrence.ArchivePath, occurrence.BodyOffset, occurrence.Hash);
 
     public static string Skeleton(SkeletonEntry entry) =>
         $"{entry.ArchivePath}|{entry.Offset}|{entry.NameHash:X16}";
@@ -49,4 +46,10 @@ internal static class BrowserKeys
         AudioEntry entry => $"0x{entry.Id:X8}",
         _ => null,
     };
+
+    private static string Entry(AssetEntry entry) =>
+        Occurrence(entry.ArchivePath, entry.Row.BodyOffset, entry.NameHash);
+
+    private static string Occurrence(string archivePath, long bodyOffset, ulong hash) =>
+        $"{archivePath}|{bodyOffset}|{hash:X16}";
 }

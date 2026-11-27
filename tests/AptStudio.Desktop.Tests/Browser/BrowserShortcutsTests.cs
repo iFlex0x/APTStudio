@@ -17,4 +17,13 @@ public sealed class BrowserShortcutsTests
         Assert.Equal(BrowserCommand.None, BrowserShortcuts.Map(Keys.Escape, true));
         Assert.Equal(BrowserCommand.None, BrowserShortcuts.Map(Keys.C, false));
     }
+
+    [Fact]
+    public void MapsMouseSideButtonsOneToOne()
+    {
+        Assert.Equal(BrowserSideButton.Back, BrowserShortcuts.MapSideButton(1));
+        Assert.Equal(BrowserSideButton.Forward, BrowserShortcuts.MapSideButton(2));
+        Assert.Equal(BrowserSideButton.None, BrowserShortcuts.MapSideButton(0));
+        Assert.Equal(BrowserSideButton.None, BrowserShortcuts.MapSideButton(3));
+    }
 }

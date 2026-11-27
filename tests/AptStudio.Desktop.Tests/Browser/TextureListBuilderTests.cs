@@ -85,7 +85,6 @@ public sealed class TextureListBuilderTests
             0,
             null,
             null,
-            "",
             sort,
             descending);
 

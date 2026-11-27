@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Numerics;
 using AptStudio.Core.Skeletons;
+using AptStudio.Desktop.Browser;
 
 namespace AptStudio.Desktop;
 
@@ -30,25 +31,17 @@ internal sealed class SkeletonView : Panel
         _title.Padding = new Padding(8, 0, 8, 0);
         _title.Dock = DockStyle.Fill;
 
+        BrowserButtons.Style(_usedBy, BrowserButtonRole.Ordinary, Theme.Background);
         _usedBy.Text = "Used by";
-        _usedBy.FlatStyle = FlatStyle.Flat;
-        _usedBy.BackColor = Theme.Surface;
-        _usedBy.ForeColor = Theme.Accent;
-        _usedBy.Font = new Font("Segoe UI Semibold", 8f);
         _usedBy.AutoSize = true;
-        _usedBy.MinimumSize = new Size(0, 22);
-        _usedBy.Padding = new Padding(8, 1, 8, 1);
         _usedBy.Margin = new Padding(0, 0, 8, 0);
-        _usedBy.UseVisualStyleBackColor = false;
-        _usedBy.FlatAppearance.BorderSize = 1;
-        _usedBy.FlatAppearance.BorderColor = Theme.Border;
         _usedBy.Visible = false;
         _usedBy.Click += (_, _) => UsedByRequested?.Invoke(this, EventArgs.Empty);
 
         TableLayoutPanel titleRow = new()
         {
             Dock = DockStyle.Top,
-            Height = 23,
+            Height = 28,
             ColumnCount = 2,
             RowCount = 1,
             BackColor = Theme.Background,

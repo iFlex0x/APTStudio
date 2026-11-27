@@ -86,6 +86,21 @@ public sealed class AssetListTests
     }
 
     [Fact]
+    public void ClearingSelectionLeavesNoRowSelected()
+    {
+        using AssetList list = new();
+        list.SetRows([Row("a"), Row("b")], null);
+        list.SelectedIndex = 1;
+
+        list.SelectedIndex = -1;
+
+        Assert.Equal(-1, list.SelectedIndex);
+        Assert.Null(list.SelectedRow);
+        Assert.Null(list.CurrentKey);
+        Assert.Empty(list.SelectedKeys);
+    }
+
+    [Fact]
     public void TopIndexScrollsWithoutNativeAutoScroll()
     {
         using AssetList list = new();

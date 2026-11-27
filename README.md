@@ -6,109 +6,62 @@
   </picture>
 </p>
 
-<p align="center">
-  Read-only asset explorer for <strong>Resonance: A Plague Tale Legacy</strong>.<br>
-  Textures, meshes, materials, skins, skeletons, animation, audio, and the links between them.
-</p>
+APTStudio is a Windows asset browser for **Resonance: A Plague Tale Legacy**.
+Browse one archive or search across the game, follow links between assets, and
+return to the same row and scroll position. The game folder is read-only.
 
 <p align="center">
-  <a href="#features">Features</a> ·
-  <a href="#build">Build</a> ·
-  <a href="#cli">CLI</a> ·
-  <a href="#scope">Scope</a> ·
-  <a href="#license">License</a>
+  <img src="assets/screenshot.png" alt="APTStudio showing archive scope, animation results, and a character preview" width="920">
 </p>
 
-<p align="center">
-  <img src="assets/screenshot.png" alt="APTStudio browser with an Animation_Z row selected" width="920">
-</p>
+## Browse and export
 
-## Features
+- Preview supported BC1/BC3 textures by mip and channel. Export PNGs individually
+  or in batches.
+- Inspect meshes in 3D, see skin parts in context, and pose explicitly bound
+  skins; skeletons have a searchable bone table and bind-pose view.
+- Follow textures to materials and their slots, meshes to skins, and explicit
+  skin-to-skeleton bindings in either direction.
+- Play and scrub decoded animation rotations, with an enlarged preview in the
+  same window. Skin candidates are ranked by bone names; rig fit is unverified.
+- Browse Wwise audio by pack or language, play clips, and export Ogg Vorbis.
 
-| Asset | What it does |
-| --- | --- |
-| Textures | BC1/BC3 mip decoding, channel views, zoom and pan, batch PNG export. |
-| Meshes | Software 3D view with orbit, pan, zoom, and hidden-line wireframe. |
-| Materials | 58-slot tables, authoring and binding names, slot texture preview. |
-| Skins | Mesh links, part table, weight strides, bone palette, pose view. |
-| Skeletons | Bone table, bind pose, parent links, and the skins that use them. |
-| Animation | Packed rotation decode, frame playback, and a skin picker. |
-| Audio | Wwise bank media, Vorbis playback, and Ogg export. |
-| Links | Texture → material, mesh → skin, skin → skeleton. |
+The supported game build is Resonance 1.3.0.0. Other texture formats and
+multi-surface textures may be listed without a preview. Animation translations
+and root motion are not applied. Mesh, skin, skeleton, material, and animation
+views do not export those assets.
 
-Counts from the installed Resonance 1.3.0.0 build: 486,790 asset rows across 314 DPCs, including 134,104 texture rows (16,227 unique previewable textures), 235,418 materials, 37,815 mesh bodies, 1,724 skin bodies, 1,678 skeleton objects, 202,727 animation rows, 140,888 audio media.
+## Build and run
 
-## Build
+Windows and the .NET 10 SDK are required to build.
 
-Windows and the .NET 10 SDK. No other runtime dependencies.
-
-```bash
-dotnet build APTStudio.slnx
-dotnet test APTStudio.slnx
-dotnet run --project src/AptStudio.Desktop
+```powershell
+dotnet build APTStudio.slnx -c Release
+dotnet test APTStudio.slnx -c Release
+dotnet run --project src/AptStudio.Desktop -c Release
 ```
 
-The desktop app opens a game folder, indexes the archives, and keeps its cache under `%LOCALAPPDATA%\APTStudio`. Game files are always opened read-only.
+Open the folder containing `Resonance.exe`. The browser remembers that folder
+and stores its cache under `%LOCALAPPDATA%\APTStudio`. The Release executable is
+`src/AptStudio.Desktop/bin/Release/net10.0-windows/AptStudio.Desktop.exe`. It opens
+the browser directly; pass `--game "<game-folder>"` to choose a root on launch.
+
+`Ctrl+O` opens a game, `F5` rescans, and `Ctrl+E` exports selected textures.
+The toolbar arrows and mouse side buttons move through asset history.
 
 ## CLI
 
-```bash
-# containers and the whole-game index
-aptstudio scan <gameRoot>
-aptstudio assets <gameRoot>
-
-# textures
-aptstudio list <gameRoot> [--rebuild]
-aptstudio export <gameRoot> <nameHash> <outputPath>
-
-# meshes
-aptstudio mesh <gameRoot> <nameHash>
-
-# materials and skins
-aptstudio materials <gameRoot>
-aptstudio material <gameRoot> <nameHash>
-aptstudio skins <gameRoot>
-aptstudio skin <gameRoot> <nameHash>
-aptstudio pose <gameRoot> <skinHash> <boneHash> <degrees> [x|y|z]
-
-# skeletons
-aptstudio skeletons <gameRoot> [--rebuild]
-aptstudio skeleton <gameRoot> <nameHash>
-aptstudio skelbind <gameRoot>
-
-# animation
-aptstudio animation <gameRoot> <nameHash>
-aptstudio animclip <gameRoot> <nameHash> [frame]
-
-# audio
-aptstudio audio <gameRoot>
-aptstudio audioconvert <gameRoot> <pack> <mediaId> <output.ogg>
-
-# cross links
-aptstudio links <gameRoot>
+```powershell
+dotnet run --project src/AptStudio.Cli -- assets "<game-folder>"
+dotnet run --project src/AptStudio.Cli -- materials "<game-folder>" --rebuild
+dotnet run --project src/AptStudio.Cli -- export "<game-folder>" 6B6CD7B43802AB3F eye.png
 ```
 
-`aptstudio` is the CLI assembly name. From a fresh checkout, `dotnet run --project src/AptStudio.Cli -- <command>` runs the same commands.
-
-## Project layout
-
-| Path | What it is |
-| --- | --- |
-| `src/AptStudio.Core` | DPC, texture, mesh, material, skin, skeleton, animation, and audio readers plus catalogs and caches. |
-| `src/AptStudio.Cli` | The verifier CLI. |
-| `src/AptStudio.Desktop` | The WinForms browser, 3D view, and pose window. |
-| `tests/` | xUnit coverage for the readers, catalogs, and desktop controls. |
-
-## Scope
-
-Read-only. APTStudio never patches, injects, installs mods, or writes into the game folder. Exports go to the chosen output folder.
-
-Resonance 1.3.0.0 is the current target. Requiem uses the same DPC family with a measured variant layout and comes after Resonance is complete.
-
-Known limits: animation translations and root motion are measured but not applied; the animation skin picker ranks by shared bone names, so it lists candidates rather than claiming the exact rig; the mesh-to-material rule and the 1,081 root-0 skin bindings are still open.
+Run `aptstudio` without arguments for the full command list.
 
 ## License
 
 MIT, see [LICENSE](LICENSE).
 
-Format facts cross-checked against bff (widberg, MIT). Texture decode by BCnEncoder.Net. Wwise Vorbis conversion by Ww2Ogg.Core, playback by NVorbis. Notices in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
+Format facts cross-checked against bff by widberg. Dependency credits are in
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).

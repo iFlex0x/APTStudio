@@ -71,18 +71,35 @@ internal static class Settings
         }
     }
 
-    private static void SaveValues(Dictionary<string, string> values)
+    private static void SaveValues(Dictionary<string, string> values) =>
+        SaveValues(FilePath, values);
+
+    internal static void SaveValues(string path, Dictionary<string, string> values)
     {
+        string? temp = null;
         try
         {
-            string path = FilePath;
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            string temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
             File.WriteAllText(temp, JsonSerializer.Serialize(values));
             File.Move(temp, path, overwrite: true);
+            temp = null;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
+        }
+        finally
+        {
+            if (temp is not null)
+            {
+                try
+                {
+                    File.Delete(temp);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                }
+            }
         }
     }
 }

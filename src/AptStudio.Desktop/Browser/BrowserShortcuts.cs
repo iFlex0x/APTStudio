@@ -9,6 +9,13 @@ internal enum BrowserCommand
     CancelExport,
 }
 
+internal enum BrowserSideButton
+{
+    None,
+    Back,
+    Forward,
+}
+
 internal static class BrowserShortcuts
 {
     public static BrowserCommand Map(Keys key, bool control) => control
@@ -24,4 +31,11 @@ internal static class BrowserShortcuts
             Keys.Escape => BrowserCommand.CancelExport,
             _ => BrowserCommand.None,
         };
+
+    public static BrowserSideButton MapSideButton(int button) => button switch
+    {
+        1 => BrowserSideButton.Back,
+        2 => BrowserSideButton.Forward,
+        _ => BrowserSideButton.None,
+    };
 }

@@ -14,6 +14,7 @@ internal sealed record MaterialUseRow(MaterialTextureUse Use, int Slot)
 
 internal sealed class MaterialChooserView : Panel
 {
+    private const string EmptyText = "No material uses.";
     private readonly Label _selected = new();
     private readonly Button _open = new();
     private readonly DataGridView _grid = new();
@@ -34,17 +35,11 @@ internal sealed class MaterialChooserView : Panel
         _selected.Height = 20;
         _selected.Padding = new Padding(0, 2, 0, 0);
 
+        BrowserButtons.Style(_open, BrowserButtonRole.Primary, Theme.Background);
         _open.Text = "Open material";
-        _open.FlatStyle = FlatStyle.Flat;
-        _open.BackColor = Theme.Accent;
-        _open.ForeColor = BrowserVisual.PrimaryText;
-        _open.Font = BrowserVisual.UiSemibold;
         _open.AutoSize = false;
         _open.Width = 120;
         _open.Height = 26;
-        _open.UseVisualStyleBackColor = false;
-        _open.FlatAppearance.BorderSize = 0;
-        _open.FlatAppearance.MouseOverBackColor = Color.FromArgb(111, 208, 251);
         _open.Enabled = false;
         _open.Click += (_, _) => OpenSelected();
 
@@ -92,7 +87,7 @@ internal sealed class MaterialChooserView : Panel
             }
 
             _open.Enabled = false;
-            _selected.Text = rows.Count == 0 ? "No material uses." : "Select a material occurrence.";
+            _selected.Text = rows.Count == 0 ? EmptyText : "Select a material occurrence.";
             _selectedIndex = rows.Count == 0 ? -1 : 0;
             if (_grid.Rows.Count > 0)
             {
@@ -241,7 +236,7 @@ internal sealed class MaterialChooserView : Panel
         MaterialUseRow? row = SelectedRow;
         _open.Enabled = row is not null;
         _selected.Text = row is null
-            ? "Select a material occurrence."
+            ? _rows.Count == 0 ? EmptyText : "Select a material occurrence."
             : $"Selected: 0x{row.Hash:X16} · {row.Code} · {row.Archive} · slot {row.Slot}";
     }
 

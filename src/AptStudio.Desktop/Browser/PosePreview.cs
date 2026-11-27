@@ -33,15 +33,30 @@ internal sealed class PosePreview : Panel
     public void ShowMessage(string text, bool error) =>
         _view.ShowMessage(text, error);
 
-    public async Task LoadAsync(
+    public void Clear()
+    {
+        _generation.Begin();
+        _scene = null;
+        _binding = null;
+        _frame = 0;
+        _applied = false;
+    }
+
+    public async Task<bool> LoadAsync(
         GameProfile profile,
         IReadOnlyList<AssetEntry> assets,
         AssetEntry skin,
         ulong skeletonRoot,
         AssetEntry animation,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        int frame = 0,
+        bool applied = false)
     {
         int token = _generation.Begin();
+        _scene = null;
+        _binding = null;
+        _frame = 0;
+        _applied = false;
         ShowMessage("Loading clip...", false);
         try
         {
@@ -63,7 +78,7 @@ internal sealed class PosePreview : Panel
 
             if (IsDisposed || !_generation.IsCurrent(token))
             {
-                return;
+                return false;
             }
 
             _scene = result.Scene;
@@ -71,9 +86,16 @@ internal sealed class PosePreview : Panel
             _view.SetMesh(_scene.BindPose);
             _frame = 0;
             _applied = false;
+            if (applied)
+            {
+                SetFrame(frame);
+            }
+
+            return true;
         }
         catch (OperationCanceledException)
         {
+            return false;
         }
         catch (Exception ex) when (ex is InvalidDataException or IOException
             or UnauthorizedAccessException)
@@ -82,6 +104,8 @@ internal sealed class PosePreview : Panel
             {
                 ShowMessage(ex.Message, true);
             }
+
+            return false;
         }
     }
 

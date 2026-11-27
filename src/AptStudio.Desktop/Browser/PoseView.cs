@@ -34,7 +34,6 @@ internal sealed class PoseView : Panel
     private readonly Button _animationPlay = new();
     private readonly Label _frameLabel = new();
     private readonly System.Windows.Forms.Timer _timer = new();
-    private readonly TaskCompletionSource<bool> _ready = new();
     private SkinDeformer? _deformer;
     private SkeletonData? _skeleton;
     private AnimationClipBinding? _binding;
@@ -141,7 +140,6 @@ internal sealed class PoseView : Panel
             PoseLoad result = await Task.Run(() => LoadPose(token), token);
             if (IsDisposed)
             {
-                _ready.TrySetResult(false);
                 return;
             }
 
@@ -153,7 +151,6 @@ internal sealed class PoseView : Panel
             _status.Text =
                 $"{result.Deformer.Parts.Count:N0} parts | " +
                 $"{result.Deformer.Bones.Count:N0} bones | bind pose";
-            _ready.TrySetResult(true);
             if (_animationHash != 0 && _skeleton is not null && !IsDisposed)
             {
                 _animationBox.Text = _animationHash.ToString(
@@ -163,7 +160,6 @@ internal sealed class PoseView : Panel
         }
         catch (OperationCanceledException)
         {
-            _ready.TrySetResult(false);
         }
         catch (Exception ex) when (ex is InvalidDataException or IOException
             or UnauthorizedAccessException)
@@ -173,8 +169,6 @@ internal sealed class PoseView : Panel
                 _view.ShowMessage(ex.Message, true);
                 _status.Text = ex.Message;
             }
-
-            _ready.TrySetResult(false);
         }
         finally
         {
@@ -194,8 +188,6 @@ internal sealed class PoseView : Panel
 
         base.Dispose(disposing);
     }
-
-    internal async Task LoadForShotAsync() => await _ready.Task;
 
     internal bool PoseForShot(ulong boneHash, float x, float y, float z)
     {
@@ -271,7 +263,8 @@ internal sealed class PoseView : Panel
     private void ConfigureToolbar()
     {
         _reset.Text = "Reset";
-        StyleButton(_reset, new Padding(10, 0, 10, 0));
+        BrowserButtons.Style(_reset, BrowserButtonRole.Ordinary, Theme.Background);
+        _reset.AutoSize = true;
         _reset.Click += (_, _) => ResetPose();
 
         _wire.Text = "Wireframe";
@@ -326,12 +319,14 @@ internal sealed class PoseView : Panel
         _animationBox.PlaceholderText = "Animation_Z hash";
 
         _animationUse.Text = "Load";
-        StyleButton(_animationUse, new Padding(8, 0, 8, 0));
+        BrowserButtons.Style(_animationUse, BrowserButtonRole.Ordinary, Theme.Background);
+        _animationUse.AutoSize = true;
         _animationUse.Click += async (_, _) => await UseAnimationAsync();
 
         _animationPlay.Text = "Play";
         _animationPlay.Enabled = false;
-        StyleButton(_animationPlay, new Padding(8, 0, 8, 0));
+        BrowserButtons.Style(_animationPlay, BrowserButtonRole.Primary, Theme.Background);
+        _animationPlay.AutoSize = true;
         _animationPlay.Click += (_, _) => TogglePlay();
 
         _frameLabel.Text = "frame -";
@@ -353,21 +348,6 @@ internal sealed class PoseView : Panel
         bar.Controls.Add(_animationPlay);
         bar.Controls.Add(_frameLabel);
         return bar;
-    }
-
-    private static void StyleButton(Button button, Padding padding)
-    {
-        button.AutoSize = true;
-        button.FlatStyle = FlatStyle.Flat;
-        button.BackColor = Theme.Surface;
-        button.ForeColor = Theme.Text;
-        button.Padding = padding;
-        button.MinimumSize = new Size(0, 24);
-        button.UseVisualStyleBackColor = false;
-        button.FlatAppearance.BorderSize = 0;
-        button.FlatAppearance.MouseOverBackColor = Theme.SelectionInactive;
-        button.FlatAppearance.MouseDownBackColor = Theme.Selection;
-        button.Margin = new Padding(0, 3, 10, 3);
     }
 
     private async Task UseAnimationAsync()

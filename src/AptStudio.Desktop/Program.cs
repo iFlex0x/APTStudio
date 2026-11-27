@@ -17,19 +17,6 @@ internal static class Program
         {
         }
 
-        if (args.Length > 0 && string.Equals(args[0], "--shot", StringComparison.OrdinalIgnoreCase))
-        {
-            ScreenshotMode.Run(args);
-            return;
-        }
-
-        if (args.Length > 0
-            && string.Equals(args[0], "--skeletonshot", StringComparison.OrdinalIgnoreCase))
-        {
-            SkeletonScreenshotMode.Run(args);
-            return;
-        }
-
         if (args.Length > 0
             && string.Equals(args[0], "--poseshot", StringComparison.OrdinalIgnoreCase))
         {
@@ -38,27 +25,31 @@ internal static class Program
         }
 
         if (args.Length > 0
-            && string.Equals(args[0], "--animskinshot", StringComparison.OrdinalIgnoreCase))
+            && (string.Equals(args[0], "--shot", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(args[0], "--skeletonshot", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(args[0], "--animskinshot", StringComparison.OrdinalIgnoreCase)))
         {
-            AnimationSkinsScreenshotMode.Run(args);
+            MessageBox.Show(
+                "The legacy screenshot harness was retired with the old browser. " +
+                "Open APTStudio and capture the window instead.",
+                "APTStudio",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
             return;
         }
 
-        if (args.Length > 0
-            && string.Equals(args[0], "--browser", StringComparison.OrdinalIgnoreCase))
+        int index = args.Length > 0
+            && string.Equals(args[0], "--browser", StringComparison.OrdinalIgnoreCase)
+            ? 1
+            : 0;
+        GameProfile? profile = null;
+        if (args.Length > index + 1
+            && string.Equals(args[index], "--game", StringComparison.OrdinalIgnoreCase)
+            && GameProfile.TryDetect(args[index + 1], out GameProfile? detected, out _))
         {
-            GameProfile? profile = null;
-            if (args.Length > 2
-                && string.Equals(args[1], "--game", StringComparison.OrdinalIgnoreCase)
-                && GameProfile.TryDetect(args[2], out GameProfile? detected, out _))
-            {
-                profile = detected;
-            }
-
-            Application.Run(new BrowserForm(profile));
-            return;
+            profile = detected;
         }
 
-        Application.Run(new MainForm());
+        Application.Run(new BrowserForm(profile));
     }
 }

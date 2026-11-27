@@ -11,6 +11,7 @@ internal enum BrowserView
     Materials,
     LinkedTexture,
     Animations,
+    AnimationLarge,
     Meshes,
     Skins,
     Skin,
@@ -18,7 +19,6 @@ internal enum BrowserView
     Skeletons,
     Skeleton,
     Audio,
-    Placeholder,
 }
 
 internal enum AudioSort
@@ -110,6 +110,19 @@ internal sealed record MeshOccurrence(
         !ArchivePath.Equals(BodyArchivePath, StringComparison.OrdinalIgnoreCase);
 }
 
+internal sealed record AnimationLargeState(
+    ulong SkinHash,
+    string SkinArchivePath,
+    long SkinBodyOffset,
+    ulong SkeletonRoot,
+    int Frame,
+    bool Applied,
+    int Matched,
+    int AnimationBones,
+    int SkeletonBones,
+    float Duration,
+    int BoneCount);
+
 internal sealed record SkinOccurrence(
     ulong Hash,
     string ArchivePath,
@@ -148,7 +161,6 @@ internal sealed record BrowserState(
     int MaterialSlot,
     TextureOccurrence? LinkedTexture,
     AnimationOccurrence? Animation,
-    string PlaceholderName = "",
     TextureSort Sort = TextureSort.Archive,
     bool SortDescending = false,
     MeshOccurrence? Mesh = null,
@@ -165,4 +177,5 @@ internal sealed record BrowserState(
     bool MaterialFromList = false,
     string? MaterialError = null,
     int ListScroll = 0,
-    ulong PoseSkeletonRoot = 0);
+    ulong PoseSkeletonRoot = 0,
+    AnimationLargeState? AnimationLarge = null);

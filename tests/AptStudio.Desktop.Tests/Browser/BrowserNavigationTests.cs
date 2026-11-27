@@ -249,6 +249,64 @@ public sealed class BrowserNavigationTests
     }
 
     [Fact]
+    public void AnimationLargeBackRestoresClipFrameAndListPosition()
+    {
+        AnimationOccurrence clip = new(
+            0x8D533F35922B2731,
+            @"C:\game\LEVELS\GREECE.DPC",
+            @"C:\game\LEVELS\GREECE.DPC",
+            305905920);
+        BrowserState animationState = new(
+            BrowserView.Animations,
+            @"C:\game\LEVELS\GREECE.DPC",
+            "",
+            TextureFilter.All,
+            null,
+            12,
+            0,
+            ChannelView.Rgb,
+            true,
+            1f,
+            PointF.Empty,
+            null,
+            0,
+            null,
+            clip,
+            ListScroll: 840);
+        BrowserNavigation navigation = new(animationState);
+        AnimationLargeState large = new(
+            0x84316AA817823056,
+            @"C:\game\LEVELS\GREECE.DPC",
+            61207488,
+            0xC81A1F5B0C7D7DBB,
+            42,
+            true,
+            86,
+            86,
+            302,
+            13.267f,
+            275);
+
+        navigation.OpenAnimationLarge(large);
+
+        Assert.Equal(BrowserView.AnimationLarge, navigation.State.View);
+        Assert.Equal(large, navigation.State.AnimationLarge);
+        Assert.Equal(clip, navigation.State.Animation);
+        Assert.Equal(12, navigation.State.ListIndex);
+        Assert.Equal(840, navigation.State.ListScroll);
+        Assert.True(navigation.CanBack);
+
+        navigation.Back();
+
+        Assert.Equal(BrowserView.Animations, navigation.State.View);
+        Assert.Equal(clip, navigation.State.Animation);
+        Assert.Null(navigation.State.AnimationLarge);
+        Assert.Equal(12, navigation.State.ListIndex);
+        Assert.Equal(840, navigation.State.ListScroll);
+        Assert.False(navigation.CanBack);
+    }
+
+    [Fact]
     public void MeshSkinSkeletonRoundTripRestoresCameraPartAndWireframe()
     {
         MeshOccurrence mesh = new(

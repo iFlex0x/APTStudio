@@ -38,6 +38,34 @@ public sealed class MaterialTextureIndexTests
         }
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void IsolatesFailedBodiesFromLaterMaterials(bool badFirst)
+    {
+        byte[] bad = new byte[64];
+        byte[] good = MaterialTestData.Object(
+            MaterialTestData.Body((3, 0x2222)), name: 0xBBBB);
+        byte[] file = badFirst ? [.. bad, .. good] : [.. good, .. bad];
+        string path = MaterialTestData.TempFile(file);
+        try
+        {
+            MaterialEntry failed = Entry(path, 0xAAAA, badFirst ? 0 : bad.Length, bad.Length);
+            MaterialEntry valid = Entry(path, 0xBBBB, badFirst ? bad.Length : 0, good.Length);
+            MaterialTextureIndex index = MaterialTextureIndex.Build(
+                badFirst ? [failed, valid] : [valid, failed]);
+
+            Assert.Single(index.Failures);
+            Assert.Equal(1, index.Materials);
+            Assert.Equal(1, index.Slots);
+            Assert.Equal(0x2222UL, Assert.Single(index.ByTexture.Keys));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
     [Fact]
     public void BadMaterialIsANamedFailure()
     {

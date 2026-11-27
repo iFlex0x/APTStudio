@@ -71,18 +71,9 @@ internal sealed class AnimationInspector : Panel
         _preview.Dock = DockStyle.Fill;
         BrowserVisual.Frame(_preview);
 
+        BrowserButtons.Style(_play, BrowserButtonRole.Primary, Theme.Surface);
         _play.Text = "Play";
-        _play.FlatStyle = FlatStyle.Flat;
-        _play.BackColor = Theme.Accent;
-        _play.ForeColor = BrowserVisual.PrimaryText;
-        _play.Font = BrowserVisual.UiSemibold;
         _play.AutoSize = true;
-        _play.MinimumSize = new Size(0, 26);
-        _play.MaximumSize = new Size(int.MaxValue, 26);
-        _play.Padding = new Padding(10, 3, 10, 3);
-        _play.UseVisualStyleBackColor = false;
-        _play.FlatAppearance.BorderSize = 0;
-        _play.FlatAppearance.MouseOverBackColor = Color.FromArgb(111, 208, 251);
         _play.Enabled = false;
         _play.Click += (_, _) => TogglePlay();
 
@@ -146,35 +137,15 @@ internal sealed class AnimationInspector : Panel
             _ = LoadSkinAsync(_candidates[_skin.SelectedIndex]);
         };
 
+        BrowserButtons.Style(_large, BrowserButtonRole.Quiet, Theme.Surface);
         _large.Text = "Large preview";
-        _large.FlatStyle = FlatStyle.Flat;
-        _large.BackColor = Theme.Surface;
-        _large.ForeColor = Theme.Muted;
-        _large.Font = BrowserVisual.UiSmall;
-        _large.UseVisualStyleBackColor = false;
-        _large.FlatAppearance.BorderSize = 1;
-        _large.FlatAppearance.BorderColor = BrowserVisual.BorderStrong;
-        _large.FlatAppearance.MouseOverBackColor = BrowserVisual.SurfaceHover;
         _large.AutoSize = true;
-        _large.MinimumSize = new Size(0, 26);
-        _large.MaximumSize = new Size(int.MaxValue, 26);
-        _large.Padding = new Padding(8, 3, 8, 3);
         _large.Enabled = false;
         _large.Click += (_, _) => OpenLargePreview();
 
+        BrowserButtons.Style(_bind, BrowserButtonRole.Quiet, Theme.Surface);
         _bind.Text = "Bind pose";
-        _bind.FlatStyle = FlatStyle.Flat;
-        _bind.BackColor = Theme.Surface;
-        _bind.ForeColor = Theme.Muted;
-        _bind.Font = BrowserVisual.UiSmall;
-        _bind.UseVisualStyleBackColor = false;
-        _bind.FlatAppearance.BorderSize = 1;
-        _bind.FlatAppearance.BorderColor = BrowserVisual.BorderStrong;
-        _bind.FlatAppearance.MouseOverBackColor = BrowserVisual.SurfaceHover;
         _bind.AutoSize = true;
-        _bind.MinimumSize = new Size(0, 26);
-        _bind.MaximumSize = new Size(int.MaxValue, 26);
-        _bind.Padding = new Padding(8, 3, 8, 3);
         _bind.Enabled = false;
         _bind.Click += (_, _) => ShowBind();
 
@@ -268,6 +239,8 @@ internal sealed class AnimationInspector : Panel
         ShowEmpty();
     }
 
+    public event EventHandler<AnimationLargeState>? LargeRequested;
+
     public void ShowEmpty()
     {
         _generation.Begin();
@@ -276,6 +249,7 @@ internal sealed class AnimationInspector : Panel
         _timer.Stop();
         _animation = null;
         _candidates = Array.Empty<AnimationSkinCandidate>();
+        _skin.Items.Clear();
         _play.Enabled = false;
         _scrub.Enabled = false;
         _skin.Enabled = false;
@@ -286,7 +260,27 @@ internal sealed class AnimationInspector : Panel
         _candidate.Text = "";
         _hint.Text = "";
         _frame.Text = "frame -";
+        _preview.Clear();
         _preview.ShowMessage("Select an animation clip.", false);
+    }
+
+    public void ResetForGame()
+    {
+        _assets = Array.Empty<AssetEntry>();
+        _profile = null;
+        ShowEmpty();
+    }
+
+    public void Pause()
+    {
+        if (!_playing)
+        {
+            return;
+        }
+
+        _playing = false;
+        _timer.Stop();
+        _play.Text = "Play";
     }
 
     public void SetClip(
@@ -296,7 +290,11 @@ internal sealed class AnimationInspector : Panel
     {
         ArgumentNullException.ThrowIfNull(animation);
         if (_animation is not null
+            && _profile is not null
+            && _profile.Root.Equals(profile.Root, StringComparison.OrdinalIgnoreCase)
             && _animation.NameHash == animation.NameHash
+            && _animation.ArchivePath.Equals(
+                animation.ArchivePath, StringComparison.OrdinalIgnoreCase)
             && _animation.BodyArchivePath.Equals(
                 animation.BodyArchivePath, StringComparison.OrdinalIgnoreCase)
             && _animation.Row.BodyOffset == animation.Row.BodyOffset
@@ -309,7 +307,7 @@ internal sealed class AnimationInspector : Panel
         _assets = assets;
         _profile = profile;
         _hash.Text = $"0x{animation.NameHash:X16}";
-        _subtitle.Text = $"{Path.GetFileName(animation.ArchivePath)} · reading clip...";
+        _subtitle.Text = $"{AnimationText.SourceLabel(animation)} · reading clip...";
         _candidate.Text = "Finding skins by bone name...";
         _hint.Text = "";
         _play.Enabled = false;
@@ -333,7 +331,10 @@ internal sealed class AnimationInspector : Panel
 
     private async Task LoadAsync()
     {
-        if (_animation is null || _profile is null)
+        AssetEntry? animation = _animation;
+        GameProfile? profile = _profile;
+        IReadOnlyList<AssetEntry> assets = _assets;
+        if (animation is null || profile is null)
         {
             return;
         }
@@ -343,7 +344,7 @@ internal sealed class AnimationInspector : Panel
         try
         {
             IReadOnlyList<AnimationSkinCandidate> candidates = await Task.Run(
-                () => AnimationSkinCandidates.Load(_profile, _assets, _animation),
+                () => AnimationSkinCandidates.Load(profile, assets, animation),
                 CancellationToken.None);
             if (IsDisposed || !_generation.IsCurrent(token))
             {
@@ -359,11 +360,11 @@ internal sealed class AnimationInspector : Panel
                     $"{candidate.Matched}/{candidate.AnimationBones} names");
             }
 
-            AnimationData data = ReadData();
+            AnimationData data = ReadData(animation);
             _duration = data.Duration;
             _boneCount = data.Bones.Count;
             _subtitle.Text =
-                $"{Path.GetFileName(_animation.ArchivePath)} · {data.Duration:F3} s · " +
+                $"{AnimationText.SourceLabel(animation)} · {data.Duration:F3} s · " +
                 $"{data.Bones.Count} bones";
             if (candidates.Count == 0)
             {
@@ -397,7 +398,10 @@ internal sealed class AnimationInspector : Panel
 
     private async Task LoadSkinAsync(AnimationSkinCandidate candidate, int? parentToken = null)
     {
-        if (_animation is null || _profile is null)
+        AssetEntry? animation = _animation;
+        GameProfile? profile = _profile;
+        IReadOnlyList<AssetEntry> assets = _assets;
+        if (animation is null || profile is null)
         {
             return;
         }
@@ -415,18 +419,25 @@ internal sealed class AnimationInspector : Panel
         _play.Enabled = false;
         _scrub.Enabled = false;
         _large.Enabled = false;
+        _bind.Enabled = false;
         _preview.ShowMessage("Loading preview...", false);
         try
         {
-            await _preview.LoadAsync(
-                _profile,
-                _assets,
+            bool loaded = await _preview.LoadAsync(
+                profile,
+                assets,
                 candidate.Skin,
                 candidate.SkeletonRoot,
-                _animation,
+                animation,
                 CancellationToken.None);
             if (IsDisposed || !_generation.IsCurrent(token))
             {
+                return;
+            }
+
+            if (!loaded)
+            {
+                UpdateFrameLabel();
                 return;
             }
 
@@ -437,7 +448,7 @@ internal sealed class AnimationInspector : Panel
             _large.Enabled = true;
             _bind.Enabled = true;
             _subtitle.Text =
-                $"{Path.GetFileName(_animation.ArchivePath)} · {_duration:F3} s · " +
+                $"{AnimationText.SourceLabel(animation)} · {_duration:F3} s · " +
                 $"{_preview.FrameCount} frames · {_boneCount} bones";
             _preview.Fit();
             UpdateFrameLabel();
@@ -531,36 +542,39 @@ internal sealed class AnimationInspector : Panel
 
     private void OpenLargePreview()
     {
-        if (_animation is null || _profile is null || _skin.SelectedIndex < 0
-            || _skin.SelectedIndex >= _candidates.Count)
+        AssetEntry? animation = _animation;
+        if (animation is null || _skin.SelectedIndex < 0
+            || _skin.SelectedIndex >= _candidates.Count
+            || !_preview.HasPose)
         {
             return;
         }
 
         AnimationSkinCandidate candidate = _candidates[_skin.SelectedIndex];
-        PoseForm form = new(
-            _profile,
-            _assets,
-            candidate.Skin,
+        AnimationLargeState large = new(
+            candidate.SkinHash,
+            candidate.Skin.ArchivePath,
+            candidate.Skin.Row.BodyOffset,
             candidate.SkeletonRoot,
-            _animation);
-        form.FormClosed += (_, _) => form.Dispose();
-        form.Show(this);
+            _preview.IsApplied ? _preview.Frame : 0,
+            _preview.IsApplied,
+            candidate.Matched,
+            candidate.AnimationBones,
+            candidate.SkeletonBones,
+            _duration,
+            _boneCount);
+        Pause();
+        LargeRequested?.Invoke(this, large);
     }
 
-    private AnimationData ReadData()
+    private AnimationData ReadData(AssetEntry animation)
     {
-        if (_animation is null)
-        {
-            return null!;
-        }
-
         using FileStream stream = new(
-            _animation.BodyArchivePath,
+            animation.BodyArchivePath,
             FileMode.Open,
             FileAccess.Read,
             FileShare.ReadWrite);
         return AnimationDecoder.ReadBody(
-            stream, _animation.BodyArchivePath, _animation.Row).Data;
+            stream, animation.BodyArchivePath, animation.Row).Data;
     }
 }

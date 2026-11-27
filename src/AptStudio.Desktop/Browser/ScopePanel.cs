@@ -2,18 +2,16 @@ using System.ComponentModel;
 
 namespace AptStudio.Desktop.Browser;
 
-internal sealed record ArchiveChoice(string Path, int Count)
+internal sealed record ArchiveChoice(string Path, int Count, string? Label = null)
 {
-    public string Name => string.IsNullOrEmpty(Path)
+    public string Name => Label ?? (string.IsNullOrEmpty(Path)
         ? "All archives"
-        : System.IO.Path.GetFileName(Path);
-
-    public string Display => Count > 0 ? $"{Name}  {Count:N0}" : Name;
+        : System.IO.Path.GetFileName(Path));
 
     public override string ToString() => Name;
 }
 
-internal sealed record TypeChoice(string Name, int Count, bool Wired);
+internal sealed record TypeChoice(string Name, int Count);
 
 internal sealed class ScopePanel : Panel
 {
@@ -24,7 +22,6 @@ internal sealed class ScopePanel : Panel
     private readonly Label _rescan = new();
     private readonly ListBox _archives = new();
     private readonly FlowLayoutPanel _types = new();
-    private readonly Label _legacy = new();
     private readonly List<ScopeRow> _typeRows = new();
     private readonly Dictionary<(string Text, int Width), string> _archiveLabels = new();
     private readonly ToolTip _tip = new();
@@ -118,8 +115,8 @@ internal sealed class ScopePanel : Panel
         _archives.ForeColor = Theme.Text;
         _archives.Font = BrowserVisual.Row;
         _archives.DrawMode = DrawMode.OwnerDrawFixed;
-        _archives.ItemHeight = 28;
-        _archives.IntegralHeight = false;
+        _archives.ItemHeight = 26;
+        _archives.IntegralHeight = true;
         _archives.HorizontalScrollbar = false;
         _archives.Dock = DockStyle.Fill;
         _archives.Margin = new Padding(0);
@@ -137,27 +134,16 @@ internal sealed class ScopePanel : Panel
         _types.Padding = new Padding(0);
         _types.SizeChanged += (_, _) => ResizeTypeRows();
 
-        _legacy.Text = "Open legacy browser";
-        _legacy.Font = BrowserVisual.RowSmall;
-        _legacy.ForeColor = BrowserVisual.Faint;
-        _legacy.BackColor = Theme.Surface;
-        _legacy.Dock = DockStyle.Fill;
-        _legacy.TextAlign = ContentAlignment.MiddleLeft;
-        _legacy.AutoEllipsis = true;
-        _legacy.Cursor = Cursors.Hand;
-        _legacy.MouseEnter += (_, _) => _legacy.ForeColor = Theme.Text;
-        _legacy.MouseLeave += (_, _) => _legacy.ForeColor = BrowserVisual.Faint;
-        _legacy.Click += (_, _) => LegacyRequested?.Invoke(this, EventArgs.Empty);
-
         Label gameLabel = BrowserVisual.CreateSectionLabel("GAME");
         Label scopeLabel = BrowserVisual.CreateSectionLabel("SCOPE");
         Label typeLabel = BrowserVisual.CreateSectionLabel("ASSET TYPE");
+        typeLabel.Margin = new Padding(6, 7, 0, 3);
 
         TableLayoutPanel root = new()
         {
             Dock = DockStyle.Fill,
             ColumnCount = 1,
-            RowCount = 10,
+            RowCount = 9,
             BackColor = Theme.Surface,
         };
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -169,7 +155,6 @@ internal sealed class ScopePanel : Panel
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 45));
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 55));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
         root.Controls.Add(gameLabel, 0, 0);
         root.Controls.Add(gameLine, 0, 1);
         root.Controls.Add(_gameSub, 0, 2);
@@ -179,7 +164,6 @@ internal sealed class ScopePanel : Panel
         root.Controls.Add(_archives, 0, 6);
         root.Controls.Add(typeLabel, 0, 7);
         root.Controls.Add(_types, 0, 8);
-        root.Controls.Add(_legacy, 0, 9);
         Controls.Add(root);
     }
 
@@ -190,8 +174,6 @@ internal sealed class ScopePanel : Panel
     public event EventHandler? OpenGameRequested;
 
     public event EventHandler? RescanRequested;
-
-    public event EventHandler? LegacyRequested;
 
     public void SetGame(string name, string sub)
     {
@@ -218,6 +200,7 @@ internal sealed class ScopePanel : Panel
                         && choice.Path.Equals(selectedPath, StringComparison.OrdinalIgnoreCase))
                     {
                         _archives.SelectedIndex = index;
+                        EnsureArchiveVisible(index);
                         break;
                     }
                 }
@@ -240,6 +223,7 @@ internal sealed class ScopePanel : Panel
                     && choice.Path.Equals(path, StringComparison.OrdinalIgnoreCase))
                 {
                     _archives.SelectedIndex = index;
+                    EnsureArchiveVisible(index);
                     break;
                 }
             }
@@ -250,27 +234,43 @@ internal sealed class ScopePanel : Panel
         }
     }
 
-    public void SetAllCount(int count)
+    public void SetArchiveCounts(IReadOnlyDictionary<string, int> counts, string allLabel)
     {
-        if (_archives.Items.Count == 0
-            || _archives.Items[0] is not ArchiveChoice all
-            || all.Path.Length != 0)
+        if (_archives.Items.Count == 0)
         {
             return;
         }
 
-        if (all.Count == count)
-        {
-            return;
-        }
-
+        int selected = _archives.SelectedIndex;
         _suppress = true;
+        _archives.BeginUpdate();
         try
         {
-            _archives.Items[0] = all with { Count = count };
+            for (int index = 0; index < _archives.Items.Count; index++)
+            {
+                if (_archives.Items[index] is not ArchiveChoice choice)
+                {
+                    continue;
+                }
+
+                ArchiveChoice next = choice.Path.Length == 0
+                    ? new ArchiveChoice(
+                        "",
+                        counts.GetValueOrDefault(""),
+                        allLabel == "All archives" ? null : allLabel)
+                    : choice with { Count = counts.GetValueOrDefault(choice.Path) };
+                if (next.Count != choice.Count || next.Label != choice.Label)
+                {
+                    _archives.Items[index] = next;
+                }
+            }
+
+            _archives.SelectedIndex = selected;
+            EnsureArchiveVisible(selected);
         }
         finally
         {
+            _archives.EndUpdate();
             _suppress = false;
         }
 
@@ -278,12 +278,30 @@ internal sealed class ScopePanel : Panel
         _archives.Invalidate();
     }
 
+    private void EnsureArchiveVisible(int index)
+    {
+        if (index < 0 || _archives.Items.Count == 0 || _archives.ClientSize.Height <= 0)
+        {
+            return;
+        }
+
+        int visible = Math.Max(1, _archives.ClientSize.Height / _archives.ItemHeight);
+        if (index < _archives.TopIndex)
+        {
+            _archives.TopIndex = index;
+        }
+        else if (index >= _archives.TopIndex + visible)
+        {
+            _archives.TopIndex = Math.Max(0, index - visible + 1);
+        }
+    }
+
     public void SetTypes(IReadOnlyList<TypeChoice> types, string active)
     {
         _types.SuspendLayout();
         try
         {
-            _types.Controls.Clear();
+            BrowserVisual.DisposeChildren(_types);
             _typeRows.Clear();
             foreach (TypeChoice type in types)
             {
@@ -293,7 +311,7 @@ internal sealed class ScopePanel : Panel
                     Count = type.Count,
                     ShowCount = type.Count > 0,
                     Width = RowWidth(),
-                    Margin = new Padding(0, 0, 0, 2),
+                    Margin = new Padding(0, 0, 0, 1),
                 };
                 TypeChoice captured = type;
                 row.Clicked += () => TypeSelected?.Invoke(captured.Name);
@@ -467,7 +485,7 @@ internal sealed class ScopeRow : Control
             | ControlStyles.ResizeRedraw
             | ControlStyles.Selectable,
             true);
-        Height = 28;
+        Height = 26;
         TabStop = true;
         Cursor = Cursors.Hand;
         SetStyle(ControlStyles.StandardClick, true);

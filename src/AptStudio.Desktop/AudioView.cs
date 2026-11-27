@@ -1,5 +1,6 @@
 using System.Globalization;
 using AptStudio.Core.Audio;
+using AptStudio.Desktop.Browser;
 
 namespace AptStudio.Desktop;
 
@@ -49,17 +50,9 @@ internal sealed class AudioView : Panel
         _source.Dock = DockStyle.Top;
         _source.Height = 44;
 
+        BrowserButtons.Style(_play, BrowserButtonRole.Primary, Theme.Background);
         _play.Text = "Play";
         _play.AutoSize = true;
-        _play.FlatStyle = FlatStyle.Flat;
-        _play.BackColor = Theme.Accent;
-        _play.ForeColor = Color.White;
-        _play.Padding = new Padding(14, 0, 14, 0);
-        _play.MinimumSize = new Size(80, 28);
-        _play.UseVisualStyleBackColor = false;
-        _play.FlatAppearance.BorderSize = 0;
-        _play.FlatAppearance.MouseOverBackColor = Theme.Selection;
-        _play.FlatAppearance.MouseDownBackColor = Theme.SelectionInactive;
         _play.Enabled = false;
         _play.Click += (_, _) =>
         {
@@ -73,17 +66,9 @@ internal sealed class AudioView : Panel
             }
         };
 
+        BrowserButtons.Style(_export, BrowserButtonRole.Ordinary, Theme.Background);
         _export.Text = "Export Ogg";
         _export.AutoSize = true;
-        _export.FlatStyle = FlatStyle.Flat;
-        _export.BackColor = Theme.Surface;
-        _export.ForeColor = Theme.Text;
-        _export.Padding = new Padding(10, 0, 10, 0);
-        _export.MinimumSize = new Size(90, 28);
-        _export.UseVisualStyleBackColor = false;
-        _export.FlatAppearance.BorderSize = 0;
-        _export.FlatAppearance.MouseOverBackColor = Theme.SelectionInactive;
-        _export.FlatAppearance.MouseDownBackColor = Theme.Selection;
         _export.Enabled = false;
         _export.Click += (_, _) => ExportRequested?.Invoke();
 

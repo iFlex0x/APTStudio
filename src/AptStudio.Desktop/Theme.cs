@@ -17,6 +17,16 @@ internal static class Theme
     public static readonly Color Error = Color.FromArgb(224, 108, 117);
 
     public static Icon AppIcon { get; } = LoadAppIcon();
+    public static Bitmap AppMark { get; } = LoadAppMark();
+
+    private static Bitmap LoadAppMark()
+    {
+        using Stream stream = typeof(Theme).Assembly.GetManifestResourceStream(
+            "AptStudio.Desktop.Mark.png")
+            ?? throw new InvalidOperationException("The APTStudio mark is missing.");
+        using Image image = Image.FromStream(stream);
+        return new Bitmap(image);
+    }
 
     private static Icon LoadAppIcon()
     {

@@ -15,6 +15,8 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="AptStudio.Desktop.Tests" />
+    <EmbeddedResource Include="..\..\assets\aptstudio-mark.png"
+                      LogicalName="AptStudio.Desktop.Mark.png" />
   </ItemGroup>
 
 </Project>

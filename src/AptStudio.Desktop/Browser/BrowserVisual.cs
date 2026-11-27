@@ -2,22 +2,19 @@ using System.Drawing;
 
 namespace AptStudio.Desktop.Browser;
 
-// Native translation of the review prototype. Sizes are in points where a
-// 96 DPI pixel is 0.75pt, so 10px labels sit at 7.5pt and 15px titles at
-// 11.25pt.
 internal static class BrowserVisual
 {
-    public static readonly Color Faint = Color.FromArgb(111, 111, 111);
+    public static readonly Color Faint = Color.FromArgb(143, 143, 143);
     public static readonly Color BorderStrong = Color.FromArgb(74, 74, 79);
-    public static readonly Color SurfaceRaised = Color.FromArgb(45, 45, 48);
+    public static readonly Color SurfaceRaised = Theme.GridHeader;
     public static readonly Color SurfaceHover = Color.FromArgb(51, 51, 55);
     public static readonly Color AccentDim = Color.FromArgb(29, 76, 96);
     public static readonly Color RowBorder = Color.FromArgb(42, 42, 43);
     public static readonly Color PrimaryText = Color.FromArgb(6, 32, 43);
+    public static readonly Color Crumb = Color.FromArgb(190, 190, 190);
 
     public static readonly Font Ui = new("Segoe UI", 9f);
     public static readonly Font UiSmall = new("Segoe UI", 8.25f);
-    public static readonly Font UiSemibold = new("Segoe UI Semibold", 9f);
     public static readonly Font Title = new("Segoe UI Semibold", 11.25f);
     public static readonly Font Brand = new("Segoe UI Semibold", 9.75f);
     public static readonly Font MonoStrong = new("Consolas", 10.5f, FontStyle.Bold);
@@ -26,6 +23,17 @@ internal static class BrowserVisual
     public static readonly Font RowSmall = new("Segoe UI", 7.875f);
 
     public const int ThumbnailSize = 34;
+
+    public static void DisposeChildren(Control host)
+    {
+        Control[] children = new Control[host.Controls.Count];
+        host.Controls.CopyTo(children, 0);
+        host.Controls.Clear();
+        foreach (Control child in children)
+        {
+            child.Dispose();
+        }
+    }
 
     public static Label CreateSectionLabel(string text)
     {
@@ -56,9 +64,9 @@ internal static class BrowserVisual
         grid.EnableHeadersVisualStyles = false;
         grid.ColumnHeadersHeight = 30;
         grid.RowTemplate.Height = 36;
-        grid.ColumnHeadersDefaultCellStyle.BackColor = Theme.Surface;
+        grid.ColumnHeadersDefaultCellStyle.BackColor = Theme.GridHeader;
         grid.ColumnHeadersDefaultCellStyle.ForeColor = Faint;
-        grid.ColumnHeadersDefaultCellStyle.SelectionBackColor = Theme.Surface;
+        grid.ColumnHeadersDefaultCellStyle.SelectionBackColor = Theme.GridHeader;
         grid.ColumnHeadersDefaultCellStyle.SelectionForeColor = Faint;
         grid.ColumnHeadersDefaultCellStyle.Font = Section;
         grid.ColumnHeadersDefaultCellStyle.Padding = new Padding(6, 0, 6, 0);

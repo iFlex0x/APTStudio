@@ -47,6 +47,16 @@ public sealed class PngWriterTests
     }
 
     [Fact]
+    public void RejectsWrappedBufferArithmetic()
+    {
+        // 65536 * 16384 * 4 wraps to 0 in 32-bit arithmetic, which would match an empty buffer.
+        ArgumentException error = Assert.Throws<ArgumentException>(
+            () => PngWriter.EncodeRgba([], 65536, 16384));
+
+        Assert.Equal("rgba", error.ParamName);
+    }
+
+    [Fact]
     public void RejectsMismatchedBuffer()
     {
         Assert.Throws<ArgumentException>(() => PngWriter.EncodeRgba(new byte[3], 1, 1));

@@ -60,20 +60,13 @@ internal sealed class SkinPartPreview : Panel
         ConfigureDetail(_meta, 7.9f, Theme.Muted, false);
         ConfigureDetail(_meta2, 7.9f, Theme.Muted, false);
 
+        BrowserButtons.Style(
+            _openMesh, BrowserButtonRole.Ordinary, BrowserVisual.SurfaceRaised);
         _openMesh.Text = "Open mesh";
+        _openMesh.AutoSize = false;
         _openMesh.Dock = DockStyle.Fill;
-        _openMesh.Height = 24;
-        _openMesh.Margin = new Padding(0, 4, 0, 0);
-        _openMesh.FlatStyle = FlatStyle.Flat;
-        _openMesh.BackColor = BrowserVisual.SurfaceRaised;
-        _openMesh.ForeColor = Theme.Text;
-        _openMesh.Font = BrowserVisual.RowSmall;
-        _openMesh.Padding = new Padding(8, 0, 8, 0);
-        _openMesh.UseVisualStyleBackColor = false;
-        _openMesh.FlatAppearance.BorderSize = 1;
-        _openMesh.FlatAppearance.BorderColor = BrowserVisual.BorderStrong;
-        _openMesh.FlatAppearance.MouseOverBackColor = BrowserVisual.SurfaceHover;
-        _openMesh.FlatAppearance.MouseDownBackColor = Theme.Selection;
+        _openMesh.Height = 26;
+        _openMesh.Margin = new Padding(0);
         _openMesh.Enabled = false;
         _openMesh.Click += (_, _) =>
         {

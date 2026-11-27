@@ -61,19 +61,9 @@ internal sealed class MeshInspector : Panel
             _view.SetWireframe(_wire.Checked);
         };
 
+        BrowserButtons.Style(_fit, BrowserButtonRole.Quiet, Theme.Surface);
         _fit.Text = "Fit";
-        _fit.FlatStyle = FlatStyle.Flat;
-        _fit.BackColor = Theme.Surface;
-        _fit.ForeColor = Theme.Muted;
-        _fit.Font = BrowserVisual.RowSmall;
-        _fit.UseVisualStyleBackColor = false;
-        _fit.FlatAppearance.BorderSize = 1;
-        _fit.FlatAppearance.BorderColor = BrowserVisual.BorderStrong;
-        _fit.FlatAppearance.MouseOverBackColor = BrowserVisual.SurfaceHover;
         _fit.AutoSize = true;
-        _fit.MinimumSize = new Size(0, 26);
-        _fit.MaximumSize = new Size(int.MaxValue, 26);
-        _fit.Padding = new Padding(8, 2, 8, 2);
         _fit.Margin = new Padding(0, 4, 0, 0);
         _fit.Click += (_, _) => _view.Fit();
 
@@ -82,18 +72,9 @@ internal sealed class MeshInspector : Panel
         _camera.AutoSize = true;
         _camera.Margin = new Padding(0, 7, 0, 0);
 
+        BrowserButtons.Style(_usedBy, BrowserButtonRole.Primary, Theme.Surface);
         _usedBy.Text = "Used by 0";
-        _usedBy.FlatStyle = FlatStyle.Flat;
-        _usedBy.BackColor = Theme.Accent;
-        _usedBy.ForeColor = BrowserVisual.PrimaryText;
-        _usedBy.Font = BrowserVisual.UiSemibold;
         _usedBy.AutoSize = true;
-        _usedBy.MinimumSize = new Size(0, 26);
-        _usedBy.MaximumSize = new Size(int.MaxValue, 26);
-        _usedBy.Padding = new Padding(10, 3, 10, 3);
-        _usedBy.UseVisualStyleBackColor = false;
-        _usedBy.FlatAppearance.BorderSize = 0;
-        _usedBy.FlatAppearance.MouseOverBackColor = Color.FromArgb(111, 208, 251);
         _usedBy.Enabled = false;
         _usedBy.Click += (_, _) => UsedByRequested?.Invoke(this, EventArgs.Empty);
 

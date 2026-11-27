@@ -14,8 +14,11 @@ using AptStudio.Core.Textures;
 
 namespace AptStudio.Desktop.Browser;
 
-internal sealed class BrowserForm : Form
+internal sealed class BrowserForm : Form, IMessageFilter
 {
+    private const int WmXButtonDown = 0x020B;
+    private const int WmXButtonUp = 0x020C;
+
     private readonly ScopePanel _scope = new();
     private readonly SplitContainer _outer = new();
     private readonly SplitContainer _inner = new();
@@ -30,9 +33,12 @@ internal sealed class BrowserForm : Form
     private readonly MaterialSlotInspector _slotInspector = new();
     private readonly AnimationInspector _animationInspector = new();
     private readonly MeshInspector _meshInspector = new();
-    private readonly MeshSkinChooserView _meshSkins = new();
-    private readonly SkeletonSkinChooserView _skeletonSkins = new();
+    private readonly SkinChooserView _meshSkins = new(showParts: true);
+    private readonly SkinChooserView _skeletonSkins = new(showParts: false);
     private readonly Panel _poseHost = new();
+    private readonly Panel _animationLargeHost = new();
+    private AnimationLargeView? _animationLargeView;
+    private string? _animationLargeKey;
     private readonly SkinPartView _skinView = new();
     private readonly SkeletonView _skeletonView = new();
     private readonly AudioView _audioView = new();
@@ -42,14 +48,13 @@ internal sealed class BrowserForm : Form
     private readonly Label _resultsTitle = new();
     private readonly Label _resultsCount = new();
     private readonly Label _resultsBody = new();
-    private readonly Label _inspectorTitle = new();
-    private readonly Label _inspectorBody = new();
     private readonly Label _crumbs = new();
     private readonly Button _back = new();
     private readonly Button _forward = new();
     private readonly Button _scopeButton = new();
     private readonly Button _filterButton = new();
     private readonly TableLayoutPanel _textureToolbar = new();
+    private readonly Label _sortLabel = new();
     private readonly ComboBox _sortCombo = new();
     private readonly Button _sortDirection = new();
     private readonly Button _exportSelected = new();
@@ -96,6 +101,7 @@ internal sealed class BrowserForm : Form
     private int _audioListVersion;
     private bool _audioListBuilding;
     private bool _audioBusy;
+    private int _audioGeneration;
     private byte[]? _audioOgg;
     private string? _audioOggKey;
     private readonly TextBox _search = new();
@@ -122,7 +128,7 @@ internal sealed class BrowserForm : Form
     [
         new("Hash", 140, Mono: true),
         new("Archive", 0, Flexible: true, Muted: true, MiddleEllipsis: true),
-        new("Occurrences", 64, Right: true, Muted: true),
+        new("Occurrences", 78, Right: true, Muted: true),
     ];
     private static readonly AssetColumn[] MeshColumns =
     [
@@ -183,6 +189,8 @@ internal sealed class BrowserForm : Form
     private string _lastArchive = "";
     private string _typesArchive = "";
     private IReadOnlyDictionary<string, int> _animationCounts =
+        new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+    private IReadOnlyDictionary<string, int> _textureCounts =
         new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
     private IReadOnlyDictionary<ulong, int> _animationOccurrences =
         new Dictionary<ulong, int>();
@@ -312,12 +320,14 @@ internal sealed class BrowserForm : Form
         _cancelExport.Click += (_, _) => _exportCancel?.Cancel();
         _copyHash.Click += (_, _) => CopySelectedHash();
         KeyDown += OnKeyDown;
+        Application.AddMessageFilter(this);
         _searchTimer.Tick += (_, _) =>
         {
             _searchTimer.Stop();
             ApplySearch();
         };
         Resize += (_, _) => OnResize();
+        _inner.Panel1.Resize += (_, _) => UpdateToolbarLayout();
         Shown += async (_, _) => await OnShownAsync();
         FormClosing += (_, _) =>
         {
@@ -344,6 +354,7 @@ internal sealed class BrowserForm : Form
     {
         if (disposing)
         {
+            Application.RemoveMessageFilter(this);
             _thumbnailCache?.Dispose();
             _meshThumbnails?.Dispose();
             _loadCancel?.Dispose();
@@ -392,18 +403,31 @@ internal sealed class BrowserForm : Form
         bar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         bar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         bar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 220));
-        bar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 62));
+        bar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 72));
         bar.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
-        Label brand = new()
+        FlowLayoutPanel brand = new()
+        {
+            AutoSize = true,
+            WrapContents = false,
+            Margin = new Padding(0, 0, 12, 0),
+            Anchor = AnchorStyles.Left,
+        };
+        brand.Controls.Add(new PictureBox
+        {
+            Image = Theme.AppMark,
+            SizeMode = PictureBoxSizeMode.Zoom,
+            Size = new Size(28, 27),
+            Margin = new Padding(0, 0, 4, 0),
+        });
+        brand.Controls.Add(new Label
         {
             Text = "APTStudio",
             AutoSize = true,
             Font = BrowserVisual.Brand,
             ForeColor = Theme.Text,
-            Margin = new Padding(0, 0, 12, 0),
-            Anchor = AnchorStyles.Left,
-        };
+            Margin = new Padding(0, 5, 0, 0),
+        });
 
         FlowLayoutPanel nav = new()
         {
@@ -412,8 +436,10 @@ internal sealed class BrowserForm : Form
             Margin = new Padding(0, 0, 8, 0),
             Anchor = AnchorStyles.Left,
         };
-        StyleButton(_back, "←");
-        StyleButton(_forward, "→");
+        BrowserButtons.Style(_back, BrowserButtonRole.Ordinary, Theme.Surface);
+        BrowserButtons.Style(_forward, BrowserButtonRole.Ordinary, Theme.Surface);
+        _back.Text = "←";
+        _forward.Text = "→";
         _back.AutoSize = false;
         _forward.AutoSize = false;
         _back.Width = 30;
@@ -434,26 +460,19 @@ internal sealed class BrowserForm : Form
         nav.Controls.Add(_back);
         nav.Controls.Add(_forward);
 
-        _scopeButton.Text = "No game";
+        BrowserButtons.Style(_scopeButton, BrowserButtonRole.Ordinary, Theme.Surface);
+        _scopeButton.Text = "Scope";
         _scopeButton.AutoSize = false;
-        _scopeButton.Width = 96;
-        _scopeButton.Height = 24;
-        _scopeButton.Font = BrowserVisual.RowSmall;
-        _scopeButton.ForeColor = Theme.Muted;
-        _scopeButton.BackColor = Theme.Background;
-        _scopeButton.TextAlign = ContentAlignment.MiddleCenter;
-        _scopeButton.Padding = new Padding(6, 0, 6, 0);
+        _scopeButton.Width = 78;
+        _scopeButton.Height = 26;
         _scopeButton.AutoEllipsis = true;
-        _scopeButton.FlatAppearance.BorderColor = BrowserVisual.BorderStrong;
-        _scopeButton.FlatAppearance.BorderSize = 1;
-        _scopeButton.FlatAppearance.MouseOverBackColor = BrowserVisual.SurfaceHover;
         _scopeButton.Margin = new Padding(0, 0, 10, 0);
         _scopeButton.AccessibleName = "Toggle scope pane";
 
         _crumbs.Dock = DockStyle.Fill;
-        _crumbs.Font = BrowserVisual.RowSmall;
+        _crumbs.Font = BrowserVisual.Row;
         _crumbs.TextAlign = ContentAlignment.MiddleLeft;
-        _crumbs.ForeColor = Theme.Muted;
+        _crumbs.ForeColor = BrowserVisual.Crumb;
         _crumbs.AutoEllipsis = true;
         _crumbs.Margin = new Padding(0, 0, 12, 0);
 
@@ -468,9 +487,10 @@ internal sealed class BrowserForm : Form
         _search.Margin = new Padding(0, 0, 6, 0);
         _search.Enabled = false;
 
-        StyleButton(_filterButton, "Filter");
+        BrowserButtons.Style(_filterButton, BrowserButtonRole.Ordinary, Theme.Surface);
+        _filterButton.Text = "Filter";
         _filterButton.AutoSize = false;
-        _filterButton.Width = 54;
+        _filterButton.Width = 64;
         _filterButton.Height = 26;
         _filterButton.Enabled = false;
         _filterButton.Anchor = AnchorStyles.Left;
@@ -510,7 +530,7 @@ internal sealed class BrowserForm : Form
         FlowLayoutPanel titleLine = new()
         {
             Dock = DockStyle.Top,
-            Height = 24,
+            Height = 28,
             FlowDirection = FlowDirection.LeftToRight,
             WrapContents = false,
             BackColor = Theme.Background,
@@ -532,41 +552,25 @@ internal sealed class BrowserForm : Form
         titleLine.Controls.Add(_resultsTitle);
         titleLine.Controls.Add(_resultsCount);
 
-        StyleButton(_openSkin, "Open skin");
-        _openSkin.AutoSize = true;
-        _openSkin.MinimumSize = new Size(0, 24);
-        _openSkin.Font = BrowserVisual.RowSmall;
-        _openSkin.Margin = new Padding(8, 0, 0, 0);
+        StyleQuietButton(_openSkin, "Open skin");
         _openSkin.Visible = false;
         _openSkin.Enabled = false;
         _openSkin.Click += (_, _) => OpenSkinFromList();
         titleLine.Controls.Add(_openSkin);
 
-        StyleButton(_openSkeleton, "Open skeleton");
-        _openSkeleton.AutoSize = true;
-        _openSkeleton.MinimumSize = new Size(0, 24);
-        _openSkeleton.Font = BrowserVisual.RowSmall;
-        _openSkeleton.Margin = new Padding(8, 0, 0, 0);
+        StyleQuietButton(_openSkeleton, "Open skeleton");
         _openSkeleton.Visible = false;
         _openSkeleton.Enabled = false;
         _openSkeleton.Click += (_, _) => OpenSkeletonFromList();
         titleLine.Controls.Add(_openSkeleton);
 
-        StyleButton(_openMaterial, "Open material");
-        _openMaterial.AutoSize = true;
-        _openMaterial.MinimumSize = new Size(0, 24);
-        _openMaterial.Font = BrowserVisual.RowSmall;
-        _openMaterial.Margin = new Padding(8, 0, 0, 0);
+        StyleQuietButton(_openMaterial, "Open material");
         _openMaterial.Visible = false;
         _openMaterial.Enabled = false;
         _openMaterial.Click += (_, _) => OpenMaterialFromList();
         titleLine.Controls.Add(_openMaterial);
 
-        StyleButton(_copyHash, "Copy hash");
-        _copyHash.AutoSize = true;
-        _copyHash.MinimumSize = new Size(0, 24);
-        _copyHash.Font = BrowserVisual.RowSmall;
-        _copyHash.Margin = new Padding(8, 0, 0, 0);
+        StyleQuietButton(_copyHash, "Copy hash");
         _copyHash.Visible = false;
         _copyHash.Enabled = false;
         titleLine.Controls.Add(_copyHash);
@@ -603,15 +607,13 @@ internal sealed class BrowserForm : Form
         _textureToolbar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         _textureToolbar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         _textureToolbar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        Label sortLabel = new()
-        {
-            Text = "Sort",
-            ForeColor = Theme.Muted,
-            Font = BrowserVisual.RowSmall,
-            AutoSize = true,
-            Anchor = AnchorStyles.Left,
-            Margin = new Padding(0, 0, 5, 0),
-        };
+        _sortLabel.Text = "Sort";
+        _sortLabel.ForeColor = Theme.Muted;
+        _sortLabel.Font = BrowserVisual.RowSmall;
+        _sortLabel.AutoSize = true;
+        _sortLabel.Anchor = AnchorStyles.Left;
+        _sortLabel.Margin = new Padding(0, 0, 5, 0);
+        _sortLabel.TextAlign = ContentAlignment.MiddleLeft;
         _sortCombo.DropDownStyle = ComboBoxStyle.DropDownList;
         _sortCombo.Width = 124;
         _sortCombo.Font = BrowserVisual.UiSmall;
@@ -622,24 +624,24 @@ internal sealed class BrowserForm : Form
         _sortCombo.SelectedIndex = 0;
         _sortCombo.Anchor = AnchorStyles.Left;
         _sortCombo.Margin = new Padding(0, 0, 4, 0);
-        StyleButton(_sortDirection, "Asc");
+        BrowserButtons.Style(_sortDirection, BrowserButtonRole.Ordinary, Theme.Background);
+        _sortDirection.Text = "Asc";
         _sortDirection.AutoSize = false;
-        _sortDirection.Width = 46;
-        _sortDirection.Height = 24;
-        _sortDirection.Font = BrowserVisual.RowSmall;
+        _sortDirection.Width = 60;
+        _sortDirection.Height = 26;
         _sortDirection.Anchor = AnchorStyles.Left;
         _sortDirection.Margin = new Padding(0, 0, 10, 0);
-        StyleButton(_exportSelected, "Export selected");
+        BrowserButtons.Style(_exportSelected, BrowserButtonRole.Ordinary, Theme.Background);
+        _exportSelected.Text = "Export selected";
         _exportSelected.AutoSize = true;
-        _exportSelected.Height = 24;
-        _exportSelected.Font = BrowserVisual.RowSmall;
+        _exportSelected.Height = 26;
         _exportSelected.Anchor = AnchorStyles.Left;
         _exportSelected.Margin = new Padding(0, 0, 8, 0);
         _exportSelected.Enabled = false;
-        StyleButton(_cancelExport, "Cancel");
+        BrowserButtons.Style(_cancelExport, BrowserButtonRole.Ordinary, Theme.Background);
+        _cancelExport.Text = "Cancel";
         _cancelExport.AutoSize = true;
-        _cancelExport.Height = 24;
-        _cancelExport.Font = BrowserVisual.RowSmall;
+        _cancelExport.Height = 26;
         _cancelExport.Anchor = AnchorStyles.Left;
         _cancelExport.Margin = new Padding(0);
         _cancelExport.Visible = false;
@@ -650,7 +652,7 @@ internal sealed class BrowserForm : Form
         _selectionCount.Anchor = AnchorStyles.Right;
         _selectionCount.Margin = new Padding(0);
         _selectionCount.TextAlign = ContentAlignment.MiddleRight;
-        _textureToolbar.Controls.Add(sortLabel, 0, 0);
+        _textureToolbar.Controls.Add(_sortLabel, 0, 0);
         _textureToolbar.Controls.Add(_sortCombo, 1, 0);
         _textureToolbar.Controls.Add(_sortDirection, 2, 0);
         _textureToolbar.Controls.Add(_exportSelected, 3, 0);
@@ -672,6 +674,8 @@ internal sealed class BrowserForm : Form
         _skeletonSkins.Visible = false;
         _poseHost.Dock = DockStyle.Fill;
         _poseHost.Visible = false;
+        _animationLargeHost.Dock = DockStyle.Fill;
+        _animationLargeHost.Visible = false;
         _skinView.Dock = DockStyle.Fill;
         _skinView.Visible = false;
         _skeletonView.Dock = DockStyle.Fill;
@@ -683,6 +687,7 @@ internal sealed class BrowserForm : Form
         _results.Controls.Add(_meshSkins);
         _results.Controls.Add(_skeletonSkins);
         _results.Controls.Add(_poseHost);
+        _results.Controls.Add(_animationLargeHost);
         _results.Controls.Add(_skinView);
         _results.Controls.Add(_skeletonView);
         _results.Controls.Add(_textureHost);
@@ -691,7 +696,8 @@ internal sealed class BrowserForm : Form
         _results.Controls.Add(titleLine);
         _textureToolbar.PerformLayout();
 
-        ConfigurePanel(_inspector, _inspectorTitle, _inspectorBody);
+        _inspector.Dock = DockStyle.Fill;
+        _inspector.Padding = new Padding(14, 13, 14, 10);
         _inspector.BackColor = Theme.Surface;
         _textureInspector.Dock = DockStyle.Fill;
         _textureInspector.Visible = false;
@@ -726,49 +732,19 @@ internal sealed class BrowserForm : Form
         return _status;
     }
 
-    private static void ConfigurePanel(Panel panel, Label title, Label body)
+    private static void StyleQuietButton(Button button, string text)
     {
-        panel.Dock = DockStyle.Fill;
-        panel.Padding = new Padding(14, 13, 14, 10);
-
-        title.Dock = DockStyle.Top;
-        title.Height = 24;
-        title.Font = BrowserVisual.Title;
-        title.ForeColor = Theme.Text;
-        title.AutoEllipsis = true;
-        title.Text = "";
-
-        body.Dock = DockStyle.Top;
-        body.Height = 60;
-        body.Font = BrowserVisual.UiSmall;
-        body.ForeColor = Theme.Muted;
-        body.AutoEllipsis = true;
-        body.Text = "";
-
-        panel.Controls.Add(body);
-        panel.Controls.Add(title);
-    }
-
-    private static void StyleButton(Button button, string text)
-    {
+        BrowserButtons.Style(button, BrowserButtonRole.Quiet, Theme.Background);
         button.Text = text;
-        button.FlatStyle = FlatStyle.Flat;
-        button.BackColor = Theme.Surface;
-        button.ForeColor = Theme.Text;
-        button.Font = BrowserVisual.Ui;
-        button.UseVisualStyleBackColor = false;
-        button.FlatAppearance.BorderSize = 1;
-        button.FlatAppearance.BorderColor = BrowserVisual.BorderStrong;
-        button.FlatAppearance.MouseOverBackColor = BrowserVisual.SurfaceHover;
-        button.FlatAppearance.MouseDownBackColor = BrowserVisual.AccentDim;
-        button.Margin = new Padding(0, 0, 4, 0);
+        button.AutoSize = true;
+        button.Height = 26;
+        button.Margin = new Padding(8, 0, 0, 0);
     }
 
     private void WireScope()
     {
         _scope.OpenGameRequested += (_, _) => OpenGameFolder();
         _scope.RescanRequested += (_, _) => Rescan();
-        _scope.LegacyRequested += (_, _) => new MainForm().Show(this);
         _scope.ArchiveSelected += path => SwitchArchive(path);
         _scope.TypeSelected += name => SwitchType(name);
     }
@@ -948,6 +924,7 @@ internal sealed class BrowserForm : Form
             }
         };
         _chooser.OpenRequested += (_, row) => OpenMaterial(row);
+        _animationInspector.LargeRequested += (_, large) => OpenAnimationLarge(large);
         _materialSlots.SelectionChanged += (_, _) => OnMaterialSlotSelected();
         _materialSlots.OpenTextureRequested += (_, slot) =>
         {
@@ -963,8 +940,8 @@ internal sealed class BrowserForm : Form
         _meshInspector.UsedByRequested += async (_, _) => await OpenMeshSkinsAsync();
         _meshInspector.CameraChanged += (_, _) => UpdateMeshViewState();
         _meshInspector.WireframeChanged += (_, _) => UpdateMeshViewState();
-        _meshSkins.OpenRequested += (_, row) => OpenSkin(row);
-        _skeletonSkins.OpenRequested += (_, row) => OpenSkinFromSkeleton(row);
+        _meshSkins.OpenRequested += (_, row) => OpenSkin((SkinLinkEntry)row.Tag);
+        _skeletonSkins.OpenRequested += (_, row) => OpenSkinFromSkeleton((SkinSkeletonUse)row.Tag);
         _skeletonView.UsedByRequested += (_, _) => ShowSkeletonSkins();
         _skinView.SkeletonRequested += async root => await OpenSkeletonAsync(root);
         _skinView.MeshRequested += hash => OpenMeshFromSkin(hash);
@@ -1014,6 +991,11 @@ internal sealed class BrowserForm : Form
 
     private void OpenGameFolder()
     {
+        if (!CanChangeGame())
+        {
+            return;
+        }
+
         using FolderBrowserDialog dialog = new()
         {
             SelectedPath = _profile?.Root ?? Settings.LoadLastGameRoot() ?? "",
@@ -1028,10 +1010,68 @@ internal sealed class BrowserForm : Form
 
     private void Rescan()
     {
-        if (_profile is not null && !_loading && !_exporting)
+        if (_profile is not null && CanChangeGame())
         {
             _ = LoadGameAsync(_profile.Root);
         }
+    }
+
+    private bool CanChangeGame()
+    {
+        if (_loading)
+        {
+            _status.Text = "Wait for the current game to finish loading.";
+            return false;
+        }
+
+        if (_exporting)
+        {
+            _status.Text = "Cancel the texture export before changing games.";
+            return false;
+        }
+
+        if (_audioBusy)
+        {
+            _status.Text = "Wait for audio to finish before changing games.";
+            return false;
+        }
+
+        return true;
+    }
+
+    public bool PreFilterMessage(ref Message message)
+    {
+        if (message.Msg is not (WmXButtonDown or WmXButtonUp))
+        {
+            return false;
+        }
+
+        Control? target = Control.FromHandle(message.HWnd);
+        if (target is null || target.FindForm() != this)
+        {
+            return false;
+        }
+
+        int button = (int)((message.WParam.ToInt64() >> 16) & 0xFFFF);
+        BrowserSideButton action = BrowserShortcuts.MapSideButton(button);
+        if (action == BrowserSideButton.None)
+        {
+            return false;
+        }
+
+        if (message.Msg == WmXButtonDown)
+        {
+            if (action == BrowserSideButton.Back)
+            {
+                Back();
+            }
+            else
+            {
+                Forward();
+            }
+        }
+
+        return true;
     }
 
     private void OnKeyDown(object? sender, KeyEventArgs e)
@@ -1057,18 +1097,17 @@ internal sealed class BrowserForm : Form
 
         e.Handled = true;
         e.SuppressKeyPress = true;
-        if (_loading || _exporting)
-        {
-            return;
-        }
-
         switch (command)
         {
             case BrowserCommand.OpenGame:
                 OpenGameFolder();
                 break;
             case BrowserCommand.Export:
-                _ = ExportSelectedAsync();
+                if (!_loading && !_exporting && !_audioBusy)
+                {
+                    _ = ExportSelectedAsync();
+                }
+
                 break;
             case BrowserCommand.Rescan:
                 Rescan();
@@ -1085,6 +1124,72 @@ internal sealed class BrowserForm : Form
             return;
         }
 
+        if (!CanChangeGame())
+        {
+            return;
+        }
+
+        _loadCancel?.Cancel();
+        _loadCancel?.Dispose();
+        CancellationTokenSource cancel = new();
+        _loadCancel = cancel;
+        _loading = true;
+        _status.Text = $"Scanning {Path.GetFileName(profile.Root)}...";
+        Stopwatch watch = Stopwatch.StartNew();
+        IProgress<CatalogProgress> progress = new Progress<CatalogProgress>(item =>
+        {
+            if (!IsDisposed && cancel == _loadCancel)
+            {
+                _status.Text =
+                    $"Scanning {Path.GetFileName(item.ArchivePath)} {item.Index}/{item.Total}";
+            }
+        });
+
+        bool committed = false;
+        try
+        {
+            AssetCatalog catalog = await Task.Run(
+                () => AssetCatalog.Load(profile, progress, cancel.Token),
+                cancel.Token);
+            if (IsDisposed || cancel != _loadCancel)
+            {
+                return;
+            }
+
+            watch.Stop();
+            ApplyLoadedGame(profile, catalog);
+            committed = true;
+            BrowserTiming.Write(
+                $"catalog {watch.ElapsedMilliseconds}ms {catalog.Archives.Count} archives " +
+                $"{catalog.Entries.Count} rows");
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
+            or InvalidDataException)
+        {
+            if (!IsDisposed && cancel == _loadCancel)
+            {
+                _status.Text =
+                    $"Could not open {Path.GetFileName(profile.Root)}: {ex.Message}";
+            }
+        }
+        finally
+        {
+            if (cancel == _loadCancel)
+            {
+                _loading = false;
+                if (committed && !_listBuilding)
+                {
+                    UpdateStatus();
+                }
+            }
+        }
+    }
+
+    private void ApplyLoadedGame(GameProfile profile, AssetCatalog catalog)
+    {
         _materialCancel?.Cancel();
         _materialCancel?.Dispose();
         _materialCancel = null;
@@ -1108,8 +1213,10 @@ internal sealed class BrowserForm : Form
         _skinSkeletons = null;
         _skinSkeletonsTask = null;
         _skeletonSkinsOpen = false;
-        _skeletonSkins.SetRows([]);
+        _skeletonSkins.SetRows([], "No skin is explicitly bound to this skeleton.");
         ClearPoseView();
+        ClearAnimationLargeView();
+        _animationInspector.ResetForGame();
         _skeletonCancel?.Cancel();
         _skeletonCancel = null;
         _skeletonCatalog = null;
@@ -1126,9 +1233,10 @@ internal sealed class BrowserForm : Form
         _meshInspector.ShowEmpty();
         _skinView.Reset();
         _skeletonView.Reset();
-        _meshSkins.SetRows([]);
+        _meshSkins.SetRows([], "No skin uses this mesh.");
         _audioCancel?.Cancel();
         _audioCancel = null;
+        _audioGeneration++;
         _audio = Array.Empty<AudioEntry>();
         _audioLoaded = false;
         _audioLoading = false;
@@ -1163,181 +1271,128 @@ internal sealed class BrowserForm : Form
         _slotCopyIndex = 0;
         _chooser.Visible = false;
         _textureInspector.ShowEmpty();
-        _loadCancel?.Cancel();
-        _loadCancel?.Dispose();
-        CancellationTokenSource cancel = new();
-        _loadCancel = cancel;
-        _loading = true;
         _profile = profile;
         Text = $"APTStudio - {profile.Kind}";
         _scope.SetGame(profile.Kind.ToString(), "read-only");
-        _status.Text = "Scanning archives...";
-        Stopwatch watch = Stopwatch.StartNew();
-        IProgress<CatalogProgress> progress = new Progress<CatalogProgress>(item =>
+        _assets = catalog.Entries;
+        Dictionary<string, HashSet<(ulong Name, long Offset)>> textureKeys =
+            new(StringComparer.OrdinalIgnoreCase);
+        Dictionary<string, int> textureCounts =
+            new(StringComparer.OrdinalIgnoreCase);
+        foreach (AssetEntry entry in _assets)
         {
-            if (!IsDisposed && cancel == _loadCancel)
+            if (!entry.IsBitmap || entry.Bitmap is null)
             {
-                _status.Text = $"Scanning {Path.GetFileName(item.ArchivePath)} {item.Index}/{item.Total}";
-            }
-        });
-
-        try
-        {
-            AssetCatalog catalog = await Task.Run(
-                () => AssetCatalog.Load(profile, progress, cancel.Token),
-                cancel.Token);
-            if (IsDisposed || cancel != _loadCancel)
-            {
-                return;
+                continue;
             }
 
-            watch.Stop();
-            _assets = catalog.Entries;
-            Dictionary<string, HashSet<(ulong Name, long Offset)>> textureKeys =
-                new(StringComparer.OrdinalIgnoreCase);
-            Dictionary<string, int> textureCounts =
-                new(StringComparer.OrdinalIgnoreCase);
-            foreach (AssetEntry entry in _assets)
+            if (!textureKeys.TryGetValue(entry.ArchivePath, out HashSet<(ulong, long)>? keys))
             {
-                if (!entry.IsBitmap || entry.Bitmap is null)
-                {
-                    continue;
-                }
-
-                if (!textureKeys.TryGetValue(entry.ArchivePath, out HashSet<(ulong, long)>? keys))
-                {
-                    keys = new HashSet<(ulong, long)>();
-                    textureKeys[entry.ArchivePath] = keys;
-                }
-
-                if (keys.Add((entry.NameHash, entry.Row.BodyOffset)))
-                {
-                    textureCounts[entry.ArchivePath] = keys.Count;
-                }
+                keys = new HashSet<(ulong, long)>();
+                textureKeys[entry.ArchivePath] = keys;
             }
 
-            _totalTextureCount = textureCounts.Values.Sum();
-            ArchiveChoice[] archiveRows = catalog.Archives
-                .Select(archive => new ArchiveChoice(
-                    archive.Path,
-                    textureCounts.GetValueOrDefault(archive.Path)))
-                .OrderBy(archive => archive.Name, StringComparer.OrdinalIgnoreCase)
-                .ToArray();
-            _archives =
-            [
-                new ArchiveChoice("", _totalTextureCount),
-                .. archiveRows,
-            ];
-            _animationCounts = _assets
-                .Where(entry => entry.ClassHash == AssetClass.Animation)
-                .GroupBy(entry => entry.ArchivePath, StringComparer.OrdinalIgnoreCase)
-                .ToDictionary(group => group.Key, group => group.Count(), StringComparer.OrdinalIgnoreCase);
-            _animationOccurrences = _assets
-                .Where(entry => entry.ClassHash == AssetClass.Animation)
-                .GroupBy(entry => entry.NameHash)
-                .ToDictionary(group => group.Key, group => group.Count());
-            Dictionary<string, HashSet<(ulong Name, long Offset)>> meshKeys =
-                new(StringComparer.OrdinalIgnoreCase);
-            Dictionary<ulong, AssetEntry> meshRows = new();
-            foreach (AssetEntry entry in _assets)
+            if (keys.Add((entry.NameHash, entry.Row.BodyOffset)))
             {
-                if (entry.ClassHash != AssetClass.Mesh)
-                {
-                    continue;
-                }
-
-                meshRows.TryAdd(entry.NameHash, entry);
-                if (!meshKeys.TryGetValue(entry.ArchivePath, out HashSet<(ulong, long)>? keys))
-                {
-                    keys = new HashSet<(ulong, long)>();
-                    meshKeys[entry.ArchivePath] = keys;
-                }
-
-                keys.Add((entry.NameHash, entry.Row.BodyOffset));
-            }
-
-            _meshRows = meshRows;
-            _meshCounts = meshKeys.ToDictionary(
-                pair => pair.Key,
-                pair => pair.Value.Count,
-                StringComparer.OrdinalIgnoreCase);
-
-            Dictionary<string, HashSet<string>> skinKeys =
-                new(StringComparer.OrdinalIgnoreCase);
-            foreach (AssetEntry entry in _assets)
-            {
-                if (entry.ClassHash != AssetClass.Skin)
-                {
-                    continue;
-                }
-
-                if (!skinKeys.TryGetValue(entry.ArchivePath, out HashSet<string>? keys))
-                {
-                    keys = new HashSet<string>(StringComparer.Ordinal);
-                    skinKeys[entry.ArchivePath] = keys;
-                }
-
-                keys.Add(BrowserKeys.Skin(entry));
-            }
-
-            _skinCounts = skinKeys.ToDictionary(
-                pair => pair.Key,
-                pair => pair.Value.Count,
-                StringComparer.OrdinalIgnoreCase);
-
-            string selected = ChooseInitialArchive();
-            _lastArchive = selected;
-            _navigation = new BrowserNavigation(new BrowserState(
-                BrowserView.Textures,
-                selected,
-                "",
-                TextureFilter.All,
-                null,
-                0,
-                0,
-                ChannelView.Rgb,
-                true,
-                1f,
-                PointF.Empty,
-                null,
-                0,
-                null,
-                null));
-
-            _scope.SetArchives(_archives, selected);
-            SetTypesFor(selected, "Textures");
-            _search.Enabled = true;
-            _filterButton.Enabled = true;
-            RenderState();
-            _status.Text = $"{ScopeName(selected)} · loading textures...";
-            BrowserTiming.Write(
-                $"catalog {watch.ElapsedMilliseconds}ms {catalog.Archives.Count} archives " +
-                $"{_assets.Count} rows");
-            if (_saveSettings)
-            {
-                Settings.SaveLastGameRoot(profile.Root);
+                textureCounts[entry.ArchivePath] = keys.Count;
             }
         }
-        catch (OperationCanceledException)
+
+        _totalTextureCount = textureCounts.Values.Sum();
+        _textureCounts = textureCounts;
+        ArchiveChoice[] archiveRows = catalog.Archives
+            .Select(archive => new ArchiveChoice(
+                archive.Path,
+                textureCounts.GetValueOrDefault(archive.Path)))
+            .OrderBy(archive => archive.Name, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        _archives =
+        [
+            new ArchiveChoice("", _totalTextureCount),
+            .. archiveRows,
+        ];
+        _animationCounts = BuildAnimationCounts(_assets);
+        _animationOccurrences = _assets
+            .Where(entry => entry.ClassHash == AssetClass.Animation)
+            .GroupBy(entry => entry.NameHash)
+            .ToDictionary(group => group.Key, group => group.Count());
+        Dictionary<string, HashSet<(ulong Name, long Offset)>> meshKeys =
+            new(StringComparer.OrdinalIgnoreCase);
+        Dictionary<ulong, AssetEntry> meshRows = new();
+        foreach (AssetEntry entry in _assets)
         {
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            if (!IsDisposed && cancel == _loadCancel)
+            if (entry.ClassHash != AssetClass.Mesh)
             {
-                _status.Text = ex.Message;
+                continue;
             }
-        }
-        finally
-        {
-            if (cancel == _loadCancel)
+
+            meshRows.TryAdd(entry.NameHash, entry);
+            if (!meshKeys.TryGetValue(entry.ArchivePath, out HashSet<(ulong, long)>? keys))
             {
-                _loading = false;
-                if (!_listBuilding)
-                {
-                    UpdateStatus();
-                }
+                keys = new HashSet<(ulong, long)>();
+                meshKeys[entry.ArchivePath] = keys;
             }
+
+            keys.Add((entry.NameHash, entry.Row.BodyOffset));
+        }
+
+        _meshRows = meshRows;
+        _meshCounts = meshKeys.ToDictionary(
+            pair => pair.Key,
+            pair => pair.Value.Count,
+            StringComparer.OrdinalIgnoreCase);
+
+        Dictionary<string, HashSet<string>> skinKeys =
+            new(StringComparer.OrdinalIgnoreCase);
+        foreach (AssetEntry entry in _assets)
+        {
+            if (entry.ClassHash != AssetClass.Skin)
+            {
+                continue;
+            }
+
+            if (!skinKeys.TryGetValue(entry.ArchivePath, out HashSet<string>? keys))
+            {
+                keys = new HashSet<string>(StringComparer.Ordinal);
+                skinKeys[entry.ArchivePath] = keys;
+            }
+
+            keys.Add(BrowserKeys.Skin(entry));
+        }
+
+        _skinCounts = skinKeys.ToDictionary(
+            pair => pair.Key,
+            pair => pair.Value.Count,
+            StringComparer.OrdinalIgnoreCase);
+
+        string selected = ChooseInitialArchive();
+        _lastArchive = selected;
+        _navigation = new BrowserNavigation(new BrowserState(
+            BrowserView.Textures,
+            selected,
+            "",
+            TextureFilter.All,
+            null,
+            0,
+            0,
+            ChannelView.Rgb,
+            true,
+            1f,
+            PointF.Empty,
+            null,
+            0,
+            null,
+            null));
+
+        _scope.SetArchives(_archives, selected);
+        SetTypesFor(selected, "Textures");
+        _search.Enabled = true;
+        _filterButton.Enabled = true;
+        RenderState();
+        _status.Text = $"{ScopeName(selected)} · loading textures...";
+        if (_saveSettings)
+        {
+            Settings.SaveLastGameRoot(profile.Root);
         }
     }
 
@@ -1356,17 +1411,13 @@ internal sealed class BrowserForm : Form
             ?? "";
     }
 
-    private int ArchiveCount(string archivePath)
-    {
-        ArchiveChoice? archive = _archives.FirstOrDefault(
-            item => item.Path.Equals(archivePath, StringComparison.OrdinalIgnoreCase));
-        return archive?.Count ?? 0;
-    }
+    private int TextureCount(string archivePath) =>
+        archivePath.Length == 0 ? _totalTextureCount : _textureCounts.GetValueOrDefault(archivePath);
 
     private IReadOnlyList<TypeChoice> BuildTypes(string archivePath)
     {
         bool allArchives = archivePath.Length == 0;
-        int textures = ArchiveCount(archivePath);
+        int textures = TextureCount(archivePath);
         int animations = allArchives
             ? _animationCounts.Values.Sum()
             : _animationCounts.GetValueOrDefault(archivePath);
@@ -1376,19 +1427,145 @@ internal sealed class BrowserForm : Form
         int skins = allArchives
             ? _skinCounts.Values.Sum()
             : _skinCounts.GetValueOrDefault(archivePath);
-        int skeletons = SkeletonCount(archivePath);
+        int skeletons = allArchives
+            ? SkeletonCount("")
+            : SkeletonCount(archivePath);
         int materials = MaterialCount(archivePath);
         int audio = _audioLoaded ? _audio.Count : 0;
         return
         [
-            new TypeChoice("Textures", textures, true),
-            new TypeChoice("Animations", animations, true),
-            new TypeChoice("Materials", materials, _materials is null || materials > 0),
-            new TypeChoice("Meshes", meshes, true),
-            new TypeChoice("Skins", skins, skins > 0),
-            new TypeChoice("Skeletons", skeletons, _skeletonCatalog is null || skeletons > 0),
-            new TypeChoice("Audio", audio, true),
+            new TypeChoice("Textures", textures),
+            new TypeChoice("Animations", animations),
+            new TypeChoice("Materials", materials),
+            new TypeChoice("Meshes", meshes),
+            new TypeChoice("Skins", skins),
+            new TypeChoice("Skeletons", skeletons),
+            new TypeChoice("Audio", audio),
         ];
+    }
+
+    private static IReadOnlyDictionary<string, int> BuildAnimationCounts(
+        IReadOnlyList<AssetEntry> assets)
+    {
+        Dictionary<string, HashSet<string>> keys =
+            new(StringComparer.OrdinalIgnoreCase);
+        foreach (AssetEntry entry in assets)
+        {
+            if (entry.ClassHash != AssetClass.Animation)
+            {
+                continue;
+            }
+
+            if (!keys.TryGetValue(entry.ArchivePath, out HashSet<string>? archiveKeys))
+            {
+                archiveKeys = new HashSet<string>(StringComparer.Ordinal);
+                keys[entry.ArchivePath] = archiveKeys;
+            }
+
+            archiveKeys.Add($"{entry.Row.BodyOffset}|{entry.NameHash:X16}");
+        }
+
+        return keys.ToDictionary(
+            pair => pair.Key,
+            pair => pair.Value.Count,
+            StringComparer.OrdinalIgnoreCase);
+    }
+
+    private Dictionary<string, int> BuildArchiveCounts(string active)
+    {
+        Dictionary<string, int> counts = new(StringComparer.OrdinalIgnoreCase);
+        switch (active)
+        {
+            case "Animations":
+                foreach ((string path, int count) in _animationCounts)
+                {
+                    counts[path] = count;
+                }
+
+                counts[""] = _animationCounts.Values.Sum();
+                break;
+            case "Meshes":
+                foreach ((string path, int count) in _meshCounts)
+                {
+                    counts[path] = count;
+                }
+
+                counts[""] = _meshCounts.Values.Sum();
+                break;
+            case "Skins":
+                foreach ((string path, int count) in _skinCounts)
+                {
+                    counts[path] = count;
+                }
+
+                counts[""] = _skinCounts.Values.Sum();
+                break;
+            case "Skeletons":
+                if (_skeletonCatalog is not null)
+                {
+                    Dictionary<string, HashSet<string>> keys =
+                        new(StringComparer.OrdinalIgnoreCase);
+                    foreach (SkeletonEntry entry in _skeletonCatalog.Entries)
+                    {
+                        if (!keys.TryGetValue(
+                            entry.ArchivePath, out HashSet<string>? archiveKeys))
+                        {
+                            archiveKeys = new HashSet<string>(StringComparer.Ordinal);
+                            keys[entry.ArchivePath] = archiveKeys;
+                        }
+
+                        archiveKeys.Add($"{entry.Offset}|{entry.NameHash:X16}");
+                    }
+
+                    foreach ((string path, HashSet<string> value) in keys)
+                    {
+                        counts[path] = value.Count;
+                    }
+
+                    counts[""] = counts.Values.Sum();
+                }
+                else
+                {
+                    counts[""] = 0;
+                }
+
+                break;
+            case "Materials":
+                if (_materials is not null)
+                {
+                    foreach (MaterialArchive archive in _materials.Archives)
+                    {
+                        counts[archive.Path] = archive.Count;
+                    }
+
+                    counts[""] = _materials.Entries.Count;
+                }
+                else
+                {
+                    counts[""] = 0;
+                }
+
+                break;
+            case "Audio":
+                counts[""] = _audioLoaded ? _audio.Count : 0;
+                break;
+            default:
+                foreach ((string path, int count) in _textureCounts)
+                {
+                    counts[path] = count;
+                }
+
+                counts[""] = _totalTextureCount;
+                break;
+        }
+
+        return counts;
+    }
+
+    private int ActiveCount(string archivePath)
+    {
+        string active = _navigation is null ? "Textures" : TypeName(_navigation.State);
+        return BuildArchiveCounts(active).GetValueOrDefault(archivePath);
     }
 
     private int MaterialCount(string archivePath)
@@ -1419,24 +1596,36 @@ internal sealed class BrowserForm : Form
 
         if (archivePath.Length == 0)
         {
-            return _skeletonCatalog.Entries.Count;
+            return _skeletonCatalog.Entries
+                .Select(BrowserKeys.Skeleton)
+                .Distinct(StringComparer.Ordinal)
+                .Count();
         }
 
-        return _skeletonCatalog.Entries.Count(entry =>
-            entry.ArchivePath.Equals(archivePath, StringComparison.OrdinalIgnoreCase));
+        return _skeletonCatalog.Entries
+            .Where(entry => entry.ArchivePath.Equals(
+                archivePath, StringComparison.OrdinalIgnoreCase))
+            .Select(BrowserKeys.Skeleton)
+            .Distinct(StringComparer.Ordinal)
+            .Count();
     }
 
     private void SetTypesFor(string archivePath, string active)
     {
         _scope.SetTypes(BuildTypes(archivePath), active);
-        UpdateAllScopeCount(active);
+        UpdateArchiveCounts(active);
         _typesArchive = archivePath;
     }
 
-    private void UpdateAllScopeCount(string active)
+    private void UpdateArchiveCounts(string active)
     {
-        TypeChoice? type = BuildTypes("").FirstOrDefault(item => item.Name == active);
-        _scope.SetAllCount(type?.Count ?? 0);
+        Dictionary<string, int> counts = BuildArchiveCounts(active);
+        _scope.SetArchiveCounts(
+            counts, active == "Audio" ? "SOUNDBANKS" : "All archives");
+        if (active == "Audio")
+        {
+            _scope.SelectArchive("");
+        }
     }
 
     private void SwitchArchive(string archivePath)
@@ -1452,8 +1641,8 @@ internal sealed class BrowserForm : Form
         _skeletonSkinsOpen = false;
         BrowserView view = state.View switch
         {
-            BrowserView.Placeholder => BrowserView.Placeholder,
             BrowserView.Animations => BrowserView.Animations,
+            BrowserView.AnimationLarge => BrowserView.Animations,
             BrowserView.Skins => BrowserView.Skins,
             BrowserView.Skeletons => BrowserView.Skeletons,
             BrowserView.Materials => BrowserView.Materials,
@@ -1494,10 +1683,7 @@ internal sealed class BrowserForm : Form
             _materialEntryWatch = null;
         }
 
-        _navigation.SwitchScope(
-            archivePath,
-            view,
-            view == BrowserView.Placeholder ? state.PlaceholderName : "");
+        _navigation.SwitchScope(archivePath, view);
         SetTypesFor(archivePath, TypeName(_navigation.State));
         RenderState();
     }
@@ -1520,7 +1706,7 @@ internal sealed class BrowserForm : Form
             "Skeletons" => BrowserView.Skeletons,
             "Materials" => BrowserView.Materials,
             "Audio" => BrowserView.Audio,
-            _ => BrowserView.Placeholder,
+            _ => BrowserView.Textures,
         };
         string archive = _navigation.State.ArchivePath;
         if (view == _navigation.State.View
@@ -1540,10 +1726,7 @@ internal sealed class BrowserForm : Form
             _materialEntryWatch = null;
         }
 
-        _navigation.SwitchScope(
-            archive,
-            view,
-            view == BrowserView.Placeholder ? name : "");
+        _navigation.SwitchScope(archive, view);
         SetTypesFor(archive, TypeName(_navigation.State));
         RenderState();
     }
@@ -1751,11 +1934,9 @@ internal sealed class BrowserForm : Form
             _resultsBody.Text = "Open a supported game folder to start.";
             _resultsBody.Visible = true;
             _resultsBody.Height = 18;
-            _inspectorTitle.Text = "";
-            _inspectorBody.Text = "";
             _back.Enabled = false;
             _forward.Enabled = false;
-            _scopeButton.Text = "No game";
+            _scopeButton.Text = "Scope";
             _crumbs.Text = "";
             _textureToolbar.Visible = false;
             return;
@@ -1765,6 +1946,11 @@ internal sealed class BrowserForm : Form
         if (state.View != BrowserView.SkinPose && _poseView is not null)
         {
             ClearPoseView();
+        }
+
+        if (state.View != BrowserView.AnimationLarge && _animationLargeView is not null)
+        {
+            ClearAnimationLargeView();
         }
 
         if (_allRowsBuilding
@@ -1811,9 +1997,9 @@ internal sealed class BrowserForm : Form
         else
         {
             _scope.SetActiveType(TypeName(state));
-            UpdateAllScopeCount(TypeName(state));
+            UpdateArchiveCounts(TypeName(state));
         }
-        _scopeButton.Text = _navigation.IsChooserOpen ? "All archives" : ScopeChip(state);
+        _scopeButton.Text = "Scope";
         _back.Enabled = _navigation.CanBack || _meshSkinsOpen || _skeletonSkinsOpen;
         _forward.Enabled = _navigation.CanForward;
         _crumbs.Text = _navigation.IsChooserOpen ? ChooserCrumbs(state) : Crumbs(state);
@@ -1831,7 +2017,7 @@ internal sealed class BrowserForm : Form
 
         bool textureView = state.View == BrowserView.Textures || state.View == BrowserView.LinkedTexture;
         bool detailView = state.View is BrowserView.Skin or BrowserView.SkinPose
-            or BrowserView.Skeleton;
+            or BrowserView.Skeleton or BrowserView.AnimationLarge;
         bool skeletonChooser = state.View == BrowserView.Skeleton && _skeletonSkinsOpen;
         bool fullWidth = detailView || state.View is BrowserView.Skins or BrowserView.Skeletons
             or BrowserView.Materials;
@@ -1844,9 +2030,15 @@ internal sealed class BrowserForm : Form
             || state.View == BrowserView.LinkedTexture;
         _skinView.Visible = state.View == BrowserView.Skin;
         _poseHost.Visible = false;
+        _animationLargeHost.Visible = false;
         _skeletonView.Visible = state.View == BrowserView.Skeleton;
         _meshSkins.Visible = false;
         _skeletonSkins.Visible = false;
+        if (fullWidth && !_inner.Panel2Collapsed)
+        {
+            _inspectorWidth = _inner.Panel2.Width;
+        }
+
         _inner.Panel2Collapsed = fullWidth;
         _titleLine.Visible = !detailView || skeletonChooser;
         _openSkin.Visible = state.View == BrowserView.Skins;
@@ -1858,9 +2050,6 @@ internal sealed class BrowserForm : Form
         {
             _audioView.Reset();
         }
-        bool labelView = state.View == BrowserView.Placeholder;
-        _inspectorTitle.Visible = labelView;
-        _inspectorBody.Visible = labelView;
 
         if (_navigation.IsChooserOpen)
         {
@@ -1871,8 +2060,6 @@ internal sealed class BrowserForm : Form
             _slotInspector.Visible = false;
             _animationInspector.Visible = false;
             _textureInspector.Visible = true;
-            _inspectorTitle.Visible = false;
-            _inspectorBody.Visible = false;
             _resultsTitle.Text = "Materials";
             _resultsCount.Text = $"{_chooser.RowCount:N0}";
             _resultsBody.Text =
@@ -1909,7 +2096,7 @@ internal sealed class BrowserForm : Form
             or BrowserView.Skeletons or BrowserView.Materials or BrowserView.Audio;
         _textureToolbar.Visible = state.View is BrowserView.Textures or BrowserView.Audio;
         _resultsBody.Visible = !detailView || skeletonChooser;
-        _resultsBody.Height = labelView ? 44 : 18;
+        _resultsBody.Height = 18;
 
         switch (state.View)
         {
@@ -1974,6 +2161,12 @@ internal sealed class BrowserForm : Form
                 _skinView.Visible = false;
                 _poseHost.Visible = true;
                 RenderSkinPose(state);
+                break;
+            case BrowserView.AnimationLarge:
+                _textureHost.Visible = false;
+                _textureToolbar.Visible = false;
+                _animationLargeHost.Visible = true;
+                RenderAnimationLarge(state);
                 break;
             case BrowserView.Skeleton:
                 _textureHost.Visible = false;
@@ -2051,15 +2244,6 @@ internal sealed class BrowserForm : Form
                     ? $"0x{linkedMaterial.Hash:X16} · {linkedMaterial.Code} · " +
                         $"{linkedMaterial.ArchiveName} · slot {state.MaterialSlot}"
                     : "";
-                break;
-            default:
-                _resultsTitle.Text = state.PlaceholderName;
-                _resultsCount.Text = "";
-                _resultsBody.Text =
-                    "This view moves in a later slice.\n" +
-                    "Use Open legacy browser in the scope pane for the current view.";
-                _inspectorTitle.Text = "";
-                _inspectorBody.Text = "";
                 break;
         }
 
@@ -2206,7 +2390,7 @@ internal sealed class BrowserForm : Form
         _resultsCount.Text = $"{rows.Count:N0}";
         _resultsBody.Text =
             $"{ScopeName(current.ArchivePath)} · {rows.Count:N0} of " +
-            $"{ArchiveCount(current.ArchivePath):N0} textures · {SortLabel(current)}";
+            $"{TextureCount(current.ArchivePath):N0} textures · {SortLabel(current)}";
         BrowserTiming.Write(
             $"apply v{_listVersion} selected={_textureList.SelectedKeys.Count} " +
             $"keep={(keep is null ? "none" : keep)}");
@@ -2219,10 +2403,27 @@ internal sealed class BrowserForm : Form
     private void UpdateSelectionCount()
     {
         int count = _textureList.SelectedKeys.Count;
-        _selectionCount.Text = $"{count:N0} selected";
-        _exportSelected.Enabled = !_exporting && count > 0
+        _selectionCount.Text = SelectionCountText(count, CompactToolbar);
+        _exportSelected.Enabled = !_exporting && !_loading && count > 0
             && _textureList.SelectedRows.Any(row =>
                 row.Tag is AssetEntry entry && entry.IsPreviewable);
+    }
+
+    private bool CompactToolbar =>
+        _inner.Panel1.Width > 0 && _inner.Panel1.Width < 560;
+
+    private string SelectionCountText(int count, bool compact) =>
+        compact ? $"{count:N0} sel" : $"{count:N0} selected";
+
+    private void UpdateToolbarLayout()
+    {
+        bool compact = CompactToolbar;
+        _sortLabel.Visible = !compact;
+        _sortCombo.Width = compact ? 104 : 124;
+        _sortDirection.Width = compact ? 56 : 60;
+        _exportSelected.Text = compact ? "Export" : "Export selected";
+        _selectionCount.Text = SelectionCountText(
+            _textureList.SelectedKeys.Count, compact);
     }
 
     private void SetListMode(BrowserView view)
@@ -2241,10 +2442,13 @@ internal sealed class BrowserForm : Form
         bool textures = view == BrowserView.Textures;
         bool meshes = view == BrowserView.Meshes;
         bool audio = view == BrowserView.Audio;
+        bool thumbnails = textures || meshes;
         _textureHeader.Columns = columns;
         _textureList.Columns = columns;
-        _textureHeader.ShowThumbnails = textures || meshes;
-        _textureList.ShowThumbnails = textures || meshes;
+        _textureHeader.ShowThumbnails = thumbnails;
+        _textureList.ShowThumbnails = thumbnails;
+        _textureHeader.Height = thumbnails ? 28 : 24;
+        _textureList.SetRowHeight(thumbnails ? 46 : 30);
         if (!meshes)
         {
             _meshThumbnails?.SetVisible(Array.Empty<AssetEntry>());
@@ -2258,6 +2462,8 @@ internal sealed class BrowserForm : Form
         {
             SyncSortControls(_navigation.State);
         }
+
+        UpdateToolbarLayout();
     }
 
     private void SyncSortControls(BrowserState state)
@@ -2590,7 +2796,7 @@ internal sealed class BrowserForm : Form
             return;
         }
 
-        AssetEntry? entry = FindAnimationEntry(animation);
+        AssetEntry? entry = FindAnimationEntry(_assets, animation);
         if (entry is null)
         {
             _animationInspector.ShowEmpty();
@@ -2600,10 +2806,79 @@ internal sealed class BrowserForm : Form
         _animationInspector.SetClip(entry, _assets, _profile);
     }
 
-    private AssetEntry? FindAnimationEntry(AnimationOccurrence animation) =>
-        _assets.FirstOrDefault(entry =>
+    private void OpenAnimationLarge(AnimationLargeState large)
+    {
+        if (_navigation?.State.View != BrowserView.Animations
+            || _navigation.State.Animation is null)
+        {
+            return;
+        }
+
+        _navigation.OpenAnimationLarge(large);
+        RenderState();
+    }
+
+    private void RenderAnimationLarge(BrowserState state)
+    {
+        if (_profile is null || state.Animation is not { } animation
+            || state.AnimationLarge is not { } large)
+        {
+            ClearAnimationLargeView();
+            return;
+        }
+
+        AssetEntry? clip = FindAnimationEntry(_assets, animation);
+        AssetEntry? skin = _assets.FirstOrDefault(entry =>
+            entry.ClassHash == AssetClass.Skin
+            && entry.NameHash == large.SkinHash
+            && entry.ArchivePath.Equals(
+                large.SkinArchivePath, StringComparison.OrdinalIgnoreCase)
+            && entry.Row.BodyOffset == large.SkinBodyOffset);
+        if (clip is null || skin is null)
+        {
+            _status.Text = "The animation or its preview skin is no longer indexed.";
+            return;
+        }
+
+        string key =
+            $"{BrowserKeys.Skin(skin)}|{large.SkeletonRoot:X16}|{large.Frame}|{large.Applied}";
+        if (_animationLargeKey == key && _animationLargeView is { IsDisposed: false })
+        {
+            return;
+        }
+
+        ClearAnimationLargeView();
+        AnimationLargeView view = new() { Dock = DockStyle.Fill };
+        view.BackRequested += (_, _) => Back();
+        _animationLargeHost.Controls.Add(view);
+        _animationLargeView = view;
+        _animationLargeKey = key;
+        view.ShowState(_profile, _assets, skin, clip, large);
+        _status.Text =
+            $"Animation 0x{animation.Hash:X16} · large preview · " +
+            $"skin 0x{large.SkinHash:X16}";
+    }
+
+    private void ClearAnimationLargeView()
+    {
+        if (_animationLargeView is null)
+        {
+            return;
+        }
+
+        _animationLargeHost.Controls.Remove(_animationLargeView);
+        _animationLargeView.Dispose();
+        _animationLargeView = null;
+        _animationLargeKey = null;
+    }
+
+    internal static AssetEntry? FindAnimationEntry(
+        IReadOnlyList<AssetEntry> assets,
+        AnimationOccurrence animation) => assets.FirstOrDefault(entry =>
             entry.ClassHash == AssetClass.Animation
             && entry.NameHash == animation.Hash
+            && entry.ArchivePath.Equals(
+                animation.ArchivePath, StringComparison.OrdinalIgnoreCase)
             && entry.BodyArchivePath.Equals(
                 animation.BodyArchivePath, StringComparison.OrdinalIgnoreCase)
             && entry.Row.BodyOffset == animation.BodyOffset);
@@ -2825,7 +3100,7 @@ internal sealed class BrowserForm : Form
                 return;
             }
 
-            StartAllMaterialList(state);
+            StartMaterialList(state);
             return;
         }
 
@@ -2852,127 +3127,118 @@ internal sealed class BrowserForm : Form
         _materialListCancel?.Dispose();
         CancellationTokenSource cancel = new();
         _materialListCancel = cancel;
+        CancellationToken token = cancel.Token;
         int version = ++_materialListVersion;
         _materialListBuilding = true;
         _materialListArchive = state.ArchivePath;
         _resultsCount.Text = "";
-        _resultsBody.Text = $"{ScopeName(state.ArchivePath)} · decoding materials...";
+        _resultsBody.Text = state.ArchivePath.Length == 0
+            ? "All archives · decoding materials..."
+            : $"{ScopeName(state.ArchivePath)} · decoding materials...";
         _status.Text = "Decoding materials...";
+        BrowserTiming.Write(state.ArchivePath.Length == 0
+            ? "materials-all start"
+            : $"materials-first start archive='{state.ArchivePath}'");
         Stopwatch watch = _materialEntryWatch ?? Stopwatch.StartNew();
         _materialEntryWatch = watch;
         int generation = _materialCache.Generation;
-        _ = BuildMaterialListAsync(state, cancel, version, generation, watch);
+        _ = BuildMaterialListAsync(
+            state.ArchivePath, cancel, token, version, generation, watch);
     }
 
-    private void StartAllMaterialList(BrowserState state)
-    {
-        _materialListCancel?.Cancel();
-        _materialListCancel?.Dispose();
-        CancellationTokenSource cancel = new();
-        _materialListCancel = cancel;
-        int version = ++_materialListVersion;
-        _materialListBuilding = true;
-        _materialListArchive = "";
-        _resultsCount.Text = "";
-        _resultsBody.Text = "All archives · decoding materials...";
-        _status.Text = "Decoding materials...";
-        BrowserTiming.Write("materials-all start");
-        Stopwatch watch = _materialEntryWatch ?? Stopwatch.StartNew();
-        _materialEntryWatch = watch;
-        int generation = _materialCache.Generation;
-        _ = BuildAllMaterialListAsync(cancel, version, generation, watch);
-    }
-
-    private async Task BuildAllMaterialListAsync(
+    private async Task BuildMaterialListAsync(
+        string archive,
         CancellationTokenSource cancel,
+        CancellationToken token,
         int version,
         int generation,
         Stopwatch watch)
     {
-        if (_materials is null)
+        MaterialCatalog? catalog = _materials;
+        if (catalog is null)
         {
             return;
         }
 
-        IReadOnlyList<MaterialEntry> entries = _materials.Entries;
+        List<MaterialEntry> entries = archive.Length == 0
+            ? catalog.Entries.ToList()
+            : catalog.Entries
+                .Where(entry => entry.ArchivePath.Equals(
+                    archive, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+        Dictionary<string, IReadOnlyList<MaterialRow>> cached =
+            new(StringComparer.OrdinalIgnoreCase);
+        foreach (string path in entries
+            .Select(entry => entry.ArchivePath)
+            .Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (_materialCache.GetRows(path) is { } rows)
+            {
+                cached[path] = rows;
+            }
+        }
+
+        Progress<int>? progress = archive.Length == 0
+            ? null
+            : new Progress<int>(count =>
+            {
+                if (IsDisposed || !_materialListBuilding || version != _materialListVersion
+                    || cancel != _materialListCancel)
+                {
+                    return;
+                }
+
+                _resultsBody.Text =
+                    $"{ScopeName(archive)} · decoding materials... " +
+                    $"{count:N0} of {entries.Count:N0}";
+                _status.Text = $"Decoding materials {count:N0}/{entries.Count:N0}";
+            });
+
         try
         {
-            (List<MaterialRow> All, List<(string Archive, MaterialListResult Result)> Results) work =
-                await Task.Run(() =>
-                {
-                    List<MaterialRow> all = new();
-                    List<(string, MaterialListResult)> results = new();
-                    foreach (IGrouping<string, MaterialEntry> group in entries
-                        .GroupBy(entry => entry.ArchivePath, StringComparer.OrdinalIgnoreCase)
-                        .OrderBy(group => group.Key, StringComparer.OrdinalIgnoreCase))
-                    {
-                        cancel.Token.ThrowIfCancellationRequested();
-                        IReadOnlyList<MaterialRow>? cached =
-                            _materialCache.GetRows(group.Key);
-                        if (cached is not null)
-                        {
-                            all.AddRange(cached);
-                            continue;
-                        }
-
-                        List<MaterialEntry> archive = group.ToList();
-                        using FileStream stream = new(
-                            group.Key, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-                        MaterialListResult result = MaterialListBuilder.Build(
-                            archive,
-                            entry =>
-                            {
-                                MaterialData data = MaterialDecoder.Read(
-                                    stream, entry.ArchivePath, entry.Hit);
-                                return (data.Code, data.Slots.Count);
-                            },
-                            cancel.Token);
-                        results.Add((group.Key, result));
-                        all.AddRange(result.Rows);
-                    }
-
-                    all.Sort((left, right) =>
-                    {
-                        int order = left.Hash.CompareTo(right.Hash);
-                        if (order == 0)
-                        {
-                            order = string.Compare(
-                                left.Entry.ArchivePath,
-                                right.Entry.ArchivePath,
-                                StringComparison.OrdinalIgnoreCase);
-                        }
-
-                        return order == 0
-                            ? left.Entry.Offset.CompareTo(right.Entry.Offset)
-                            : order;
-                    });
-                    cancel.Token.ThrowIfCancellationRequested();
-                    return (all, results);
-                }, cancel.Token);
+            MaterialWork work = await Task.Run(
+                () => BuildMaterialWork(entries, cached, progress, token),
+                token);
             if (IsDisposed || cancel != _materialListCancel || version != _materialListVersion)
             {
                 return;
             }
 
-            foreach ((string archive, MaterialListResult result) in work.Results)
+            if (archive.Length == 0)
             {
+                foreach ((string path, MaterialListResult result) in work.Results)
+                {
+                    if (!_materialCache.TryStore(generation, path, result))
+                    {
+                        return;
+                    }
+                }
+
+                if (!_materialCache.TryStoreAll(generation, work.Rows))
+                {
+                    return;
+                }
+            }
+            else
+            {
+                MaterialListResult result = work.Results.Count > 0
+                    ? work.Results[0].Result
+                    : new MaterialListResult(work.Rows, 0);
                 if (!_materialCache.TryStore(generation, archive, result))
                 {
                     return;
                 }
             }
 
-            if (!_materialCache.TryStoreAll(generation, work.All))
-            {
-                return;
-            }
-
             _materialListBuilding = false;
-            BrowserTiming.Write(
-                $"materials-all decoded {watch.ElapsedMilliseconds}ms " +
-                $"rows={work.All.Count:N0} decodes={_materialCache.DecodeCount:N0}");
+            BrowserTiming.Write(archive.Length == 0
+                ? $"materials-all decoded {watch.ElapsedMilliseconds}ms " +
+                    $"rows={work.Rows.Count:N0} decodes={_materialCache.DecodeCount:N0}"
+                : $"materials-first decoded {watch.ElapsedMilliseconds}ms " +
+                    $"rows={work.Rows.Count:N0} decodes={_materialCache.DecodeCount:N0}");
             if (_navigation?.State.View != BrowserView.Materials
-                || _navigation.State.ArchivePath.Length != 0)
+                || !_navigation.State.ArchivePath.Equals(
+                    archive, StringComparison.OrdinalIgnoreCase))
             {
                 return;
             }
@@ -3001,94 +3267,58 @@ internal sealed class BrowserForm : Form
         }
     }
 
-    private async Task BuildMaterialListAsync(
-        BrowserState state,
-        CancellationTokenSource cancel,
-        int version,
-        int generation,
-        Stopwatch watch)
+    private MaterialWork BuildMaterialWork(
+        List<MaterialEntry> entries,
+        IReadOnlyDictionary<string, IReadOnlyList<MaterialRow>> cached,
+        IProgress<int>? progress,
+        CancellationToken token)
     {
-        if (_materials is null)
+        List<MaterialRow> rows = new();
+        List<(string Archive, MaterialListResult Result)> results = new();
+        foreach (IGrouping<string, MaterialEntry> group in entries
+            .GroupBy(entry => entry.ArchivePath, StringComparer.OrdinalIgnoreCase)
+            .OrderBy(group => group.Key, StringComparer.OrdinalIgnoreCase))
         {
-            return;
-        }
-
-        string archive = state.ArchivePath;
-        List<MaterialEntry> entries = _materials.Entries
-            .Where(entry => entry.ArchivePath.Equals(archive, StringComparison.OrdinalIgnoreCase))
-            .ToList();
-        Progress<int> progress = new(count =>
-        {
-            if (IsDisposed || !_materialListBuilding || version != _materialListVersion
-                || cancel != _materialListCancel)
+            token.ThrowIfCancellationRequested();
+            if (cached.TryGetValue(group.Key, out IReadOnlyList<MaterialRow>? cachedRows))
             {
-                return;
+                rows.AddRange(cachedRows);
+                continue;
             }
 
-            _resultsBody.Text =
-                $"{ScopeName(archive)} · decoding materials... {count:N0} of {entries.Count:N0}";
-            _status.Text = $"Decoding materials {count:N0}/{entries.Count:N0}";
+            using FileStream stream = new(
+                group.Key, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            MaterialListResult result = MaterialListBuilder.Build(
+                group.ToList(),
+                entry =>
+                {
+                    MaterialData data = MaterialDecoder.Read(
+                        stream, entry.ArchivePath, entry.Hit);
+                    return (data.Code, data.Slots.Count);
+                },
+                token,
+                progress);
+            results.Add((group.Key, result));
+            rows.AddRange(result.Rows);
+        }
+
+        rows.Sort((left, right) =>
+        {
+            int order = left.Hash.CompareTo(right.Hash);
+            if (order == 0)
+            {
+                order = string.Compare(
+                    left.Entry.ArchivePath,
+                    right.Entry.ArchivePath,
+                    StringComparison.OrdinalIgnoreCase);
+            }
+
+            return order == 0
+                ? left.Entry.Offset.CompareTo(right.Entry.Offset)
+                : order;
         });
-
-        try
-        {
-            MaterialListResult result = await Task.Run(() =>
-            {
-                using FileStream stream = new(
-                    archive, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-                return MaterialListBuilder.Build(
-                    entries,
-                    entry =>
-                    {
-                        MaterialData data = MaterialDecoder.Read(
-                            stream, entry.ArchivePath, entry.Hit);
-                        return (data.Code, data.Slots.Count);
-                    },
-                    cancel.Token,
-                    progress);
-            }, cancel.Token);
-            if (IsDisposed || cancel != _materialListCancel || version != _materialListVersion)
-            {
-                return;
-            }
-
-            if (!_materialCache.TryStore(generation, archive, result))
-            {
-                return;
-            }
-
-            _materialListBuilding = false;
-            BrowserTiming.Write(
-                $"materials-first decoded {watch.ElapsedMilliseconds}ms " +
-                $"rows={result.Rows.Count:N0} decodes={result.DecodeCount:N0}");
-            if (_navigation?.State.View != BrowserView.Materials
-                || !_navigation.State.ArchivePath.Equals(archive, StringComparison.OrdinalIgnoreCase))
-            {
-                return;
-            }
-
-            ApplyMaterialList(
-                _navigation.State, firstEntry: true, firstWatch: watch, filterWatch: null);
-        }
-        catch (OperationCanceledException)
-        {
-        }
-        catch (Exception ex) when (ex is InvalidDataException or IOException
-            or UnauthorizedAccessException)
-        {
-            if (!IsDisposed && cancel == _materialListCancel && version == _materialListVersion)
-            {
-                _status.Text = ex.Message;
-                _resultsBody.Text = ex.Message;
-            }
-        }
-        finally
-        {
-            if (cancel == _materialListCancel)
-            {
-                _materialListBuilding = false;
-            }
-        }
+        token.ThrowIfCancellationRequested();
+        return new MaterialWork(rows, results);
     }
 
     private void ApplyMaterialList(
@@ -3249,6 +3479,7 @@ internal sealed class BrowserForm : Form
             return;
         }
 
+        GameProfile profile = _profile;
         _materialCatalogCancel?.Cancel();
         _materialCatalogCancel?.Dispose();
         CancellationTokenSource cancel = new();
@@ -3267,7 +3498,7 @@ internal sealed class BrowserForm : Form
                 }
             });
             MaterialCatalog catalog = await Task.Run(
-                () => MaterialCatalog.Load(_profile, false, progress, cancel.Token),
+                () => MaterialCatalog.Load(profile, false, progress, cancel.Token),
                 cancel.Token);
             if (IsDisposed || cancel != _materialCatalogCancel)
             {
@@ -3422,7 +3653,14 @@ internal sealed class BrowserForm : Form
         IReadOnlyList<SkinLinkEntry> uses = _skinLinks is null
             ? Array.Empty<SkinLinkEntry>()
             : _skinLinks.ByMesh.GetValueOrDefault(mesh.Hash) ?? Array.Empty<SkinLinkEntry>();
-        _meshSkins.SetRows(uses);
+        _meshSkins.SetRows(
+            uses.Select(row => new SkinChoiceRow(
+                row.NameHash,
+                row.ArchiveName,
+                row.Links.MeshLinks.Count.ToString("N0"),
+                $"{row.Links.MeshLinks.Count:N0} parts",
+                row)).ToArray(),
+            "No skin uses this mesh.");
         _meshSkinsOpen = true;
         RenderState();
     }
@@ -3455,7 +3693,14 @@ internal sealed class BrowserForm : Form
             return;
         }
 
-        _skeletonSkins.SetRows(uses);
+        _skeletonSkins.SetRows(
+            uses.Select(row => new SkinChoiceRow(
+                row.NameHash,
+                row.ArchiveName,
+                "",
+                "explicitly bound",
+                row)).ToArray(),
+            "No skin is explicitly bound to this skeleton.");
         _skeletonSkinsOpen = true;
         RenderState();
     }
@@ -3493,6 +3738,7 @@ internal sealed class BrowserForm : Form
             return;
         }
 
+        IReadOnlyList<AssetEntry> assets = _assets;
         _skinSkeletonsCancel?.Cancel();
         _skinSkeletonsCancel?.Dispose();
         CancellationTokenSource cancel = new();
@@ -3509,7 +3755,7 @@ internal sealed class BrowserForm : Form
                 }
             });
             SkinSkeletonIndex index = await Task.Run(
-                () => SkinSkeletonIndex.Load(_assets, progress, cancel.Token),
+                () => SkinSkeletonIndex.Load(assets, progress, cancel.Token),
                 cancel.Token);
             if (IsDisposed || cancel != _skinSkeletonsCancel)
             {
@@ -4020,6 +4266,7 @@ internal sealed class BrowserForm : Form
             return;
         }
 
+        IReadOnlyList<AssetEntry> assets = _assets;
         _skinLinksCancel?.Cancel();
         CancellationTokenSource cancel = new();
         _skinLinksCancel = cancel;
@@ -4035,7 +4282,7 @@ internal sealed class BrowserForm : Form
                 }
             });
             SkinLinkIndex index = await Task.Run(
-                () => SkinLinkIndex.Load(_assets, progress, cancel.Token),
+                () => SkinLinkIndex.Load(assets, progress, cancel.Token),
                 cancel.Token);
             if (IsDisposed || cancel != _skinLinksCancel)
             {
@@ -4085,6 +4332,7 @@ internal sealed class BrowserForm : Form
             return;
         }
 
+        GameProfile profile = _profile;
         _skeletonCancel?.Cancel();
         CancellationTokenSource cancel = new();
         _skeletonCancel = cancel;
@@ -4100,7 +4348,7 @@ internal sealed class BrowserForm : Form
                 }
             });
             SkeletonCatalog catalog = await Task.Run(
-                () => SkeletonCatalog.Load(_profile, false, progress, cancel.Token),
+                () => SkeletonCatalog.Load(profile, false, progress, cancel.Token),
                 cancel.Token);
             if (IsDisposed || cancel != _skeletonCancel)
             {
@@ -4199,6 +4447,7 @@ internal sealed class BrowserForm : Form
             return;
         }
 
+        GameProfile profile = _profile;
         _audioLoading = true;
         _audioCancel?.Cancel();
         CancellationTokenSource cancel = new();
@@ -4216,7 +4465,7 @@ internal sealed class BrowserForm : Form
                 }
             });
             AudioCatalog catalog = await Task.Run(
-                () => AudioCatalog.Load(_profile, progress, cancel.Token),
+                () => AudioCatalog.Load(profile, progress, cancel.Token),
                 cancel.Token);
             if (IsDisposed || cancel != _audioCancel)
             {
@@ -4406,12 +4655,13 @@ internal sealed class BrowserForm : Form
 
     private async Task PlayAudioAsync()
     {
-        if (_navigation?.State.Audio is not { } media || _audioBusy)
+        if (_navigation?.State.Audio is not { } media || _audioBusy || _loading || _exporting)
         {
             return;
         }
 
         string key = BrowserKeys.Audio(media);
+        int generation = _audioGeneration;
         _audioBusy = true;
         _audioView.SetBusy("Converting...");
         try
@@ -4426,7 +4676,7 @@ internal sealed class BrowserForm : Form
                 ogg = await Task.Run(() => ConvertAudio(media));
             }
 
-            if (IsDisposed)
+            if (IsDisposed || generation != _audioGeneration)
             {
                 return;
             }
@@ -4447,25 +4697,30 @@ internal sealed class BrowserForm : Form
         catch (Exception ex) when (ex is InvalidDataException or IOException
             or UnauthorizedAccessException)
         {
-            if (!IsDisposed)
+            if (!IsDisposed && generation == _audioGeneration)
             {
                 _audioView.ShowError(ex.Message);
             }
         }
         finally
         {
-            _audioBusy = false;
+            if (generation == _audioGeneration)
+            {
+                _audioBusy = false;
+            }
         }
     }
 
     private async Task ExportAudioAsync()
     {
-        if (_navigation?.State.Audio is not { } media || _audioBusy)
+        if (_navigation?.State.Audio is not { } media || _audioBusy
+            || _loading || _exporting || _profile is not { } profile)
         {
             return;
         }
 
         string key = BrowserKeys.Audio(media);
+        int generation = _audioGeneration;
         using SaveFileDialog dialog = new()
         {
             Filter = "Ogg Vorbis (*.ogg)|*.ogg",
@@ -4482,8 +4737,7 @@ internal sealed class BrowserForm : Form
         }
 
         string full = Path.GetFullPath(dialog.FileName);
-        if (_profile is not null
-            && GameFolderGuard.IsInside(_profile.Root, Path.GetDirectoryName(full)!))
+        if (GameFolderGuard.IsInside(profile.Root, Path.GetDirectoryName(full)!))
         {
             _status.Text = "Refusing to write inside the game folder.";
             return;
@@ -4496,6 +4750,11 @@ internal sealed class BrowserForm : Form
             byte[] ogg = _audioOgg is not null && _audioOggKey == key
                 ? _audioOgg
                 : await Task.Run(() => ConvertAudio(media));
+            if (IsDisposed || generation != _audioGeneration)
+            {
+                return;
+            }
+
             string? directory = Path.GetDirectoryName(full);
             if (!string.IsNullOrEmpty(directory))
             {
@@ -4516,13 +4775,18 @@ internal sealed class BrowserForm : Form
                 }
             }
 
+            if (generation != _audioGeneration)
+            {
+                return;
+            }
+
             _status.Text = $"Exported {Path.GetFileName(full)}";
             _audioView.SetStatus($"Exported {Path.GetFileName(full)}");
         }
         catch (Exception ex) when (ex is InvalidDataException or IOException
             or UnauthorizedAccessException)
         {
-            if (!IsDisposed)
+            if (!IsDisposed && generation == _audioGeneration)
             {
                 _status.Text = ex.Message;
                 _audioView.ShowError(ex.Message);
@@ -4530,7 +4794,10 @@ internal sealed class BrowserForm : Form
         }
         finally
         {
-            _audioBusy = false;
+            if (generation == _audioGeneration)
+            {
+                _audioBusy = false;
+            }
         }
     }
 
@@ -4769,7 +5036,7 @@ internal sealed class BrowserForm : Form
 
     private async Task ExportSelectedAsync()
     {
-        if (_profile is null || _exporting)
+        if (_profile is not { } profile || _exporting || _loading || _audioBusy)
         {
             return;
         }
@@ -4796,7 +5063,13 @@ internal sealed class BrowserForm : Form
             return;
         }
 
-        if (GameFolderGuard.IsInside(_profile.Root, dialog.SelectedPath))
+        if (!ReferenceEquals(_profile, profile) || _loading)
+        {
+            _status.Text = "The game changed. Export cancelled.";
+            return;
+        }
+
+        if (GameFolderGuard.IsInside(profile.Root, dialog.SelectedPath))
         {
             _status.Text = "Refusing to write inside the game folder.";
             return;
@@ -4879,7 +5152,10 @@ internal sealed class BrowserForm : Form
     {
         if (_textureInspector.Texture is not { } texture
             || _textureInspector.Occurrence is not { } occurrence
-            || _profile is null)
+            || _profile is not { } profile
+            || _exporting
+            || _loading
+            || _audioBusy)
         {
             return;
         }
@@ -4897,7 +5173,7 @@ internal sealed class BrowserForm : Form
         }
 
         string? folder = Path.GetDirectoryName(dialog.FileName);
-        if (folder is null || GameFolderGuard.IsInside(_profile.Root, folder))
+        if (folder is null || GameFolderGuard.IsInside(profile.Root, folder))
         {
             _status.Text = "Refusing to write inside the game folder.";
             return;
@@ -5353,7 +5629,7 @@ internal sealed class BrowserForm : Form
         {
             _status.Text =
                 $"{ScopeName(state.ArchivePath)} · {_textureList.Rows.Count:N0} of " +
-                $"{ArchiveCount(state.ArchivePath):N0} textures · {archiveCount:N0} archives";
+                $"{TextureCount(state.ArchivePath):N0} textures · {archiveCount:N0} archives";
             return;
         }
 
@@ -5407,7 +5683,8 @@ internal sealed class BrowserForm : Form
             return;
         }
 
-        if (state.View is BrowserView.Skin or BrowserView.SkinPose or BrowserView.Skeleton)
+        if (state.View is BrowserView.Skin or BrowserView.SkinPose or BrowserView.Skeleton
+            or BrowserView.AnimationLarge)
         {
             return;
         }
@@ -5442,7 +5719,7 @@ internal sealed class BrowserForm : Form
 
         _status.Text =
             $"{ScopeName(state.ArchivePath)} · {TypeName(state)} · " +
-            $"{ArchiveCount(state.ArchivePath):N0} rows · {archiveCount:N0} archives";
+            $"{ActiveCount(state.ArchivePath):N0} rows · {archiveCount:N0} archives";
     }
 
     private static TextureOccurrence ToOccurrence(AssetEntry entry) => new(
@@ -5456,6 +5733,7 @@ internal sealed class BrowserForm : Form
     {
         BrowserView.Textures => "Textures",
         BrowserView.Animations => "Animations",
+        BrowserView.AnimationLarge => "Animations",
         BrowserView.Meshes => "Meshes",
         BrowserView.Skins => "Skins",
         BrowserView.Skeletons => "Skeletons",
@@ -5466,7 +5744,6 @@ internal sealed class BrowserForm : Form
         BrowserView.SkinPose => state.Mesh is null ? "Skins" : "Meshes",
         BrowserView.Skeleton => DetailSource(state),
         BrowserView.Audio => "Audio",
-        BrowserView.Placeholder => state.PlaceholderName,
         _ => "Textures",
     };
 
@@ -5479,9 +5756,6 @@ internal sealed class BrowserForm : Form
 
     private static string ScopeName(string archivePath) =>
         string.IsNullOrEmpty(archivePath) ? "All archives" : Path.GetFileName(archivePath);
-
-    private static string ScopeChip(BrowserState state) =>
-        state.View == BrowserView.Audio ? "SOUNDBANKS" : ScopeName(state.ArchivePath);
 
     private static string AudioFilterLabel(BrowserState state)
     {
@@ -5520,6 +5794,9 @@ internal sealed class BrowserForm : Form
         {
             BrowserView.Textures => $"{archive} / Textures",
             BrowserView.Animations => $"{archive} / Animations",
+            BrowserView.AnimationLarge => state.Animation is { } largeClip
+                ? $"{archive} / Animations / 0x{largeClip.Hash:X16}"
+                : $"{archive} / Animations",
             BrowserView.Meshes => $"{archive} / Meshes",
             BrowserView.Skins => $"{archive} / Skins",
             BrowserView.Skeletons => $"{archive} / Skeletons",
@@ -5559,7 +5836,7 @@ internal sealed class BrowserForm : Form
                 : state.MaterialFromList
                     ? $"{archive} / Materials"
                     : $"{archive} / Textures / Materials",
-            _ => $"{archive} / {state.PlaceholderName}",
+            _ => $"{archive} / {TypeName(state)}",
         };
     }
 
@@ -5592,6 +5869,7 @@ internal sealed class BrowserForm : Form
 
         _lastNarrow = narrow;
         ApplyScopeVisibility();
+        UpdateToolbarLayout();
         if (wasNarrow != narrow && _navigation is not null)
         {
             RenderState();
@@ -5606,10 +5884,13 @@ internal sealed class BrowserForm : Form
 
     private void ApplyScopeVisibility()
     {
+        if (!_scopeOpen && !_outer.Panel1Collapsed)
+        {
+            _sidebarWidth = _outer.SplitterDistance;
+        }
+
         _outer.Panel1Collapsed = !_scopeOpen;
-        _scopeButton.Text = _navigation is null
-            ? "No game"
-            : _navigation.IsChooserOpen ? "All archives" : ScopeChip(_navigation.State);
+        _scopeButton.Text = "Scope";
         _scopeButton.Enabled = true;
     }
 
@@ -5644,9 +5925,13 @@ internal sealed class BrowserForm : Form
         }
 
         int sidebar = _outer.Panel1Collapsed ? _sidebarWidth : _outer.SplitterDistance;
-        int inspector = _inner.Panel2.Width;
+        int inspector = _inner.Panel2Collapsed ? _inspectorWidth : _inner.Panel2.Width;
         Settings.SaveBrowserLayout(
             BrowserLayout.ClampSidebar(sidebar, ClientSize.Width),
             BrowserLayout.ClampInspector(inspector, ClientSize.Width));
     }
+
+    private sealed record MaterialWork(
+        List<MaterialRow> Rows,
+        List<(string Archive, MaterialListResult Result)> Results);
 }

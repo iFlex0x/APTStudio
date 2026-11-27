@@ -25,4 +25,30 @@ public sealed class MaterialChooserTests
         Assert.Equal(13, opened!.Slot);
         Assert.Equal(0xAAAAUL, opened.Hash);
     }
+
+    [Fact]
+    public void EmptyRowsKeepTheCallerMessage()
+    {
+        using MaterialChooserView view = new();
+
+        view.SetRows([]);
+
+        Assert.Contains("No material uses.", TextValues(view));
+    }
+
+    private static IEnumerable<string> TextValues(Control root)
+    {
+        foreach (Control child in root.Controls)
+        {
+            if (child.Text.Length > 0)
+            {
+                yield return child.Text;
+            }
+
+            foreach (string text in TextValues(child))
+            {
+                yield return text;
+            }
+        }
+    }
 }

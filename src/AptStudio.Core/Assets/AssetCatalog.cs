@@ -62,7 +62,7 @@ public sealed record AssetCatalog(
         List<AssetArchive> archives = new(files.Count);
         List<AssetEntry> entries = new();
         Dictionary<ulong, int> classCounts = new();
-        Dictionary<(string Path, uint Offset), BitmapProbe> probes = new();
+        Dictionary<(string Path, uint Offset, ulong Name, uint Size), BitmapProbe> probes = new();
 
         for (int i = 0; i < files.Count; i++)
         {
@@ -105,7 +105,8 @@ public sealed record AssetCatalog(
                             }
                             else
                             {
-                                (string Path, uint Offset) key = (bodyPath, row.Offset);
+                                (string Path, uint Offset, ulong Name, uint Size) key =
+                                    (bodyPath, row.Offset, row.NameHash, row.CompressedSize);
                                 BitmapProbe probe;
                                 if (probes.TryGetValue(key, out BitmapProbe? cached))
                                 {

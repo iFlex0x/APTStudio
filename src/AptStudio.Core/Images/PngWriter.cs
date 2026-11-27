@@ -27,7 +27,7 @@ public static class PngWriter
             throw new ArgumentOutOfRangeException(nameof(height));
         }
 
-        if (rgba.Length != width * height * 4)
+        if (rgba.Length % 4 != 0 || rgba.Length / 4 != (long)width * height)
         {
             throw new ArgumentException("RGBA buffer length does not match the image size.", nameof(rgba));
         }

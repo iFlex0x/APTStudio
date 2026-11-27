@@ -84,8 +84,12 @@ internal sealed class MaterialSlotInspector : Panel
 
         _fit.Text = "Fit";
         _actual.Text = "1:1";
-        StyleSmall(_fit);
-        StyleSmall(_actual);
+        BrowserButtons.Style(_fit, BrowserButtonRole.Ordinary, Theme.Surface);
+        BrowserButtons.Style(_actual, BrowserButtonRole.Ordinary, Theme.Surface);
+        _fit.AutoSize = true;
+        _actual.AutoSize = true;
+        _fit.Margin = new Padding(0, 0, 4, 0);
+        _actual.Margin = new Padding(0);
         _fit.Click += (_, _) => _preview.Fit();
         _actual.Click += (_, _) => _preview.ActualSize();
 
@@ -114,18 +118,10 @@ internal sealed class MaterialSlotInspector : Panel
         viewRow.Controls.Add(_fit);
         viewRow.Controls.Add(_actual);
 
+        BrowserButtons.Style(_open, BrowserButtonRole.Primary, Theme.Surface);
         _open.Text = "Open texture";
-        _open.FlatStyle = FlatStyle.Flat;
-        _open.BackColor = Theme.Accent;
-        _open.ForeColor = BrowserVisual.PrimaryText;
-        _open.Font = BrowserVisual.UiSemibold;
         _open.AutoSize = true;
-        _open.MinimumSize = new Size(0, 26);
-        _open.MaximumSize = new Size(int.MaxValue, 26);
-        _open.Padding = new Padding(10, 3, 10, 3);
-        _open.UseVisualStyleBackColor = false;
-        _open.FlatAppearance.BorderSize = 0;
-        _open.FlatAppearance.MouseOverBackColor = Color.FromArgb(111, 208, 251);
+        _open.Enabled = false;
         _open.Click += (_, _) => OpenTextureRequested?.Invoke(this, EventArgs.Empty);
 
         FlowLayoutPanel actions = new()
@@ -137,14 +133,8 @@ internal sealed class MaterialSlotInspector : Panel
         };
         actions.Controls.Add(_open);
 
+        BrowserButtons.Style(_details, BrowserButtonRole.Quiet, Theme.Surface);
         _details.Text = "Details";
-        _details.FlatStyle = FlatStyle.Flat;
-        _details.ForeColor = Theme.Muted;
-        _details.Font = BrowserVisual.RowSmall;
-        _details.BackColor = Theme.Surface;
-        _details.UseVisualStyleBackColor = false;
-        _details.FlatAppearance.BorderSize = 0;
-        _details.FlatAppearance.MouseOverBackColor = BrowserVisual.SurfaceHover;
         _details.AutoSize = true;
         _details.Click += (_, _) => _detailsPanel.Visible = !_detailsPanel.Visible;
 
@@ -318,7 +308,7 @@ internal sealed class MaterialSlotInspector : Panel
 
     private void UpdateDetails(MaterialData data, MaterialSlot slot, TextureOccurrence occurrence)
     {
-        _detailsPanel.Controls.Clear();
+        BrowserVisual.DisposeChildren(_detailsPanel);
         TableLayoutPanel facts = new()
         {
             Dock = DockStyle.Top,
@@ -366,25 +356,5 @@ internal sealed class MaterialSlotInspector : Panel
     private void SetOpenAvailable(bool available)
     {
         _open.Enabled = available;
-        _open.BackColor = available ? Theme.Accent : BrowserVisual.BorderStrong;
-        _open.ForeColor = available ? BrowserVisual.PrimaryText : Theme.Muted;
-    }
-
-    private static void StyleSmall(Button button)
-    {
-        button.FlatStyle = FlatStyle.Flat;
-        button.BackColor = Theme.Surface;
-        button.ForeColor = Theme.Muted;
-        button.Font = BrowserVisual.RowSmall;
-        button.UseVisualStyleBackColor = false;
-        button.FlatAppearance.BorderSize = 1;
-        button.FlatAppearance.BorderColor = BrowserVisual.BorderStrong;
-        button.FlatAppearance.MouseOverBackColor = BrowserVisual.SurfaceHover;
-        button.Height = 24;
-        button.MinimumSize = new Size(0, 24);
-        button.MaximumSize = new Size(int.MaxValue, 24);
-        button.AutoSize = true;
-        button.Padding = new Padding(5, 2, 5, 2);
-        button.Margin = new Padding(4, 0, 0, 0);
     }
 }

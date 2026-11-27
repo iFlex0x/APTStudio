@@ -65,19 +65,11 @@ internal sealed class SkinPartView : Panel
         _binding.ForeColor = Theme.Text;
         _binding.Margin = new Padding(0, 4, 8, 0);
 
+        BrowserButtons.Style(
+            _openSkeleton, BrowserButtonRole.Ordinary, BrowserVisual.SurfaceRaised);
         _openSkeleton.Text = "Open Skeleton";
         _openSkeleton.AutoSize = true;
-        _openSkeleton.MinimumSize = new Size(0, 24);
-        _openSkeleton.FlatStyle = FlatStyle.Flat;
-        _openSkeleton.BackColor = BrowserVisual.SurfaceRaised;
-        _openSkeleton.ForeColor = Theme.Text;
-        _openSkeleton.Padding = new Padding(8, 0, 8, 0);
         _openSkeleton.Margin = new Padding(0, 1, 0, 0);
-        _openSkeleton.UseVisualStyleBackColor = false;
-        _openSkeleton.FlatAppearance.BorderSize = 1;
-        _openSkeleton.FlatAppearance.BorderColor = BrowserVisual.BorderStrong;
-        _openSkeleton.FlatAppearance.MouseOverBackColor = BrowserVisual.SurfaceHover;
-        _openSkeleton.FlatAppearance.MouseDownBackColor = Theme.Selection;
         _openSkeleton.Enabled = false;
         _openSkeleton.Click += (_, _) =>
         {
@@ -87,19 +79,11 @@ internal sealed class SkinPartView : Panel
             }
         };
 
+        BrowserButtons.Style(
+            _pose, BrowserButtonRole.Ordinary, BrowserVisual.SurfaceRaised);
         _pose.Text = "Pose skin";
         _pose.AutoSize = true;
-        _pose.MinimumSize = new Size(0, 24);
-        _pose.FlatStyle = FlatStyle.Flat;
-        _pose.BackColor = BrowserVisual.SurfaceRaised;
-        _pose.ForeColor = Theme.Text;
-        _pose.Padding = new Padding(8, 0, 8, 0);
         _pose.Margin = new Padding(0, 1, 0, 0);
-        _pose.UseVisualStyleBackColor = false;
-        _pose.FlatAppearance.BorderSize = 1;
-        _pose.FlatAppearance.BorderColor = BrowserVisual.BorderStrong;
-        _pose.FlatAppearance.MouseOverBackColor = BrowserVisual.SurfaceHover;
-        _pose.FlatAppearance.MouseDownBackColor = Theme.Selection;
         _pose.Enabled = false;
         _pose.Click += (_, _) =>
         {

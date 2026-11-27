@@ -64,7 +64,25 @@ internal sealed class BrowserNavigation
         State = State with
         {
             Animation = animation,
+            AnimationLarge = null,
             ListIndex = listIndex,
+        };
+    }
+
+    public void OpenAnimationLarge(AnimationLargeState large)
+    {
+        ArgumentNullException.ThrowIfNull(large);
+        if (State.Animation is null || State.View != BrowserView.Animations)
+        {
+            throw new InvalidOperationException("Open the large view from an animation list.");
+        }
+
+        _back.Push(State);
+        _forward.Clear();
+        State = State with
+        {
+            View = BrowserView.AnimationLarge,
+            AnimationLarge = large,
         };
     }
 
@@ -364,7 +382,7 @@ internal sealed class BrowserNavigation
         };
     }
 
-    public void SwitchScope(string archivePath, BrowserView view, string placeholderName = "")
+    public void SwitchScope(string archivePath, BrowserView view)
     {
         _back.Clear();
         _forward.Clear();
@@ -384,8 +402,7 @@ internal sealed class BrowserNavigation
             null,
             0,
             null,
-            null,
-            placeholderName);
+            null);
     }
 
     public void Back()

@@ -1157,10 +1157,8 @@ internal static class Program
             return 1;
         }
 
-        string full = Path.GetFullPath(outputPath);
-        if (GameFolderGuard.IsInside(profile.Root, Path.GetDirectoryName(full)!))
+        if (!TryOutputPath(profile.Root, outputPath, out string full))
         {
-            Console.Error.WriteLine("refusing to write inside the game folder.");
             return 1;
         }
 
@@ -1533,10 +1531,8 @@ internal static class Program
             return 1;
         }
 
-        string fullOutput = Path.GetFullPath(outputPath);
-        if (GameFolderGuard.IsInside(gameRoot, Path.GetDirectoryName(fullOutput)!))
+        if (!TryOutputPath(gameRoot, outputPath, out string fullOutput))
         {
-            Console.Error.WriteLine("refusing to write inside the game folder.");
             return 1;
         }
 
@@ -1618,8 +1614,8 @@ internal static class Program
 
         try
         {
-            DecodedTexture image = TextureExport.ExportPng(chosen, outputPath);
-            long bytes = new FileInfo(Path.GetFullPath(outputPath)).Length;
+            DecodedTexture image = TextureExport.ExportPng(chosen, fullOutput);
+            long bytes = new FileInfo(fullOutput).Length;
             Console.WriteLine(
                 $"{Path.GetFileName(chosen.ArchivePath)} 0x{name:X16} {image.Width}x{image.Height} {chosen.Head.Format.DisplayName} {N(bytes)} B -> {outputPath}");
             return 0;
@@ -1630,6 +1626,29 @@ internal static class Program
             Console.Error.WriteLine(ex.Message);
             return 2;
         }
+    }
+
+    private static bool TryOutputPath(string gameRoot, string path, out string full)
+    {
+        try
+        {
+            full = Path.GetFullPath(path);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException
+            or PathTooLongException)
+        {
+            full = "";
+            Console.Error.WriteLine($"invalid output path: {ex.Message}");
+            return false;
+        }
+
+        if (GameFolderGuard.IsInside(gameRoot, full))
+        {
+            Console.Error.WriteLine("refusing to write inside the game folder.");
+            return false;
+        }
+
+        return true;
     }
 
     private static string N(long value) => value.ToString("N0", CultureInfo.InvariantCulture);

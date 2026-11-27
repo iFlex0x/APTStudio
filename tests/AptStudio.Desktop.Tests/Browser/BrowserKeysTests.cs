@@ -36,4 +36,46 @@ public sealed class BrowserKeysTests
         Assert.Null(BrowserKeys.HashText("C.DPC"));
         Assert.Null(BrowserKeys.HashText(null));
     }
+
+    [Fact]
+    public void OccurrenceKeysKeepDuplicatesButShareTheArchiveAndOffsetRule()
+    {
+        AssetEntry first = new(
+            @"C:\game\A.DPC",
+            @"C:\game\A.DPC",
+            false,
+            new DpcEntry(0xAAAA, AssetClass.Bitmap, 10, 1, 0, 0, 0, 0, 0),
+            null,
+            null);
+        AssetEntry second = first with { ArchivePath = @"C:\game\B.DPC" };
+        AssetEntry third = first with
+        {
+            Row = new DpcEntry(0xAAAA, AssetClass.Bitmap, 0, 11, 1, 0, 0, 0, 0),
+        };
+
+        TextureOccurrence occurrence = new(
+            0xAAAA,
+            first.ArchivePath,
+            first.BodyArchivePath,
+            first.Row.BodyOffset,
+            null!);
+        MeshOccurrence mesh = new(
+            0xAAAA,
+            first.ArchivePath,
+            first.BodyArchivePath,
+            first.Row.BodyOffset);
+        SkinOccurrence skin = new(
+            0xAAAA,
+            first.ArchivePath,
+            first.BodyArchivePath,
+            first.Row.BodyOffset);
+
+        Assert.Equal(BrowserKeys.Texture(first), BrowserKeys.Mesh(first));
+        Assert.Equal(BrowserKeys.Texture(first), BrowserKeys.Skin(first));
+        Assert.Equal(BrowserKeys.Texture(first), BrowserKeys.Texture(occurrence));
+        Assert.Equal(BrowserKeys.Mesh(first), BrowserKeys.Mesh(mesh));
+        Assert.Equal(BrowserKeys.Skin(first), BrowserKeys.Skin(skin));
+        Assert.NotEqual(BrowserKeys.Texture(first), BrowserKeys.Texture(second));
+        Assert.NotEqual(BrowserKeys.Texture(first), BrowserKeys.Texture(third));
+    }
 }

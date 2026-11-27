@@ -1,20 +1,29 @@
 using System.Drawing;
-using AptStudio.Core.Links;
 
 namespace AptStudio.Desktop.Browser;
 
-internal sealed class MeshSkinChooserView : Panel
+internal sealed record SkinChoiceRow(
+    ulong Hash,
+    string ArchiveName,
+    string Parts,
+    string Detail,
+    object Tag);
+
+internal sealed class SkinChooserView : Panel
 {
     private readonly Label _selected = new();
     private readonly Button _open = new();
     private readonly DataGridView _grid = new();
     private readonly Font _monoFont = new("Consolas", 8.625f);
-    private IReadOnlyList<SkinLinkEntry> _rows = Array.Empty<SkinLinkEntry>();
+    private readonly bool _showParts;
+    private IReadOnlyList<SkinChoiceRow> _rows = Array.Empty<SkinChoiceRow>();
     private int _selectedIndex = -1;
     private bool _suppress;
+    private string _emptyText = "Select a skin.";
 
-    public MeshSkinChooserView()
+    public SkinChooserView(bool showParts)
     {
+        _showParts = showParts;
         BackColor = Theme.Background;
         Padding = new Padding(0);
 
@@ -25,17 +34,11 @@ internal sealed class MeshSkinChooserView : Panel
         _selected.Height = 20;
         _selected.Padding = new Padding(0, 2, 0, 0);
 
+        BrowserButtons.Style(_open, BrowserButtonRole.Primary, Theme.Background);
         _open.Text = "Open skin";
-        _open.FlatStyle = FlatStyle.Flat;
-        _open.BackColor = Theme.Accent;
-        _open.ForeColor = BrowserVisual.PrimaryText;
-        _open.Font = BrowserVisual.UiSemibold;
         _open.AutoSize = false;
         _open.Width = 110;
         _open.Height = 26;
-        _open.UseVisualStyleBackColor = false;
-        _open.FlatAppearance.BorderSize = 0;
-        _open.FlatAppearance.MouseOverBackColor = Color.FromArgb(111, 208, 251);
         _open.Enabled = false;
         _open.Click += (_, _) => OpenSelected();
 
@@ -56,33 +59,31 @@ internal sealed class MeshSkinChooserView : Panel
         Controls.Add(bar);
     }
 
-    public event EventHandler<SkinLinkEntry>? OpenRequested;
+    public event EventHandler<SkinChoiceRow>? OpenRequested;
 
     public int RowCount => _rows.Count;
 
-    private SkinLinkEntry? SelectedRow =>
+    private SkinChoiceRow? SelectedRow =>
         _selectedIndex >= 0 && _selectedIndex < _rows.Count ? _rows[_selectedIndex] : null;
 
-    public void SetRows(IReadOnlyList<SkinLinkEntry> rows)
+    public void SetRows(IReadOnlyList<SkinChoiceRow> rows, string emptyText)
     {
         _rows = rows;
+        _emptyText = emptyText;
         _suppress = true;
         try
         {
             _grid.Rows.Clear();
-            foreach (SkinLinkEntry row in rows)
+            foreach (SkinChoiceRow row in rows)
             {
-                int index = _grid.Rows.Add(
-                    $"0x{row.NameHash:X16}",
-                    row.ArchiveName,
-                    row.Links.MeshLinks.Count);
+                int index = _showParts
+                    ? _grid.Rows.Add($"0x{row.Hash:X16}", row.ArchiveName, row.Parts)
+                    : _grid.Rows.Add($"0x{row.Hash:X16}", row.ArchiveName);
                 _grid.Rows[index].Tag = row;
             }
 
             _open.Enabled = rows.Count > 0;
-            _selected.Text = rows.Count == 0
-                ? "No skin uses this mesh."
-                : "Select a skin to open.";
+            _selected.Text = rows.Count == 0 ? emptyText : "Select a skin to open.";
             _selectedIndex = rows.Count == 0 ? -1 : 0;
             if (_grid.Rows.Count > 0)
             {
@@ -118,20 +119,24 @@ internal sealed class MeshSkinChooserView : Panel
         _grid.Columns.Add(new DataGridViewTextBoxColumn
         {
             HeaderText = "SKIN",
-            FillWeight = 52,
+            FillWeight = _showParts ? 52 : 58,
             DefaultCellStyle = { Font = _monoFont },
         });
         _grid.Columns.Add(new DataGridViewTextBoxColumn
         {
             HeaderText = "ARCHIVE",
-            FillWeight = 38,
+            FillWeight = _showParts ? 38 : 42,
         });
-        _grid.Columns.Add(new DataGridViewTextBoxColumn
+        if (_showParts)
         {
-            HeaderText = "PARTS",
-            FillWeight = 10,
-            DefaultCellStyle = { Alignment = DataGridViewContentAlignment.MiddleRight },
-        });
+            _grid.Columns.Add(new DataGridViewTextBoxColumn
+            {
+                HeaderText = "PARTS",
+                FillWeight = 10,
+                DefaultCellStyle = { Alignment = DataGridViewContentAlignment.MiddleRight },
+            });
+        }
+
         _grid.CellFormatting += (_, e) =>
         {
             if (e.RowIndex < 0 || e.ColumnIndex != 1 || e.Value is not string text)
@@ -149,7 +154,7 @@ internal sealed class MeshSkinChooserView : Panel
         _grid.CellToolTipTextNeeded += (_, e) =>
         {
             if (e.RowIndex >= 0 && e.ColumnIndex == 1
-                && _grid.Rows[e.RowIndex].Tag is SkinLinkEntry row)
+                && _grid.Rows[e.RowIndex].Tag is SkinChoiceRow row)
             {
                 e.ToolTipText = row.ArchiveName;
             }
@@ -183,12 +188,11 @@ internal sealed class MeshSkinChooserView : Panel
 
     private void UpdateSelection()
     {
-        SkinLinkEntry? row = SelectedRow;
+        SkinChoiceRow? row = SelectedRow;
         _open.Enabled = row is not null;
         _selected.Text = row is null
-            ? "Select a skin."
-            : $"Selected: 0x{row.NameHash:X16} · {row.ArchiveName} · " +
-                $"{row.Links.MeshLinks.Count:N0} parts";
+            ? _rows.Count == 0 ? _emptyText : "Select a skin."
+            : $"Selected: 0x{row.Hash:X16} · {row.ArchiveName} · {row.Detail}";
     }
 
     private void OpenSelected()

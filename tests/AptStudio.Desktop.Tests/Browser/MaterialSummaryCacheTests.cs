@@ -67,6 +67,29 @@ public sealed class MaterialSummaryCacheTests
         Assert.Equal(0xDDDDDDDDDDDDDDDDUL, row.Hash);
     }
 
+    [Fact]
+    public void ScopeSwitchesKeepPerArchiveAndAllRows()
+    {
+        MaterialSummaryCache cache = new();
+        int generation = cache.Generation;
+        Assert.True(cache.TryStore(generation, "GREECE.DPC", Result(0xAAAAAAAAAAAAAAAA, 2)));
+        Assert.True(cache.TryStore(generation, "VENICE.DPC", Result(0xBBBBBBBBBBBBBBBB, 3)));
+        Assert.True(cache.TryStoreAll(
+            generation,
+            [Result(0xAAAAAAAAAAAAAAAA, 0).Rows[0], Result(0xBBBBBBBBBBBBBBBB, 0).Rows[0]]));
+
+        Assert.Single(cache.GetRows("GREECE.DPC")!);
+        Assert.Single(cache.GetRows("VENICE.DPC")!);
+        Assert.Equal(2, cache.GetRows("")!.Count);
+        Assert.Equal(5, cache.DecodeCount);
+
+        cache.Reset();
+
+        Assert.Null(cache.GetRows("GREECE.DPC"));
+        Assert.Null(cache.GetRows("VENICE.DPC"));
+        Assert.Null(cache.GetRows(""));
+    }
+
     private static MaterialListResult Result(ulong hash, int decodes)
     {
         MaterialEntry entry = new(

@@ -1,4 +1,7 @@
+using System.Buffers.Binary;
+using System.Text;
 using AptStudio.Core.Assets;
+using AptStudio.Core.Containers;
 using AptStudio.Core.Games;
 using AptStudio.Core.Tests.Textures;
 
@@ -179,6 +182,42 @@ public sealed class AssetCatalogTests : IDisposable
             AssetCatalog.Load(Detect(), cancellationToken: cancel.Token));
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void ValidatesEachBitmapRowReference(bool badSizeFirst)
+    {
+        (ulong, uint, uint) bad = (0x1111UL, 300u, 133u);
+        (ulong, uint, uint) valid = (0x1111UL, 300u, 132u);
+        WriteArchive("SHARED.DPC", BuildSharedBody(
+            0x1111, badSizeFirst ? [bad, valid] : [valid, bad]));
+
+        AssetCatalog catalog = AssetCatalog.Load(Detect());
+
+        Assert.Equal(2, catalog.Entries.Count);
+        Assert.Equal(1, catalog.BodyErrorCount);
+        Assert.Equal(1, catalog.PreviewableCount);
+        Assert.Contains(catalog.Entries, entry => entry.BodyError is not null);
+        Assert.Single(catalog.Entries, entry => entry.Bitmap is not null && entry.BodyError is null);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void ValidatesEachBitmapRowName(bool wrongNameFirst)
+    {
+        (ulong, uint, uint) wrong = (0x1111UL, 300u, 132u);
+        (ulong, uint, uint) valid = (0x2222UL, 300u, 132u);
+        WriteArchive("SHARED.DPC", BuildSharedBody(
+            0x2222, wrongNameFirst ? [wrong, valid] : [valid, wrong]));
+
+        AssetCatalog catalog = AssetCatalog.Load(Detect());
+
+        Assert.Equal(2, catalog.Entries.Count);
+        Assert.Equal(1, catalog.BodyErrorCount);
+        Assert.Equal(1, catalog.PreviewableCount);
+    }
+
     private GameProfile Detect()
     {
         Assert.True(GameProfile.TryDetect(_root, out GameProfile? profile, out string? error), error);
@@ -187,4 +226,67 @@ public sealed class AssetCatalogTests : IDisposable
 
     private void WriteArchive(string name, byte[] bytes) =>
         File.WriteAllBytes(Path.Combine(_dataRoot, name), bytes);
+
+    private static byte[] BuildSharedBody(
+        ulong bodyName,
+        params (ulong Name, uint Offset, uint Size)[] rows)
+    {
+        byte[] data = new byte[AssetTestData.FileLength];
+        byte[] banner = Encoding.ASCII.GetBytes("v2.128.58.19 - test");
+        Array.Copy(banner, data, banner.Length);
+
+        int header = DpcHeader.Offset;
+        data[header] = 1;
+        WriteU32(data, header + 1, 2);
+        WriteU32(data, header + 5, 100);
+        WriteU32(data, header + 9, 64);
+        WriteU32(data, header + 13, 300);
+        WriteU32(data, header + 17, 0);
+        WriteU32(data, header + 21, 0);
+
+        WriteU32(data, 100 * 32, 1);
+        WriteU32(data, 100 * 32 + 4 + 24, 128);
+
+        int map = 128 * 32;
+        WriteU32(data, map, 0);
+        int countAt = map + 40 + 52 * 28;
+        WriteU32(data, countAt, (uint)rows.Length);
+        int cursor = countAt + 4;
+        foreach ((ulong name, uint offset, uint size) in rows)
+        {
+            WriteU64(data, cursor, name);
+            WriteU64(data, cursor + 8, AssetClass.Bitmap);
+            WriteU64(data, cursor + 16, 0x9999);
+            WriteU32(data, cursor + 24, offset);
+            WriteU32(data, cursor + 28, size);
+            WriteU32(data, cursor + 32, 0);
+            WriteU32(data, cursor + 36, size);
+            WriteU16(data, cursor + 40, 0);
+            WriteU16(data, cursor + 42, 0);
+            cursor += DpcArchive.NormalEntrySize;
+        }
+
+        WriteU64(data, cursor, 0);
+        WriteU32(data, cursor + 8, 0);
+        WriteU32(data, cursor + 12, 0);
+        WriteU32(data, cursor + 16, 0);
+
+        byte[] bitmap = BitmapTestData.Header(4, 4, 1, 8, 0x1B, name: bodyName);
+        Array.Copy(bitmap, 0, data, 300 * 32, bitmap.Length);
+        for (int i = 0; i < 12; i++)
+        {
+            data[300 * 32 + bitmap.Length + i] = 0xAA;
+        }
+
+        return data;
+    }
+
+    private static void WriteU16(byte[] data, int offset, ushort value) =>
+        BinaryPrimitives.WriteUInt16LittleEndian(data.AsSpan(offset), value);
+
+    private static void WriteU32(byte[] data, int offset, uint value) =>
+        BinaryPrimitives.WriteUInt32LittleEndian(data.AsSpan(offset), value);
+
+    private static void WriteU64(byte[] data, int offset, ulong value) =>
+        BinaryPrimitives.WriteUInt64LittleEndian(data.AsSpan(offset), value);
 }

@@ -148,10 +148,14 @@ internal sealed class TextureInspector : Panel
         });
         _channels.Controls.Add(_channelSegments);
 
+        BrowserButtons.Style(_fit, BrowserButtonRole.Ordinary, Theme.Surface);
         _fit.Text = "Fit";
+        BrowserButtons.Style(_actual, BrowserButtonRole.Ordinary, Theme.Surface);
         _actual.Text = "1:1";
-        StyleSmallButton(_fit);
-        StyleSmallButton(_actual);
+        _fit.AutoSize = true;
+        _actual.AutoSize = true;
+        _fit.Margin = new Padding(2, 0, 2, 0);
+        _actual.Margin = new Padding(2, 0, 2, 0);
         _fit.Click += (_, _) => _preview.Fit();
         _actual.Click += (_, _) => _preview.ActualSize();
         _channels.Controls.Add(_fit);
@@ -163,27 +167,20 @@ internal sealed class TextureInspector : Panel
         _copyRow.Controls.Add(_copiesLabel);
         _copyRow.Controls.Add(_copies);
 
+        BrowserButtons.Style(_usedBy, BrowserButtonRole.Primary, Theme.Surface);
         _usedBy.Text = "Used by";
-        _usedBy.FlatStyle = FlatStyle.Flat;
-        _usedBy.BackColor = Theme.Accent;
-        _usedBy.ForeColor = BrowserVisual.PrimaryText;
-        _usedBy.Font = BrowserVisual.UiSemibold;
         _usedBy.AutoSize = true;
-        _usedBy.MinimumSize = new Size(0, 26);
-        _usedBy.MaximumSize = new Size(int.MaxValue, 26);
-        _usedBy.Padding = new Padding(8, 3, 8, 3);
-        _usedBy.UseVisualStyleBackColor = false;
-        _usedBy.FlatAppearance.BorderSize = 0;
-        _usedBy.FlatAppearance.MouseOverBackColor = Color.FromArgb(111, 208, 251);
         _usedBy.Click += (_, _) => UsedByRequested?.Invoke(this, EventArgs.Empty);
 
+        BrowserButtons.Style(_reveal, BrowserButtonRole.Ordinary, Theme.Surface);
         _reveal.Text = "Reveal in archive";
-        StyleActionButton(_reveal);
+        _reveal.AutoSize = true;
         _reveal.Visible = false;
         _reveal.Click += (_, _) => RevealRequested?.Invoke(this, EventArgs.Empty);
 
+        BrowserButtons.Style(_export, BrowserButtonRole.Ordinary, Theme.Surface);
         _export.Text = "Export PNG";
-        StyleActionButton(_export);
+        _export.AutoSize = true;
         _export.Click += (_, _) => ExportRequested?.Invoke(this, EventArgs.Empty);
 
         _actions.AutoSize = true;
@@ -193,16 +190,9 @@ internal sealed class TextureInspector : Panel
         _actions.Controls.Add(_reveal);
         _actions.Controls.Add(_export);
 
+        BrowserButtons.Style(_details, BrowserButtonRole.Quiet, Theme.Surface);
         _details.Text = "Details";
-        _details.FlatStyle = FlatStyle.Flat;
-        _details.ForeColor = Theme.Muted;
-        _details.Font = BrowserVisual.RowSmall;
-        _details.BackColor = Theme.Surface;
-        _details.UseVisualStyleBackColor = false;
-        _details.FlatAppearance.BorderSize = 0;
-        _details.FlatAppearance.MouseOverBackColor = BrowserVisual.SurfaceHover;
         _details.AutoSize = true;
-        _details.Padding = new Padding(0, 3, 0, 0);
         _details.Click += (_, _) =>
         {
             _detailsPanel.Visible = !_detailsPanel.Visible;
@@ -471,7 +461,7 @@ internal sealed class TextureInspector : Panel
         TextureOccurrence occurrence,
         IReadOnlyList<TextureOccurrence> copies)
     {
-        _detailsPanel.Controls.Clear();
+        BrowserVisual.DisposeChildren(_detailsPanel);
         TableLayoutPanel facts = new()
         {
             Dock = DockStyle.Top,
@@ -522,40 +512,5 @@ internal sealed class TextureInspector : Panel
         combo.ForeColor = Theme.Text;
         combo.FlatStyle = FlatStyle.Flat;
         combo.Font = BrowserVisual.UiSmall;
-    }
-
-    private static void StyleSmallButton(Button button)
-    {
-        button.FlatStyle = FlatStyle.Flat;
-        button.BackColor = Theme.Surface;
-        button.ForeColor = Theme.Muted;
-        button.Font = BrowserVisual.RowSmall;
-        button.UseVisualStyleBackColor = false;
-        button.FlatAppearance.BorderSize = 1;
-        button.FlatAppearance.BorderColor = BrowserVisual.BorderStrong;
-        button.FlatAppearance.MouseOverBackColor = BrowserVisual.SurfaceHover;
-        button.Height = 24;
-        button.MinimumSize = new Size(0, 24);
-        button.MaximumSize = new Size(int.MaxValue, 24);
-        button.AutoSize = true;
-        button.Padding = new Padding(5, 2, 5, 2);
-        button.Margin = new Padding(2, 0, 2, 0);
-    }
-
-    private static void StyleActionButton(Button button)
-    {
-        button.FlatStyle = FlatStyle.Flat;
-        button.BackColor = Theme.Surface;
-        button.ForeColor = Theme.Text;
-        button.Font = BrowserVisual.UiSmall;
-        button.UseVisualStyleBackColor = false;
-        button.FlatAppearance.BorderSize = 1;
-        button.FlatAppearance.BorderColor = BrowserVisual.BorderStrong;
-        button.FlatAppearance.MouseOverBackColor = BrowserVisual.SurfaceHover;
-        button.AutoSize = true;
-        button.MinimumSize = new Size(0, 26);
-        button.MaximumSize = new Size(int.MaxValue, 26);
-        button.Padding = new Padding(6, 3, 6, 3);
-        button.Margin = new Padding(0, 0, 3, 4);
     }
 }
