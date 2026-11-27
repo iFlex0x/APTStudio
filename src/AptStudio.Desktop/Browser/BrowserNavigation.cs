@@ -80,6 +80,7 @@ internal sealed class BrowserNavigation
             Skin = null,
             SkinPart = 0,
             Skeleton = null,
+            PoseSkeletonRoot = 0,
             ListIndex = listIndex,
         };
     }
@@ -126,6 +127,25 @@ internal sealed class BrowserNavigation
     public void SetSkinPart(int part)
     {
         State = State with { SkinPart = part };
+    }
+
+    public void OpenSkinPose(SkinOccurrence skin, ulong skeletonRoot)
+    {
+        ArgumentNullException.ThrowIfNull(skin);
+        if (skeletonRoot == 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(skeletonRoot), "Pose requires an explicit skeleton binding.");
+        }
+
+        _back.Push(State);
+        _forward.Clear();
+        State = State with
+        {
+            View = BrowserView.SkinPose,
+            Skin = skin,
+            PoseSkeletonRoot = skeletonRoot,
+        };
     }
 
     public void SetSkinListSelection(SkinOccurrence skin, int listIndex)

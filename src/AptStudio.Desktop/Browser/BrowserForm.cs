@@ -31,6 +31,7 @@ internal sealed class BrowserForm : Form
     private readonly MeshInspector _meshInspector = new();
     private readonly MeshSkinChooserView _meshSkins = new();
     private readonly SkeletonSkinChooserView _skeletonSkins = new();
+    private readonly Panel _poseHost = new();
     private readonly SkinPartView _skinView = new();
     private readonly SkeletonView _skeletonView = new();
     private readonly AudioView _audioView = new();
@@ -60,6 +61,8 @@ internal sealed class BrowserForm : Form
     private int _chooserArchiveCount;
     private bool _meshSkinsOpen;
     private bool _skeletonSkinsOpen;
+    private PoseView? _poseView;
+    private string? _poseKey;
     private SkinLinkIndex? _skinLinks;
     private Task? _skinLinksTask;
     private CancellationTokenSource? _skinLinksCancel;
@@ -630,6 +633,8 @@ internal sealed class BrowserForm : Form
         _meshSkins.Visible = false;
         _skeletonSkins.Dock = DockStyle.Fill;
         _skeletonSkins.Visible = false;
+        _poseHost.Dock = DockStyle.Fill;
+        _poseHost.Visible = false;
         _skinView.Dock = DockStyle.Fill;
         _skinView.Visible = false;
         _skeletonView.Dock = DockStyle.Fill;
@@ -640,6 +645,7 @@ internal sealed class BrowserForm : Form
         _results.Controls.Add(_materialSlots);
         _results.Controls.Add(_meshSkins);
         _results.Controls.Add(_skeletonSkins);
+        _results.Controls.Add(_poseHost);
         _results.Controls.Add(_skinView);
         _results.Controls.Add(_skeletonView);
         _results.Controls.Add(_textureHost);
@@ -918,6 +924,7 @@ internal sealed class BrowserForm : Form
         _skeletonView.UsedByRequested += (_, _) => ShowSkeletonSkins();
         _skinView.SkeletonRequested += async root => await OpenSkeletonAsync(root);
         _skinView.MeshRequested += hash => OpenMeshFromSkin(hash);
+        _skinView.PoseRequested += root => OpenPoseFromSkin(root);
         _skinView.PartChanged += part =>
         {
             if (_navigation?.State.View == BrowserView.Skin)
@@ -1001,6 +1008,7 @@ internal sealed class BrowserForm : Form
         _skinSkeletonsTask = null;
         _skeletonSkinsOpen = false;
         _skeletonSkins.SetRows([]);
+        ClearPoseView();
         _skeletonCancel?.Cancel();
         _skeletonCancel = null;
         _skeletonCatalog = null;
@@ -1335,6 +1343,9 @@ internal sealed class BrowserForm : Form
             BrowserView.Skin => state.Mesh is null
                 ? BrowserView.Skins
                 : BrowserView.Meshes,
+            BrowserView.SkinPose => state.Mesh is null
+                ? BrowserView.Skins
+                : BrowserView.Meshes,
             BrowserView.Skeleton => state.Mesh is not null
                 ? BrowserView.Meshes
                 : state.Skin is not null
@@ -1646,6 +1657,11 @@ internal sealed class BrowserForm : Form
         }
 
         BrowserState state = _navigation.State;
+        if (state.View != BrowserView.SkinPose && _poseView is not null)
+        {
+            ClearPoseView();
+        }
+
         if (!string.IsNullOrEmpty(state.ArchivePath))
         {
             _lastArchive = state.ArchivePath;
@@ -1698,7 +1714,8 @@ internal sealed class BrowserForm : Form
         }
 
         bool textureView = state.View == BrowserView.Textures || state.View == BrowserView.LinkedTexture;
-        bool detailView = state.View is BrowserView.Skin or BrowserView.Skeleton;
+        bool detailView = state.View is BrowserView.Skin or BrowserView.SkinPose
+            or BrowserView.Skeleton;
         bool skeletonChooser = state.View == BrowserView.Skeleton && _skeletonSkinsOpen;
         bool fullWidth = detailView || state.View is BrowserView.Skins or BrowserView.Skeletons
             or BrowserView.Materials;
@@ -1710,6 +1727,7 @@ internal sealed class BrowserForm : Form
         _materialSlots.Visible = state.View == BrowserView.Material
             || state.View == BrowserView.LinkedTexture;
         _skinView.Visible = state.View == BrowserView.Skin;
+        _poseHost.Visible = false;
         _skeletonView.Visible = state.View == BrowserView.Skeleton;
         _meshSkins.Visible = false;
         _skeletonSkins.Visible = false;
@@ -1831,6 +1849,13 @@ internal sealed class BrowserForm : Form
                 _textureToolbar.Visible = false;
                 _skinView.Visible = true;
                 _ = RenderSkinAsync(state);
+                break;
+            case BrowserView.SkinPose:
+                _textureHost.Visible = false;
+                _textureToolbar.Visible = false;
+                _skinView.Visible = false;
+                _poseHost.Visible = true;
+                RenderSkinPose(state);
                 break;
             case BrowserView.Skeleton:
                 _textureHost.Visible = false;
@@ -3269,6 +3294,63 @@ internal sealed class BrowserForm : Form
             _navigation.State.ArchivePath,
             TypeName(_navigation.State));
         RenderState();
+    }
+
+    private void OpenPoseFromSkin(ulong root)
+    {
+        if (_navigation?.State.View != BrowserView.Skin
+            || _navigation.State.Skin is not { } skin)
+        {
+            return;
+        }
+
+        _navigation.SetSkinPart(_skinView.SelectedPart);
+        _navigation.OpenSkinPose(skin, root);
+        RenderState();
+    }
+
+    private void RenderSkinPose(BrowserState state)
+    {
+        if (_profile is null || state.Skin is not { } skin)
+        {
+            return;
+        }
+
+        AssetEntry? entry = FindSkinEntry(skin);
+        if (entry is null)
+        {
+            _status.Text = $"Skin 0x{skin.Hash:X16} is not indexed.";
+            return;
+        }
+
+        string key = $"{BrowserKeys.Skin(skin)}|{state.PoseSkeletonRoot:X16}";
+        if (_poseKey == key && _poseView is { IsDisposed: false })
+        {
+            return;
+        }
+
+        ClearPoseView();
+        _poseView = new PoseView(
+            _profile, _assets, entry, state.PoseSkeletonRoot, showAnimation: false);
+        _poseView.Dock = DockStyle.Fill;
+        _poseHost.Controls.Add(_poseView);
+        _poseKey = key;
+        _status.Text =
+            $"Pose 0x{skin.Hash:X16} · skeleton 0x{state.PoseSkeletonRoot:X16}";
+        _ = _poseView.LoadAsync();
+    }
+
+    private void ClearPoseView()
+    {
+        if (_poseView is null)
+        {
+            return;
+        }
+
+        _poseHost.Controls.Remove(_poseView);
+        _poseView.Dispose();
+        _poseView = null;
+        _poseKey = null;
     }
 
     private async Task RenderSkinAsync(BrowserState state)
@@ -4940,7 +5022,7 @@ internal sealed class BrowserForm : Form
             return;
         }
 
-        if (state.View is BrowserView.Skin or BrowserView.Skeleton)
+        if (state.View is BrowserView.Skin or BrowserView.SkinPose or BrowserView.Skeleton)
         {
             return;
         }
@@ -4996,6 +5078,7 @@ internal sealed class BrowserForm : Form
         BrowserView.Material => state.MaterialFromList ? "Materials" : "Textures",
         BrowserView.LinkedTexture => state.MaterialFromList ? "Materials" : "Textures",
         BrowserView.Skin => state.Mesh is null ? "Skins" : "Meshes",
+        BrowserView.SkinPose => state.Mesh is null ? "Skins" : "Meshes",
         BrowserView.Skeleton => DetailSource(state),
         BrowserView.Audio => "Audio",
         BrowserView.Placeholder => state.PlaceholderName,
@@ -5058,6 +5141,10 @@ internal sealed class BrowserForm : Form
             BrowserView.Skin => state.Skin is { } skin
                 ? $"{archive} / {(state.Mesh is null ? "Skins" : "Meshes")} / Skin 0x{skin.Hash:X16}"
                 : $"{archive} / {(state.Mesh is null ? "Skins" : "Meshes")} / Skin",
+            BrowserView.SkinPose => state.Skin is { } poseSkin
+                ? $"{archive} / {(state.Mesh is null ? "Skins" : "Meshes")} / " +
+                    $"Skin 0x{poseSkin.Hash:X16} / Pose"
+                : $"{archive} / Skins / Pose",
             BrowserView.Skeleton => state.Skeleton is { } skeleton
                 ? $"{archive} / {DetailSource(state)} / Skeleton 0x{skeleton.Hash:X16}"
                     + (_skeletonSkinsOpen ? " / Skins" : "")

@@ -8,6 +8,7 @@ internal sealed class SkinPartView : Panel
     private readonly Label _subtitle = new();
     private readonly Label _binding = new();
     private readonly Button _openSkeleton = new();
+    private readonly Button _pose = new();
     private readonly DataGridView _parts = new();
     private readonly SkinPartPreview _preview = new();
     private readonly Label _source = new();
@@ -85,9 +86,32 @@ internal sealed class SkinPartView : Panel
                 SkeletonRequested?.Invoke(_skeletonRoot);
             }
         };
+
+        _pose.Text = "Pose skin";
+        _pose.AutoSize = true;
+        _pose.MinimumSize = new Size(0, 24);
+        _pose.FlatStyle = FlatStyle.Flat;
+        _pose.BackColor = BrowserVisual.SurfaceRaised;
+        _pose.ForeColor = Theme.Text;
+        _pose.Padding = new Padding(8, 0, 8, 0);
+        _pose.Margin = new Padding(0, 1, 0, 0);
+        _pose.UseVisualStyleBackColor = false;
+        _pose.FlatAppearance.BorderSize = 1;
+        _pose.FlatAppearance.BorderColor = BrowserVisual.BorderStrong;
+        _pose.FlatAppearance.MouseOverBackColor = BrowserVisual.SurfaceHover;
+        _pose.FlatAppearance.MouseDownBackColor = Theme.Selection;
+        _pose.Enabled = false;
+        _pose.Click += (_, _) =>
+        {
+            if (_skeletonRoot != 0)
+            {
+                PoseRequested?.Invoke(_skeletonRoot);
+            }
+        };
         bindingStrip.Controls.Add(bindingLabel);
         bindingStrip.Controls.Add(_binding);
         bindingStrip.Controls.Add(_openSkeleton);
+        bindingStrip.Controls.Add(_pose);
 
         ConfigureParts();
         _preview.MeshRequested += hash => MeshRequested?.Invoke(hash);
@@ -153,6 +177,8 @@ internal sealed class SkinPartView : Panel
 
     public event Action<ulong>? MeshRequested;
 
+    public event Action<ulong>? PoseRequested;
+
     public int SelectedPart => _parts.CurrentCell?.RowIndex ?? -1;
 
     public void SetSkin(
@@ -169,6 +195,7 @@ internal sealed class SkinPartView : Panel
         _binding.Text = binding;
         _skeletonRoot = skeletonRoot;
         _openSkeleton.Enabled = skeletonRoot != 0;
+        _pose.Enabled = skeletonRoot != 0;
         _source.Text = source;
 
         _suppressPart = true;
@@ -232,6 +259,7 @@ internal sealed class SkinPartView : Panel
         _binding.Text = "";
         _skeletonRoot = 0;
         _openSkeleton.Enabled = false;
+        _pose.Enabled = false;
         _source.Text = "";
         _suppressPart = true;
         try

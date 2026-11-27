@@ -14,6 +14,7 @@ internal enum BrowserView
     Meshes,
     Skins,
     Skin,
+    SkinPose,
     Skeletons,
     Skeleton,
     Audio,
@@ -163,4 +164,5 @@ internal sealed record BrowserState(
     bool AudioSortDescending = false,
     bool MaterialFromList = false,
     string? MaterialError = null,
-    int ListScroll = 0);
+    int ListScroll = 0,
+    ulong PoseSkeletonRoot = 0);

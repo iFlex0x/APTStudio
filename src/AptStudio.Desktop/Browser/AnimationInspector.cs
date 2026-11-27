@@ -538,12 +538,13 @@ internal sealed class AnimationInspector : Panel
         }
 
         AnimationSkinCandidate candidate = _candidates[_skin.SelectedIndex];
-        using PoseForm form = new(
+        PoseForm form = new(
             _profile,
             _assets,
             candidate.Skin,
             candidate.SkeletonRoot,
             _animation);
+        form.FormClosed += (_, _) => form.Dispose();
         form.Show(this);
     }
 

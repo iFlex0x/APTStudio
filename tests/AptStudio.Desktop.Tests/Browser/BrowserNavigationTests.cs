@@ -390,6 +390,51 @@ public sealed class BrowserNavigationTests
     }
 
     [Fact]
+    public void SkinPoseBackRestoresSelectedPartAndSourceMesh()
+    {
+        MeshOccurrence source = new(
+            0x2C9F3F3CB3EF2F04,
+            @"C:\game\DATAS\LEVELS\GENERIC_KISSING_COUPLE_01_HUG.DPC",
+            @"C:\game\DATAS\LEVELS\GENERIC_KISSING_COUPLE_01_HUG.DPC",
+            305905920);
+        SkinOccurrence skin = new(
+            0x84316AA817823056,
+            @"C:\game\DATAS\LEVELS\GENERIC_KISSING_COUPLE_01_HUG.DPC",
+            @"C:\game\DATAS\LEVELS\GENERIC_KISSING_COUPLE_01_HUG.DPC",
+            61207488);
+        BrowserNavigation navigation = new(TextureState());
+        navigation.SelectMesh(source, 15);
+        MeshCamera camera = new(0.65f, 0.35f, 1.32f, new PointF(12f, -4f));
+        navigation.SetMeshView(camera, true);
+        navigation.SetQuery("head");
+        navigation.OpenSkin(skin, 11);
+        navigation.SetSkinPart(10);
+
+        navigation.OpenSkinPose(skin, 0xC81A1F5B0C7D7DBB);
+
+        Assert.Equal(BrowserView.SkinPose, navigation.State.View);
+        Assert.Equal(skin, navigation.State.Skin);
+        Assert.Equal(10, navigation.State.SkinPart);
+        Assert.Equal(0xC81A1F5B0C7D7DBBUL, navigation.State.PoseSkeletonRoot);
+
+        navigation.Back();
+
+        Assert.Equal(BrowserView.Skin, navigation.State.View);
+        Assert.Equal(skin, navigation.State.Skin);
+        Assert.Equal(10, navigation.State.SkinPart);
+        Assert.Equal(source, navigation.State.Mesh);
+        Assert.Equal(camera, navigation.State.MeshCamera);
+        Assert.Equal("head", navigation.State.Query);
+
+        navigation.Back();
+
+        Assert.Equal(BrowserView.Meshes, navigation.State.View);
+        Assert.Equal(source, navigation.State.Mesh);
+        Assert.Equal(camera, navigation.State.MeshCamera);
+        Assert.True(navigation.State.MeshWireframe);
+    }
+
+    [Fact]
     public void SkinPartMeshBackTwiceRestoresPartAndSourceMesh()
     {
         MeshOccurrence source = new(
