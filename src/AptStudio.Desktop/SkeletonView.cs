@@ -8,10 +8,14 @@ internal sealed class SkeletonView : Panel
 {
     private readonly Label _title = new();
     private readonly Label _subtitle = new();
+    private readonly TextBox _boneFilter = new();
+    private readonly System.Windows.Forms.Timer _boneFilterTimer = new() { Interval = 150 };
     private readonly Button _usedBy = new();
     private readonly DataGridView _bones = new();
     private readonly SkeletonCanvas _canvas = new();
     private readonly SplitContainer _split = new();
+    private SkeletonData? _data;
+    private bool _suppressBoneFilter;
     private float _dpiScale = 1f;
 
     public SkeletonView()
@@ -63,7 +67,40 @@ internal sealed class SkeletonView : Panel
         _subtitle.Dock = DockStyle.Top;
         _subtitle.Height = 20;
 
-        Panel header = new() { Dock = DockStyle.Top, BackColor = Theme.Background, Height = 43 };
+        _boneFilter.BorderStyle = BorderStyle.FixedSingle;
+        _boneFilter.BackColor = Theme.Surface;
+        _boneFilter.ForeColor = Theme.Text;
+        _boneFilter.Font = new Font("Segoe UI", 8.5f);
+        _boneFilter.PlaceholderText = "filter bones";
+        _boneFilter.Dock = DockStyle.Fill;
+        _boneFilter.Margin = new Padding(0);
+        _boneFilter.TextChanged += (_, _) =>
+        {
+            if (_suppressBoneFilter)
+            {
+                return;
+            }
+
+            _boneFilterTimer.Stop();
+            _boneFilterTimer.Start();
+        };
+        _boneFilterTimer.Tick += (_, _) =>
+        {
+            _boneFilterTimer.Stop();
+            FilterBones(_boneFilter.Text);
+        };
+
+        Panel filterRow = new()
+        {
+            Dock = DockStyle.Top,
+            Height = 28,
+            Padding = new Padding(8, 2, 8, 4),
+            BackColor = Theme.Background,
+        };
+        filterRow.Controls.Add(_boneFilter);
+
+        Panel header = new() { Dock = DockStyle.Top, BackColor = Theme.Background, Height = 71 };
+        header.Controls.Add(filterRow);
         header.Controls.Add(_subtitle);
         header.Controls.Add(titleRow);
 
@@ -89,7 +126,9 @@ internal sealed class SkeletonView : Panel
         get
         {
             int row = _bones.CurrentCell?.RowIndex ?? -1;
-            return row >= 0 && row < _bones.Rows.Count ? row : -1;
+            return row >= 0 && row < _bones.Rows.Count && _bones.Rows[row].Tag is int index
+                ? index
+                : -1;
         }
     }
 
@@ -121,26 +160,59 @@ internal sealed class SkeletonView : Panel
         _title.Text = title;
         _subtitle.Text = subtitle;
         _usedBy.Visible = false;
-        _bones.Rows.Clear();
-        foreach (SkeletonBone bone in data.Bones)
+        _data = data;
+        RenderBones();
+        _canvas.SetBones(data.Bones, data.Head.NameHash);
+    }
+
+    internal void FilterBones(string text)
+    {
+        if (!_boneFilter.Text.Equals(text, StringComparison.Ordinal))
         {
-            Vector3 position = bone.Position;
-            _bones.Rows.Add(
-                bone.NameHash.ToString("X16", CultureInfo.InvariantCulture),
-                bone.ParentIndex.ToString(CultureInfo.InvariantCulture),
-                bone.FirstChildIndex.ToString(CultureInfo.InvariantCulture),
-                position.X.ToString("F3", CultureInfo.InvariantCulture),
-                position.Y.ToString("F3", CultureInfo.InvariantCulture),
-                position.Z.ToString("F3", CultureInfo.InvariantCulture));
+            _suppressBoneFilter = true;
+            _boneFilter.Text = text;
+            _suppressBoneFilter = false;
         }
 
-        _canvas.SetBones(data.Bones, data.Head.NameHash);
+        RenderBones();
+    }
+
+    private void RenderBones()
+    {
+        _bones.Rows.Clear();
+        if (_data is not null)
+        {
+            string needle = _boneFilter.Text.Trim();
+            for (int index = 0; index < _data.Bones.Count; index++)
+            {
+                SkeletonBone bone = _data.Bones[index];
+                string hash = bone.NameHash.ToString("X16", CultureInfo.InvariantCulture);
+                if (needle.Length > 0
+                    && !hash.Contains(needle, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                Vector3 position = bone.Position;
+                int row = _bones.Rows.Add(
+                    hash,
+                    bone.ParentIndex.ToString(CultureInfo.InvariantCulture),
+                    bone.FirstChildIndex.ToString(CultureInfo.InvariantCulture),
+                    position.X.ToString("F3", CultureInfo.InvariantCulture),
+                    position.Y.ToString("F3", CultureInfo.InvariantCulture),
+                    position.Z.ToString("F3", CultureInfo.InvariantCulture));
+                _bones.Rows[row].Tag = index;
+            }
+        }
+
         _bones.ClearSelection();
         if (_bones.Rows.Count > 0)
         {
             _bones.CurrentCell = _bones.Rows[0].Cells[0];
             _bones.Rows[0].Selected = true;
         }
+
+        _canvas.Highlight(SelectedBone);
     }
 
     public void Reset()
@@ -148,7 +220,9 @@ internal sealed class SkeletonView : Panel
         _title.Text = "";
         _subtitle.Text = "";
         _usedBy.Visible = false;
+        _data = null;
         _bones.Rows.Clear();
+        FilterBones("");
         _canvas.SetBones(Array.Empty<SkeletonBone>(), 0);
     }
 
@@ -157,7 +231,9 @@ internal sealed class SkeletonView : Panel
         _title.Text = title;
         _subtitle.Text = subtitle;
         _usedBy.Visible = false;
+        _data = null;
         _bones.Rows.Clear();
+        FilterBones("");
         _canvas.SetBones(Array.Empty<SkeletonBone>(), 0);
     }
 
@@ -170,6 +246,7 @@ internal sealed class SkeletonView : Panel
 
         _dpiScale = scale;
         _title.Font = new Font("Segoe UI Semibold", 9.5f * scale);
+        _boneFilter.Font = new Font("Segoe UI", 8.5f * scale);
         _bones.RowTemplate.Height = (int)Math.Round(20 * scale);
         _bones.ColumnHeadersHeight = (int)Math.Round(22 * scale);
         _bones.ColumnHeadersDefaultCellStyle.Font = new Font("Segoe UI Semibold", 8f * scale);
@@ -192,6 +269,16 @@ internal sealed class SkeletonView : Panel
             _split.SplitterDistance = Math.Clamp(
                 _split.Width * 29 / 50, 120, _split.Width - 120);
         }
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            _boneFilterTimer.Dispose();
+        }
+
+        base.Dispose(disposing);
     }
 
     private void ConfigureBones()

@@ -40,4 +40,13 @@ internal static class BrowserKeys
     public static string Audio(AudioEntry entry) =>
         $"{entry.PackPath}|{entry.Offset}|{entry.Size}|{entry.BankId}|" +
         $"{entry.Id:X8}|{entry.LanguageId}";
+
+    public static string? HashText(object? tag) => tag switch
+    {
+        AssetEntry entry => $"0x{entry.NameHash:X16}",
+        SkeletonEntry entry => $"0x{entry.NameHash:X16}",
+        MaterialRow row => $"0x{row.Hash:X16}",
+        AudioEntry entry => $"0x{entry.Id:X8}",
+        _ => null,
+    };
 }

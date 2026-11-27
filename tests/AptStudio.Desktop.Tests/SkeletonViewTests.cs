@@ -45,6 +45,28 @@ public sealed class SkeletonViewTests
         Assert.Equal("1.000", grid.Rows[1].Cells[3].Value);
     }
 
+    [Fact]
+    public void BoneFilterKeepsMatchesAndMapsTheBoneIndex()
+    {
+        using SkeletonView view = new();
+        view.SetSkeleton("Skel_Z 0x1", "test", Data());
+
+        view.FilterBones("22");
+
+        DataGridView grid = FindGrid(view)
+            ?? throw new InvalidOperationException("No grid in the tree.");
+        Assert.Equal(1, grid.Rows.Count);
+        Assert.Equal("0000000000000022", grid.Rows[0].Cells[0].Value);
+        Assert.Equal(1, view.SelectedBone);
+
+        view.FilterBones("");
+        Assert.Equal(2, grid.Rows.Count);
+
+        view.FilterBones("FFFF");
+        Assert.Equal(0, grid.Rows.Count);
+        Assert.Equal(-1, view.SelectedBone);
+    }
+
     private static SkeletonData Data()
     {
         SkeletonHead head = new(

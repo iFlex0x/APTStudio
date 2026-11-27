@@ -21,6 +21,7 @@ internal sealed class ScopePanel : Panel
     private readonly Label _gameSub = new();
     private readonly Label _gameDot = new();
     private readonly Label _openGame = new();
+    private readonly Label _rescan = new();
     private readonly ListBox _archives = new();
     private readonly FlowLayoutPanel _types = new();
     private readonly Label _legacy = new();
@@ -77,14 +78,40 @@ internal sealed class ScopePanel : Panel
         _openGame.Font = BrowserVisual.RowSmall;
         _openGame.ForeColor = Theme.Accent;
         _openGame.BackColor = Theme.Surface;
-        _openGame.Dock = DockStyle.Top;
+        _openGame.AutoSize = true;
         _openGame.Height = 24;
         _openGame.TextAlign = ContentAlignment.MiddleLeft;
         _openGame.AutoEllipsis = true;
         _openGame.Cursor = Cursors.Hand;
+        _openGame.Margin = new Padding(0, 0, 14, 0);
         _openGame.MouseEnter += (_, _) => _openGame.ForeColor = Theme.Text;
         _openGame.MouseLeave += (_, _) => _openGame.ForeColor = Theme.Accent;
         _openGame.Click += (_, _) => OpenGameRequested?.Invoke(this, EventArgs.Empty);
+
+        _rescan.Text = "Rescan";
+        _rescan.Font = BrowserVisual.RowSmall;
+        _rescan.ForeColor = Theme.Accent;
+        _rescan.BackColor = Theme.Surface;
+        _rescan.AutoSize = true;
+        _rescan.Height = 24;
+        _rescan.TextAlign = ContentAlignment.MiddleLeft;
+        _rescan.Cursor = Cursors.Hand;
+        _rescan.Margin = new Padding(0);
+        _rescan.MouseEnter += (_, _) => _rescan.ForeColor = Theme.Text;
+        _rescan.MouseLeave += (_, _) => _rescan.ForeColor = Theme.Accent;
+        _rescan.Click += (_, _) => RescanRequested?.Invoke(this, EventArgs.Empty);
+
+        FlowLayoutPanel gameActions = new()
+        {
+            Dock = DockStyle.Top,
+            AutoSize = true,
+            WrapContents = false,
+            BackColor = Theme.Surface,
+            Margin = new Padding(0),
+            Padding = new Padding(0),
+        };
+        gameActions.Controls.Add(_openGame);
+        gameActions.Controls.Add(_rescan);
 
         _archives.BorderStyle = BorderStyle.None;
         _archives.BackColor = Theme.Surface;
@@ -146,7 +173,7 @@ internal sealed class ScopePanel : Panel
         root.Controls.Add(gameLabel, 0, 0);
         root.Controls.Add(gameLine, 0, 1);
         root.Controls.Add(_gameSub, 0, 2);
-        root.Controls.Add(_openGame, 0, 3);
+        root.Controls.Add(gameActions, 0, 3);
         root.Controls.Add(new Panel { Dock = DockStyle.Fill, BackColor = Theme.Surface }, 0, 4);
         root.Controls.Add(scopeLabel, 0, 5);
         root.Controls.Add(_archives, 0, 6);
@@ -161,6 +188,8 @@ internal sealed class ScopePanel : Panel
     public event Action<string>? TypeSelected;
 
     public event EventHandler? OpenGameRequested;
+
+    public event EventHandler? RescanRequested;
 
     public event EventHandler? LegacyRequested;
 
@@ -219,6 +248,34 @@ internal sealed class ScopePanel : Panel
         {
             _suppress = false;
         }
+    }
+
+    public void SetAllCount(int count)
+    {
+        if (_archives.Items.Count == 0
+            || _archives.Items[0] is not ArchiveChoice all
+            || all.Path.Length != 0)
+        {
+            return;
+        }
+
+        if (all.Count == count)
+        {
+            return;
+        }
+
+        _suppress = true;
+        try
+        {
+            _archives.Items[0] = all with { Count = count };
+        }
+        finally
+        {
+            _suppress = false;
+        }
+
+        _archiveLabels.Clear();
+        _archives.Invalidate();
     }
 
     public void SetTypes(IReadOnlyList<TypeChoice> types, string active)

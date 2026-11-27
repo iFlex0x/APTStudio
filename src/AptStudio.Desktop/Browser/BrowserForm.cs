@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.Numerics;
+using System.Runtime.InteropServices;
 using AptStudio.Core.Assets;
 using AptStudio.Core.Audio;
 using AptStudio.Core.Games;
@@ -52,6 +53,10 @@ internal sealed class BrowserForm : Form
     private readonly ComboBox _sortCombo = new();
     private readonly Button _sortDirection = new();
     private readonly Button _exportSelected = new();
+    private readonly Button _cancelExport = new();
+    private readonly Button _copyHash = new();
+    private CancellationTokenSource? _exportCancel;
+    private bool _exporting;
     private readonly Button _openSkin = new();
     private readonly Button _openSkeleton = new();
     private readonly Button _openMaterial = new();
@@ -304,6 +309,9 @@ internal sealed class BrowserForm : Form
             RenderState();
         };
         _exportSelected.Click += async (_, _) => await ExportSelectedAsync();
+        _cancelExport.Click += (_, _) => _exportCancel?.Cancel();
+        _copyHash.Click += (_, _) => CopySelectedHash();
+        KeyDown += OnKeyDown;
         _searchTimer.Tick += (_, _) =>
         {
             _searchTimer.Stop();
@@ -327,6 +335,7 @@ internal sealed class BrowserForm : Form
             _skeletonDecodeCancel?.Cancel();
             _audioCancel?.Cancel();
             _audioListCancel?.Cancel();
+            _exportCancel?.Cancel();
             SaveLayout();
         };
     }
@@ -342,6 +351,7 @@ internal sealed class BrowserForm : Form
             _materialCancel?.Dispose();
             _materialCatalogCancel?.Dispose();
             _materialListCancel?.Dispose();
+            _exportCancel?.Dispose();
             _searchTimer.Dispose();
         }
 
@@ -552,6 +562,15 @@ internal sealed class BrowserForm : Form
         _openMaterial.Click += (_, _) => OpenMaterialFromList();
         titleLine.Controls.Add(_openMaterial);
 
+        StyleButton(_copyHash, "Copy hash");
+        _copyHash.AutoSize = true;
+        _copyHash.MinimumSize = new Size(0, 24);
+        _copyHash.Font = BrowserVisual.RowSmall;
+        _copyHash.Margin = new Padding(8, 0, 0, 0);
+        _copyHash.Visible = false;
+        _copyHash.Enabled = false;
+        titleLine.Controls.Add(_copyHash);
+
         _resultsBody.Dock = DockStyle.Top;
         _resultsBody.Height = 18;
         _resultsBody.Font = BrowserVisual.RowSmall;
@@ -617,6 +636,13 @@ internal sealed class BrowserForm : Form
         _exportSelected.Anchor = AnchorStyles.Left;
         _exportSelected.Margin = new Padding(0, 0, 8, 0);
         _exportSelected.Enabled = false;
+        StyleButton(_cancelExport, "Cancel");
+        _cancelExport.AutoSize = true;
+        _cancelExport.Height = 24;
+        _cancelExport.Font = BrowserVisual.RowSmall;
+        _cancelExport.Anchor = AnchorStyles.Left;
+        _cancelExport.Margin = new Padding(0);
+        _cancelExport.Visible = false;
         _selectionCount.Text = "0 selected";
         _selectionCount.ForeColor = Theme.Muted;
         _selectionCount.Font = BrowserVisual.RowSmall;
@@ -628,7 +654,7 @@ internal sealed class BrowserForm : Form
         _textureToolbar.Controls.Add(_sortCombo, 1, 0);
         _textureToolbar.Controls.Add(_sortDirection, 2, 0);
         _textureToolbar.Controls.Add(_exportSelected, 3, 0);
-        _textureToolbar.Controls.Add(new Panel { Dock = DockStyle.Fill, BackColor = Theme.Background }, 4, 0);
+        _textureToolbar.Controls.Add(_cancelExport, 4, 0);
         _textureToolbar.Controls.Add(_selectionCount, 5, 0);
 
         _textureHost.Controls.Add(_textureList);
@@ -741,6 +767,7 @@ internal sealed class BrowserForm : Form
     private void WireScope()
     {
         _scope.OpenGameRequested += (_, _) => OpenGameFolder();
+        _scope.RescanRequested += (_, _) => Rescan();
         _scope.LegacyRequested += (_, _) => new MainForm().Show(this);
         _scope.ArchiveSelected += path => SwitchArchive(path);
         _scope.TypeSelected += name => SwitchType(name);
@@ -811,7 +838,11 @@ internal sealed class BrowserForm : Form
                 OpenMaterialFromList();
             }
         };
-        _textureList.SelectionChanged += (_, _) => OnListSelected();
+        _textureList.SelectionChanged += (_, _) =>
+        {
+            OnListSelected();
+            UpdateCopyHashEnabled();
+        };
     }
 
     private void OnListSelected()
@@ -992,6 +1023,56 @@ internal sealed class BrowserForm : Form
         if (dialog.ShowDialog(this) == DialogResult.OK)
         {
             _ = LoadGameAsync(dialog.SelectedPath);
+        }
+    }
+
+    private void Rescan()
+    {
+        if (_profile is not null && !_loading && !_exporting)
+        {
+            _ = LoadGameAsync(_profile.Root);
+        }
+    }
+
+    private void OnKeyDown(object? sender, KeyEventArgs e)
+    {
+        BrowserCommand command = BrowserShortcuts.Map(e.KeyCode, e.Control);
+        if (command == BrowserCommand.None)
+        {
+            return;
+        }
+
+        if (command == BrowserCommand.CancelExport)
+        {
+            if (!_exporting)
+            {
+                return;
+            }
+
+            e.Handled = true;
+            e.SuppressKeyPress = true;
+            _exportCancel?.Cancel();
+            return;
+        }
+
+        e.Handled = true;
+        e.SuppressKeyPress = true;
+        if (_loading || _exporting)
+        {
+            return;
+        }
+
+        switch (command)
+        {
+            case BrowserCommand.OpenGame:
+                OpenGameFolder();
+                break;
+            case BrowserCommand.Export:
+                _ = ExportSelectedAsync();
+                break;
+            case BrowserCommand.Rescan:
+                Rescan();
+                break;
         }
     }
 
@@ -1348,7 +1429,14 @@ internal sealed class BrowserForm : Form
     private void SetTypesFor(string archivePath, string active)
     {
         _scope.SetTypes(BuildTypes(archivePath), active);
+        UpdateAllScopeCount(active);
         _typesArchive = archivePath;
+    }
+
+    private void UpdateAllScopeCount(string active)
+    {
+        TypeChoice? type = BuildTypes("").FirstOrDefault(item => item.Name == active);
+        _scope.SetAllCount(type?.Count ?? 0);
     }
 
     private void SwitchArchive(string archivePath)
@@ -1723,6 +1811,7 @@ internal sealed class BrowserForm : Form
         else
         {
             _scope.SetActiveType(TypeName(state));
+            UpdateAllScopeCount(TypeName(state));
         }
         _scopeButton.Text = _navigation.IsChooserOpen ? "All archives" : ScopeChip(state);
         _back.Enabled = _navigation.CanBack || _meshSkinsOpen || _skeletonSkinsOpen;
@@ -1763,6 +1852,8 @@ internal sealed class BrowserForm : Form
         _openSkin.Visible = state.View == BrowserView.Skins;
         _openSkeleton.Visible = state.View == BrowserView.Skeletons;
         _openMaterial.Visible = state.View == BrowserView.Materials;
+        _copyHash.Visible = _profile is not null;
+        UpdateCopyHashEnabled();
         if (state.View != BrowserView.Audio && _audioView.Entry is not null)
         {
             _audioView.Reset();
@@ -2129,7 +2220,7 @@ internal sealed class BrowserForm : Form
     {
         int count = _textureList.SelectedKeys.Count;
         _selectionCount.Text = $"{count:N0} selected";
-        _exportSelected.Enabled = count > 0
+        _exportSelected.Enabled = !_exporting && count > 0
             && _textureList.SelectedRows.Any(row =>
                 row.Tag is AssetEntry entry && entry.IsPreviewable);
     }
@@ -4654,9 +4745,31 @@ internal sealed class BrowserForm : Form
         RenderInspector();
     }
 
+    private void CopySelectedHash()
+    {
+        string? text = BrowserKeys.HashText(_textureList.SelectedRow?.Tag);
+        if (text is null)
+        {
+            return;
+        }
+
+        try
+        {
+            Clipboard.SetText(text);
+            _status.Text = $"Copied {text}.";
+        }
+        catch (ExternalException)
+        {
+            _status.Text = "Clipboard is busy. Try again.";
+        }
+    }
+
+    private void UpdateCopyHashEnabled() =>
+        _copyHash.Enabled = BrowserKeys.HashText(_textureList.SelectedRow?.Tag) is not null;
+
     private async Task ExportSelectedAsync()
     {
-        if (_profile is null)
+        if (_profile is null || _exporting)
         {
             return;
         }
@@ -4690,35 +4803,76 @@ internal sealed class BrowserForm : Form
         }
 
         string folder = dialog.SelectedPath;
+        _exporting = true;
         _exportSelected.Enabled = false;
-        _status.Text = $"Exporting {entries.Count:N0} textures...";
-        (int Exported, int Skipped) result = await Task.Run(() =>
+        _cancelExport.Visible = true;
+        _cancelExport.Enabled = true;
+        CancellationTokenSource cancel = new();
+        _exportCancel = cancel;
+        int completed = 0;
+        int skipped = 0;
+        _status.Text = $"Exporting 0/{entries.Count:N0} textures...";
+        IProgress<int> progress = new Progress<int>(value =>
         {
-            HashSet<string> used = new(StringComparer.OrdinalIgnoreCase);
-            int exported = 0;
-            int skipped = 0;
-            foreach (AssetEntry entry in entries)
+            if (!IsDisposed && _exporting)
             {
-                try
-                {
-                    string name = ExportNames.Unique(
-                        folder, entry.ArchivePath, entry.NameHash, used);
-                    TextureExport.ExportPng(entry.Texture!, Path.Combine(folder, name));
-                    exported++;
-                }
-                catch (Exception ex) when (ex is InvalidDataException or NotSupportedException
-                    or IOException or UnauthorizedAccessException)
-                {
-                    skipped++;
-                }
+                _status.Text = $"Exporting {value:N0}/{entries.Count:N0} textures...";
             }
-
-            return (exported, skipped);
         });
 
-        _status.Text =
-            $"Exported {result.Exported:N0}, skipped {result.Skipped:N0}.";
-        UpdateSelectionCount();
+        try
+        {
+            await Task.Run(() =>
+            {
+                HashSet<string> used = new(StringComparer.OrdinalIgnoreCase);
+                foreach (AssetEntry entry in entries)
+                {
+                    cancel.Token.ThrowIfCancellationRequested();
+                    try
+                    {
+                        string name = ExportNames.Unique(
+                            folder, entry.ArchivePath, entry.NameHash, used);
+                        TextureExport.ExportPng(entry.Texture!, Path.Combine(folder, name));
+                    }
+                    catch (Exception ex) when (ex is InvalidDataException or NotSupportedException
+                        or IOException or UnauthorizedAccessException)
+                    {
+                        skipped++;
+                    }
+
+                    completed++;
+                    progress.Report(completed);
+                }
+            }, cancel.Token);
+
+            if (!IsDisposed)
+            {
+                _status.Text =
+                    $"Exported {completed - skipped:N0}, skipped {skipped:N0}.";
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            if (!IsDisposed)
+            {
+                _status.Text = $"Export cancelled after {completed:N0} of {entries.Count:N0}.";
+            }
+        }
+        finally
+        {
+            if (_exportCancel == cancel)
+            {
+                _exportCancel = null;
+            }
+
+            cancel.Dispose();
+            _exporting = false;
+            if (!IsDisposed)
+            {
+                _cancelExport.Visible = false;
+                UpdateSelectionCount();
+            }
+        }
     }
 
     private void ExportTexture()
