@@ -34,6 +34,12 @@ internal sealed class BrowserForm : Form
     private readonly Button _forward = new();
     private readonly Button _scopeButton = new();
     private readonly Button _filterButton = new();
+    private readonly FlowLayoutPanel _textureToolbar = new();
+    private readonly ComboBox _sortCombo = new();
+    private readonly Button _sortDirection = new();
+    private readonly Button _exportSelected = new();
+    private readonly Label _selectionCount = new();
+    private bool _suppressSort;
     private readonly TextBox _search = new();
     private readonly Label _status = new();
     private readonly System.Windows.Forms.Timer _searchTimer = new() { Interval = 150 };
@@ -71,10 +77,11 @@ internal sealed class BrowserForm : Form
     private MaterialTextureIndex? _materialTextures;
     private CancellationTokenSource? _materialCancel;
     private bool _materialLoading;
-    private MaterialEntry? _materialEntry;
-    private MaterialData? _materialData;
+    private readonly Dictionary<(string Archive, long Offset, ulong Hash), MaterialData> _materialBodies =
+        new();
     private IReadOnlyList<TextureOccurrence> _slotCopies = Array.Empty<TextureOccurrence>();
     private ulong _slotCopyHash;
+    private string _slotCopyArchive = "";
     private int _slotCopyIndex;
 
     public BrowserForm(
@@ -113,6 +120,34 @@ internal sealed class BrowserForm : Form
         _scopeButton.Click += (_, _) => ToggleScope();
         _search.TextChanged += (_, _) => OnSearchChanged();
         _filterButton.Click += (_, _) => OnFilterRequested();
+        _sortCombo.SelectedIndexChanged += (_, _) =>
+        {
+            if (_suppressSort || _navigation is null)
+            {
+                return;
+            }
+
+            TextureSort sort = _sortCombo.SelectedIndex switch
+            {
+                1 => TextureSort.Hash,
+                2 => TextureSort.Size,
+                3 => TextureSort.Mips,
+                _ => TextureSort.Archive,
+            };
+            _navigation.SetSort(sort, _navigation.State.SortDescending);
+            RenderState();
+        };
+        _sortDirection.Click += (_, _) =>
+        {
+            if (_navigation is null)
+            {
+                return;
+            }
+
+            _navigation.SetSort(_navigation.State.Sort, !_navigation.State.SortDescending);
+            RenderState();
+        };
+        _exportSelected.Click += async (_, _) => await ExportSelectedAsync();
         _searchTimer.Tick += (_, _) =>
         {
             _searchTimer.Stop();
@@ -206,7 +241,7 @@ internal sealed class BrowserForm : Form
         nav.Controls.Add(_back);
         nav.Controls.Add(_forward);
 
-        StyleButton(_scopeButton, "Scope: no game");
+        StyleButton(_scopeButton, "Browse: no game");
         _scopeButton.Width = 212;
         _scopeButton.Height = 26;
         _scopeButton.TextAlign = ContentAlignment.MiddleLeft;
@@ -288,8 +323,48 @@ internal sealed class BrowserForm : Form
         _textureList.Dock = DockStyle.Fill;
         _textureList.Columns = TextureColumns;
         _textureList.ShowThumbnails = true;
+
+        _textureToolbar.Dock = DockStyle.Top;
+        _textureToolbar.AutoSize = true;
+        _textureToolbar.WrapContents = true;
+        _textureToolbar.BackColor = Theme.Background;
+        _textureToolbar.Padding = new Padding(0, 0, 0, 4);
+        _textureToolbar.Controls.Add(new Label
+        {
+            Text = "Sort",
+            ForeColor = Theme.Muted,
+            AutoSize = true,
+            Margin = new Padding(0, 6, 4, 0),
+        });
+        _sortCombo.DropDownStyle = ComboBoxStyle.DropDownList;
+        _sortCombo.Width = 90;
+        _sortCombo.BackColor = Theme.Background;
+        _sortCombo.ForeColor = Theme.Text;
+        _sortCombo.FlatStyle = FlatStyle.Flat;
+        _sortCombo.Items.AddRange(["Archive", "Hash", "Size", "Mips"]);
+        _sortCombo.SelectedIndex = 0;
+        _sortCombo.Margin = new Padding(0, 2, 4, 0);
+        _textureToolbar.Controls.Add(_sortCombo);
+        StyleButton(_sortDirection, "Asc");
+        _sortDirection.Width = 44;
+        _sortDirection.Height = 24;
+        _sortDirection.Margin = new Padding(0, 2, 8, 0);
+        _textureToolbar.Controls.Add(_sortDirection);
+        StyleButton(_exportSelected, "Export selected");
+        _exportSelected.AutoSize = true;
+        _exportSelected.Height = 24;
+        _exportSelected.Margin = new Padding(0, 2, 8, 0);
+        _exportSelected.Enabled = false;
+        _textureToolbar.Controls.Add(_exportSelected);
+        _selectionCount.Text = "0 selected";
+        _selectionCount.ForeColor = Theme.Muted;
+        _selectionCount.AutoSize = true;
+        _selectionCount.Margin = new Padding(0, 6, 0, 0);
+        _textureToolbar.Controls.Add(_selectionCount);
+
         _textureHost.Controls.Add(_textureList);
         _textureHost.Controls.Add(_textureHeader);
+        _textureHost.Controls.Add(_textureToolbar);
 
         _chooser.Dock = DockStyle.Fill;
         _chooser.Visible = false;
@@ -402,10 +477,13 @@ internal sealed class BrowserForm : Form
         if (_navigation.State.View == BrowserView.Animations)
         {
             OnAnimationSelected();
-            return;
+        }
+        else
+        {
+            OnTextureSelected();
         }
 
-        OnTextureSelected();
+        UpdateSelectionCount();
     }
 
     private void OnTextureSelected()
@@ -507,10 +585,10 @@ internal sealed class BrowserForm : Form
         _materials = null;
         _materialTextures = null;
         _materialLoading = false;
-        _materialEntry = null;
-        _materialData = null;
+        _materialBodies.Clear();
         _slotCopies = Array.Empty<TextureOccurrence>();
         _slotCopyHash = 0;
+        _slotCopyArchive = "";
         _slotCopyIndex = 0;
         _chooser.Visible = false;
         _textureInspector.ShowEmpty();
@@ -879,7 +957,7 @@ internal sealed class BrowserForm : Form
             _inspectorBody.Text = "";
             _back.Enabled = false;
             _forward.Enabled = false;
-            _scopeButton.Text = "Scope: no game";
+            _scopeButton.Text = "Browse: no game";
             _crumbs.Text = "";
             return;
         }
@@ -977,7 +1055,8 @@ internal sealed class BrowserForm : Form
     {
         IReadOnlyList<AssetRow> rows = BuildTextureRows(state);
         string? keep = state.Texture is null ? null : OccurrenceKey(state.Texture);
-        _textureList.SetRows(rows, keep);
+        IReadOnlyCollection<string> selectedKeys = _textureList.SelectedKeys.ToArray();
+        _textureList.SetRows(rows, keep, selectedKeys);
         bool keepFound = keep is not null
             && _textureList.SelectedRow?.Key.Equals(keep, StringComparison.Ordinal) == true;
         if (!keepFound)
@@ -1014,6 +1093,17 @@ internal sealed class BrowserForm : Form
         {
             RenderInspector();
         }
+
+        UpdateSelectionCount();
+    }
+
+    private void UpdateSelectionCount()
+    {
+        int count = _textureList.SelectedKeys.Count;
+        _selectionCount.Text = $"{count:N0} selected";
+        _exportSelected.Enabled = count > 0
+            && _textureList.SelectedRows.Any(row =>
+                row.Tag is AssetEntry entry && entry.IsPreviewable);
     }
 
     private void SetListMode(bool animations)
@@ -1023,6 +1113,32 @@ internal sealed class BrowserForm : Form
         _textureList.Columns = columns;
         _textureHeader.ShowThumbnails = !animations;
         _textureList.ShowThumbnails = !animations;
+        _textureToolbar.Visible = !animations;
+        _textureList.AllowMultiSelect = !animations;
+        if (!animations && _navigation is not null)
+        {
+            SyncSortControls(_navigation.State);
+        }
+    }
+
+    private void SyncSortControls(BrowserState state)
+    {
+        _suppressSort = true;
+        try
+        {
+            _sortCombo.SelectedIndex = state.Sort switch
+            {
+                TextureSort.Hash => 1,
+                TextureSort.Size => 2,
+                TextureSort.Mips => 3,
+                _ => 0,
+            };
+            _sortDirection.Text = state.SortDescending ? "Desc" : "Asc";
+        }
+        finally
+        {
+            _suppressSort = false;
+        }
     }
 
     private void RenderAnimationList(BrowserState state)
@@ -1202,8 +1318,30 @@ internal sealed class BrowserForm : Form
                 entry));
         }
 
-        rows.Sort((left, right) => ((AssetEntry)left.Tag!).Row.BodyOffset
-            .CompareTo(((AssetEntry)right.Tag!).Row.BodyOffset));
+        rows.Sort((left, right) =>
+        {
+            AssetEntry a = (AssetEntry)left.Tag!;
+            AssetEntry b = (AssetEntry)right.Tag!;
+            int order = state.Sort switch
+            {
+                TextureSort.Hash => a.NameHash.CompareTo(b.NameHash),
+                TextureSort.Size => ((long)a.Bitmap!.Width * a.Bitmap.Height)
+                    .CompareTo((long)b.Bitmap!.Width * b.Bitmap.Height),
+                TextureSort.Mips => a.Bitmap!.MipCount.CompareTo(b.Bitmap!.MipCount),
+                _ => a.Row.BodyOffset.CompareTo(b.Row.BodyOffset),
+            };
+            if (order == 0)
+            {
+                order = a.NameHash.CompareTo(b.NameHash);
+            }
+
+            if (order == 0)
+            {
+                order = a.Row.BodyOffset.CompareTo(b.Row.BodyOffset);
+            }
+
+            return state.SortDescending ? -order : order;
+        });
         return rows;
     }
 
@@ -1341,6 +1479,73 @@ internal sealed class BrowserForm : Form
         }
 
         RenderInspector();
+    }
+
+    private async Task ExportSelectedAsync()
+    {
+        if (_profile is null)
+        {
+            return;
+        }
+
+        List<AssetEntry> entries = _textureList.SelectedRows
+            .Select(row => row.Tag)
+            .OfType<AssetEntry>()
+            .Where(entry => entry.IsBitmap && entry.IsPreviewable && entry.Texture is not null)
+            .ToList();
+        if (entries.Count == 0)
+        {
+            _status.Text = "No previewable textures selected.";
+            return;
+        }
+
+        using FolderBrowserDialog dialog = new()
+        {
+            Description = "Export selected textures to a folder",
+            UseDescriptionForTitle = true,
+            SelectedPath = Environment.GetFolderPath(Environment.SpecialFolder.MyPictures),
+        };
+        if (dialog.ShowDialog(this) != DialogResult.OK)
+        {
+            return;
+        }
+
+        if (GameFolderGuard.IsInside(_profile.Root, dialog.SelectedPath))
+        {
+            _status.Text = "Refusing to write inside the game folder.";
+            return;
+        }
+
+        string folder = dialog.SelectedPath;
+        _exportSelected.Enabled = false;
+        _status.Text = $"Exporting {entries.Count:N0} textures...";
+        (int Exported, int Skipped) result = await Task.Run(() =>
+        {
+            HashSet<string> used = new(StringComparer.OrdinalIgnoreCase);
+            int exported = 0;
+            int skipped = 0;
+            foreach (AssetEntry entry in entries)
+            {
+                try
+                {
+                    string name = ExportNames.Unique(
+                        folder, entry.ArchivePath, entry.NameHash, used);
+                    TextureExport.ExportPng(entry.Texture!, Path.Combine(folder, name));
+                    exported++;
+                }
+                catch (Exception ex) when (ex is InvalidDataException or NotSupportedException
+                    or IOException or UnauthorizedAccessException)
+                {
+                    skipped++;
+                }
+            }
+
+            return (exported, skipped);
+        });
+
+        _status.Text =
+            $"Exported {result.Exported:N0}, skipped {result.Skipped:N0}.";
+        UpdateSelectionCount();
     }
 
     private void ExportTexture()
@@ -1534,9 +1739,9 @@ internal sealed class BrowserForm : Form
                 FileMode.Open,
                 FileAccess.Read,
                 FileShare.ReadWrite);
-            _materialData = MaterialDecoder.Read(
-                stream, row.Use.Material.ArchivePath, row.Use.Material.Hit);
-            _materialEntry = row.Use.Material;
+            _materialBodies[(row.Use.Material.ArchivePath, row.Use.Material.Offset, row.Hash)] =
+                MaterialDecoder.Read(
+                    stream, row.Use.Material.ArchivePath, row.Use.Material.Hit);
         }
         catch (Exception ex) when (ex is InvalidDataException or IOException
             or UnauthorizedAccessException)
@@ -1547,9 +1752,50 @@ internal sealed class BrowserForm : Form
 
         _slotCopies = Array.Empty<TextureOccurrence>();
         _slotCopyHash = 0;
+        _slotCopyArchive = "";
         _slotCopyIndex = 0;
         _navigation.OpenMaterial(occurrence, row.Slot);
         RenderState();
+    }
+
+    private MaterialData? MaterialFor(BrowserState state)
+    {
+        if (state.Material is not { } occurrence)
+        {
+            return null;
+        }
+
+        (string Archive, long Offset, ulong Hash) key = (
+            occurrence.ArchivePath, occurrence.BodyOffset, occurrence.Hash);
+        if (_materialBodies.TryGetValue(key, out MaterialData? cached))
+        {
+            return cached;
+        }
+
+        MaterialEntry? entry = _materials?.Entries.FirstOrDefault(candidate =>
+            candidate.NameHash == occurrence.Hash
+            && candidate.Offset == occurrence.BodyOffset
+            && candidate.ArchivePath.Equals(
+                occurrence.ArchivePath, StringComparison.OrdinalIgnoreCase));
+        if (entry is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            using FileStream stream = new(
+                entry.ArchivePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            MaterialData data = MaterialDecoder.Read(stream, entry.ArchivePath, entry.Hit);
+            _materialBodies[key] = data;
+            return data;
+        }
+        catch (Exception ex) when (ex is InvalidDataException or IOException
+            or UnauthorizedAccessException)
+        {
+            _status.Text = ex.Message;
+            return null;
+        }
     }
 
     private void RevealLinkedTexture()
@@ -1565,34 +1811,41 @@ internal sealed class BrowserForm : Form
 
     private void ShowMaterialSlots(BrowserState state)
     {
-        if (_materialData is null)
+        MaterialData? data = MaterialFor(state);
+        if (data is null)
         {
             return;
         }
 
         Dictionary<ulong, int> counts = new();
-        foreach (MaterialSlot slot in _materialData.Slots)
+        foreach (MaterialSlot slot in data.Slots)
         {
             counts[slot.TextureHash] = BuildCopiesForHash(slot.TextureHash).Count;
         }
 
         _materialSlots.SetMaterial(
-            _materialData,
+            data,
             state.MaterialSlot,
-            hash => counts.GetValueOrDefault(hash));
+            hash => counts.GetValueOrDefault(hash),
+            state.Material?.ArchiveName ?? "");
     }
 
     private void RenderSlotInspector()
     {
-        if (_navigation is null
-            || _materialData is null
-            || _navigation.State.Material is not { } material)
+        if (_navigation is null || _navigation.State.Material is not { } material)
         {
             _slotInspector.ShowEmpty();
             return;
         }
 
-        MaterialSlot? slot = _materialData.Slots
+        MaterialData? data = MaterialFor(_navigation.State);
+        if (data is null)
+        {
+            _slotInspector.ShowEmpty();
+            return;
+        }
+
+        MaterialSlot? slot = data.Slots
             .FirstOrDefault(item => item.Index == _navigation.State.MaterialSlot);
         if (slot is null)
         {
@@ -1607,10 +1860,13 @@ internal sealed class BrowserForm : Form
             return;
         }
 
-        if (_slotCopyHash != slot.TextureHash || _slotCopies.Count != copies.Count)
+        if (_slotCopyHash != slot.TextureHash
+            || !_slotCopyArchive.Equals(material.ArchiveName, StringComparison.OrdinalIgnoreCase)
+            || _slotCopies.Count != copies.Count)
         {
             _slotCopies = copies;
             _slotCopyHash = slot.TextureHash;
+            _slotCopyArchive = material.ArchiveName;
             _slotCopyIndex = ChooseCopyIndex(copies, material.ArchiveName);
         }
 
@@ -1632,7 +1888,7 @@ internal sealed class BrowserForm : Form
             context += $" (body {occurrence.BodyArchiveName})";
         }
         _slotInspector.SetSlot(
-            _materialData,
+            data,
             slot,
             occurrence,
             texture,
@@ -1751,7 +2007,7 @@ internal sealed class BrowserForm : Form
         {
             _status.Text =
                 $"{material.ArchiveName} · {material.Code} · " +
-                $"{_materialData?.Slots.Count ?? 0} slots";
+                $"{MaterialFor(state)?.Slots.Count ?? 0} slots";
             return;
         }
 
@@ -1793,7 +2049,7 @@ internal sealed class BrowserForm : Form
     private static string ScopeLabel(BrowserState state)
     {
         string archive = Path.GetFileName(state.ArchivePath);
-        return $"Scope: {archive} / {TypeName(state)}";
+        return $"Browse: {archive} / {TypeName(state)}";
     }
 
     private static string Crumbs(BrowserState state) => state.View switch
@@ -1830,7 +2086,7 @@ internal sealed class BrowserForm : Form
     private void ApplyScopeVisibility()
     {
         _outer.Panel1Collapsed = !_scopeOpen;
-        _scopeButton.Text = _navigation is null ? "Scope: no game" : ScopeLabel(_navigation.State);
+        _scopeButton.Text = _navigation is null ? "Browse: no game" : ScopeLabel(_navigation.State);
         _scopeButton.Enabled = true;
     }
 

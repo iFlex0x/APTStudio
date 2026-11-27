@@ -10,11 +10,13 @@ internal sealed class AssetList : ScrollableControl
     private const int CellGap = 8;
 
     private readonly Font _monoFont = new("Consolas", 9f);
-    private readonly HashSet<string> _requested = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _selectedKeys = new(StringComparer.Ordinal);
     private IReadOnlyList<AssetRow> _rows = Array.Empty<AssetRow>();
     private IReadOnlyList<AssetColumn> _columns = Array.Empty<AssetColumn>();
     private int _selectedIndex = -1;
+    private int _anchorIndex = -1;
     private bool _showThumbnails = true;
+    private bool _allowMultiSelect = true;
 
     public AssetList()
     {
@@ -63,6 +65,26 @@ internal sealed class AssetList : ScrollableControl
         }
     }
 
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public bool AllowMultiSelect
+    {
+        get => _allowMultiSelect;
+        set
+        {
+            _allowMultiSelect = value;
+            if (!value)
+            {
+                KeepOnly(SelectedRow?.Key);
+            }
+        }
+    }
+
+    public IReadOnlyCollection<string> SelectedKeys => _selectedKeys;
+
+    public IReadOnlyList<AssetRow> SelectedRows => _rows
+        .Where(row => _selectedKeys.Contains(row.Key))
+        .ToList();
+
     public int RowHeight { get; }
 
     public IReadOnlyList<AssetRow> Rows => _rows;
@@ -77,12 +99,22 @@ internal sealed class AssetList : ScrollableControl
         set
         {
             int next = _rows.Count == 0 ? -1 : Math.Clamp(value, 0, _rows.Count - 1);
-            if (next == _selectedIndex)
+            string? key = next >= 0 ? _rows[next].Key : null;
+            if (next == _selectedIndex
+                && _selectedKeys.Count == (next >= 0 ? 1 : 0)
+                && (key is null || _selectedKeys.Contains(key)))
             {
                 return;
             }
 
+            _selectedKeys.Clear();
+            if (key is not null)
+            {
+                _selectedKeys.Add(key);
+            }
+
             _selectedIndex = next;
+            _anchorIndex = next;
             Invalidate();
             SelectionChanged?.Invoke(this, EventArgs.Empty);
             EnsureVisible(next);
@@ -103,42 +135,168 @@ internal sealed class AssetList : ScrollableControl
         }
     }
 
-    public void SetRows(IReadOnlyList<AssetRow> rows, string? keepKey)
+    public void SetRows(
+        IReadOnlyList<AssetRow> rows,
+        string? keepKey,
+        IReadOnlyCollection<string>? keepKeys = null)
     {
         _rows = rows ?? Array.Empty<AssetRow>();
-        _requested.Clear();
         AutoScrollMinSize = new Size(0, _rows.Count * RowHeight);
 
-        int selected = -1;
-        if (keepKey is not null)
+        Dictionary<string, int> indexByKey = new(StringComparer.Ordinal);
+        for (int index = 0; index < _rows.Count; index++)
+        {
+            indexByKey.TryAdd(_rows[index].Key, index);
+        }
+
+        IReadOnlyCollection<string>? keys = keepKeys;
+        if (keys is null && keepKey is not null)
+        {
+            keys = [keepKey];
+        }
+
+        string[] keep = keys?.ToArray() ?? [];
+        _selectedKeys.Clear();
+        foreach (string key in keep)
+        {
+            if (indexByKey.ContainsKey(key))
+            {
+                _selectedKeys.Add(key);
+            }
+        }
+
+        int anchor = -1;
+        if (keepKey is not null && _selectedKeys.Contains(keepKey))
+        {
+            anchor = indexByKey[keepKey];
+        }
+        else if (_selectedKeys.Count > 0)
         {
             for (int index = 0; index < _rows.Count; index++)
             {
-                if (_rows[index].Key.Equals(keepKey, StringComparison.Ordinal))
+                if (_selectedKeys.Contains(_rows[index].Key))
                 {
-                    selected = index;
+                    anchor = index;
                     break;
                 }
             }
         }
 
-        if (selected < 0 && _selectedIndex >= 0)
-        {
-            selected = Math.Min(_selectedIndex, _rows.Count - 1);
-        }
-
-        _selectedIndex = selected;
+        _selectedIndex = anchor;
+        _anchorIndex = anchor;
         Invalidate();
     }
 
-    public void MoveSelection(int delta)
+    public void MoveSelection(int delta) => MoveSelection(delta, false);
+
+    public void MoveSelection(int delta, bool extend)
     {
         if (_rows.Count == 0)
         {
             return;
         }
 
-        SelectedIndex = Math.Clamp(_selectedIndex + delta, 0, _rows.Count - 1);
+        int next = Math.Clamp(_selectedIndex + delta, 0, _rows.Count - 1);
+        if (extend && _allowMultiSelect)
+        {
+            SelectRange(_anchorIndex >= 0 ? _anchorIndex : _selectedIndex, next);
+            return;
+        }
+
+        SelectedIndex = next;
+    }
+
+    public void ToggleSelection(int index)
+    {
+        if (index < 0 || index >= _rows.Count || !_allowMultiSelect)
+        {
+            return;
+        }
+
+        string key = _rows[index].Key;
+        if (!_selectedKeys.Add(key))
+        {
+            _selectedKeys.Remove(key);
+        }
+
+        if (_selectedKeys.Count == 0)
+        {
+            _selectedIndex = -1;
+            _anchorIndex = -1;
+        }
+        else
+        {
+            _selectedIndex = index;
+            _anchorIndex = index;
+        }
+
+        Invalidate();
+        SelectionChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    public void SelectAll()
+    {
+        if (!_allowMultiSelect)
+        {
+            return;
+        }
+
+        _selectedKeys.Clear();
+        foreach (AssetRow row in _rows)
+        {
+            _selectedKeys.Add(row.Key);
+        }
+
+        _selectedIndex = _rows.Count > 0 ? 0 : -1;
+        _anchorIndex = _selectedIndex;
+        Invalidate();
+        SelectionChanged?.Invoke(this, EventArgs.Empty);
+        EnsureVisible(_selectedIndex);
+    }
+
+    private void SelectRange(int anchor, int next)
+    {
+        if (anchor < 0)
+        {
+            anchor = next;
+        }
+
+        int start = Math.Min(anchor, next);
+        int end = Math.Max(anchor, next);
+        _selectedKeys.Clear();
+        for (int index = start; index <= end && index < _rows.Count; index++)
+        {
+            _selectedKeys.Add(_rows[index].Key);
+        }
+
+        _selectedIndex = next;
+        _anchorIndex = anchor;
+        Invalidate();
+        SelectionChanged?.Invoke(this, EventArgs.Empty);
+        EnsureVisible(next);
+    }
+
+    private void KeepOnly(string? key)
+    {
+        _selectedKeys.Clear();
+        if (key is not null)
+        {
+            for (int index = 0; index < _rows.Count; index++)
+            {
+                if (_rows[index].Key.Equals(key, StringComparison.Ordinal))
+                {
+                    _selectedKeys.Add(key);
+                    _selectedIndex = index;
+                    _anchorIndex = index;
+                    Invalidate();
+                    return;
+                }
+            }
+        }
+
+        _selectedIndex = -1;
+        _anchorIndex = -1;
+        Invalidate();
     }
 
     public void ActivateSelected()
@@ -224,7 +382,7 @@ internal sealed class AssetList : ScrollableControl
             AssetRow row = _rows[index];
             int y = index * RowHeight + scroll;
             Rectangle bounds = new(0, y, ClientSize.Width, RowHeight);
-            bool selected = index == _selectedIndex;
+            bool selected = _selectedKeys.Contains(row.Key) || index == _selectedIndex;
             using SolidBrush background = new(
                 selected ? Theme.Selection : index % 2 == 0 ? Theme.Background : Theme.GridAlt);
             e.Graphics.FillRectangle(background, bounds);
@@ -239,7 +397,7 @@ internal sealed class AssetList : ScrollableControl
                         new Rectangle(RowPadding, y + (RowHeight - 32) / 2, 32, 32));
                 }
 
-                if (ThumbnailRequested is not null && _requested.Add(row.Key))
+                if (ThumbnailRequested is not null)
                 {
                     ThumbnailRequested(row);
                 }
@@ -279,30 +437,57 @@ internal sealed class AssetList : ScrollableControl
 
     protected override void OnKeyDown(KeyEventArgs e)
     {
+        bool extend = e.Shift && _allowMultiSelect;
         switch (e.KeyCode)
         {
             case Keys.Up:
-                MoveSelection(-1);
+                MoveSelection(-1, extend);
                 e.Handled = true;
                 break;
             case Keys.Down:
-                MoveSelection(1);
+                MoveSelection(1, extend);
                 e.Handled = true;
                 break;
             case Keys.Home:
-                SelectedIndex = 0;
+                if (extend)
+                {
+                    SelectRange(_anchorIndex >= 0 ? _anchorIndex : 0, 0);
+                }
+                else
+                {
+                    SelectedIndex = 0;
+                }
+
                 e.Handled = true;
                 break;
             case Keys.End:
-                SelectedIndex = _rows.Count - 1;
+                if (extend)
+                {
+                    SelectRange(
+                        _anchorIndex >= 0 ? _anchorIndex : _rows.Count - 1,
+                        _rows.Count - 1);
+                }
+                else
+                {
+                    SelectedIndex = _rows.Count - 1;
+                }
+
                 e.Handled = true;
                 break;
             case Keys.PageUp:
-                MoveSelection(-Math.Max(1, ClientSize.Height / RowHeight));
+                MoveSelection(-Math.Max(1, ClientSize.Height / RowHeight), extend);
                 e.Handled = true;
                 break;
             case Keys.PageDown:
-                MoveSelection(Math.Max(1, ClientSize.Height / RowHeight));
+                MoveSelection(Math.Max(1, ClientSize.Height / RowHeight), extend);
+                e.Handled = true;
+                break;
+            case Keys.A when e.Control:
+                SelectAll();
+                e.Handled = true;
+                break;
+            case Keys.Space:
+                ToggleSelection(_selectedIndex);
                 e.Handled = true;
                 break;
             case Keys.Enter:
@@ -317,7 +502,28 @@ internal sealed class AssetList : ScrollableControl
     protected override void OnMouseDown(MouseEventArgs e)
     {
         Focus();
-        SelectAt(e.Y);
+        int index = HitTest(e.Y);
+        if (index >= 0)
+        {
+            bool ctrl = (ModifierKeys & Keys.Control) != 0;
+            bool shift = (ModifierKeys & Keys.Shift) != 0;
+            if (shift && _allowMultiSelect)
+            {
+                int anchor = _anchorIndex >= 0
+                    ? _anchorIndex
+                    : _selectedIndex >= 0 ? _selectedIndex : index;
+                SelectRange(anchor, index);
+            }
+            else if (ctrl && _allowMultiSelect)
+            {
+                ToggleSelection(index);
+            }
+            else
+            {
+                SelectedIndex = index;
+            }
+        }
+
         base.OnMouseDown(e);
     }
 
@@ -345,14 +551,19 @@ internal sealed class AssetList : ScrollableControl
 
     private int SelectAt(int y)
     {
-        int index = (y - AutoScrollPosition.Y) / RowHeight;
-        if (index >= 0 && index < _rows.Count)
+        int index = HitTest(y);
+        if (index >= 0)
         {
             SelectedIndex = index;
-            return index;
         }
 
-        return -1;
+        return index;
+    }
+
+    private int HitTest(int y)
+    {
+        int index = (y - AutoScrollPosition.Y) / RowHeight;
+        return index >= 0 && index < _rows.Count ? index : -1;
     }
 
     protected override void Dispose(bool disposing)

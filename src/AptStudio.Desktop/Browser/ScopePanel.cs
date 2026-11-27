@@ -5,6 +5,8 @@ internal sealed record ArchiveChoice(string Path, int Count)
     public string Name => System.IO.Path.GetFileName(Path);
 
     public string Display => Count > 0 ? $"{Name}  {Count:N0}" : Name;
+
+    public override string ToString() => Name;
 }
 
 internal sealed record TypeChoice(string Name, int Count, bool Wired)
@@ -18,9 +20,10 @@ internal sealed class ScopePanel : Panel
     private readonly Label _gameSub = new();
     private readonly Button _openGame = new();
     private readonly ListBox _archives = new();
-    private readonly TableLayoutPanel _types = new();
+    private readonly FlowLayoutPanel _types = new();
     private readonly Button _legacy = new();
     private readonly Dictionary<string, Button> _typeButtons = new(StringComparer.Ordinal);
+    private readonly ToolTip _tip = new();
     private bool _suppress;
 
     public ScopePanel()
@@ -60,15 +63,18 @@ internal sealed class ScopePanel : Panel
         _archives.DrawMode = DrawMode.OwnerDrawFixed;
         _archives.ItemHeight = 22;
         _archives.IntegralHeight = false;
+        _archives.HorizontalScrollbar = true;
         _archives.Dock = DockStyle.Fill;
         _archives.DrawItem += OnArchiveDraw;
         _archives.SelectedIndexChanged += OnArchiveSelected;
+        _archives.MouseMove += OnArchiveMouseMove;
 
         _types.AutoScroll = true;
-        _types.ColumnCount = 1;
-        _types.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        _types.FlowDirection = FlowDirection.TopDown;
+        _types.WrapContents = false;
         _types.Dock = DockStyle.Fill;
         _types.BackColor = Theme.Surface;
+        _types.SizeChanged += (_, _) => ResizeTypeButtons();
 
         _legacy.Text = "Open legacy browser";
         _legacy.FlatStyle = FlatStyle.Flat;
@@ -185,18 +191,14 @@ internal sealed class ScopePanel : Panel
         try
         {
             _types.Controls.Clear();
-            _types.RowStyles.Clear();
-            _types.RowCount = types.Count;
             _typeButtons.Clear();
-            int row = 0;
             foreach (TypeChoice type in types)
             {
-                _types.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
                 Button button = new()
                 {
                     Text = type.Display,
                     Tag = type.Name,
-                    Dock = DockStyle.Fill,
+                    Width = Math.Max(80, _types.ClientSize.Width - 4),
                     Height = 26,
                     Margin = new Padding(0, 0, 0, 2),
                     FlatStyle = FlatStyle.Flat,
@@ -208,12 +210,12 @@ internal sealed class ScopePanel : Panel
                 button.FlatAppearance.MouseOverBackColor = Theme.SelectionInactive;
                 button.FlatAppearance.MouseDownBackColor = Theme.Selection;
                 button.Click += (_, _) => TypeSelected?.Invoke((string)button.Tag);
-                _types.Controls.Add(button, 0, row);
+                _types.Controls.Add(button);
                 _typeButtons[type.Name] = button;
-                row++;
             }
 
             SetActiveType(active);
+            ResizeTypeButtons();
         }
         finally
         {
@@ -231,6 +233,18 @@ internal sealed class ScopePanel : Panel
         }
     }
 
+    private void ResizeTypeButtons()
+    {
+        int width = Math.Max(
+            80,
+            _types.ClientSize.Width - 4
+                - (_types.VerticalScroll.Visible ? SystemInformation.VerticalScrollBarWidth : 0));
+        foreach (Button button in _typeButtons.Values)
+        {
+            button.Width = width;
+        }
+    }
+
     private void OnArchiveSelected(object? sender, EventArgs e)
     {
         if (_suppress || _archives.SelectedItem is not ArchiveChoice choice)
@@ -238,12 +252,32 @@ internal sealed class ScopePanel : Panel
             return;
         }
 
+        _tip.SetToolTip(_archives, choice.Name);
         ArchiveSelected?.Invoke(choice.Path);
     }
 
-    private void OnArchiveDraw(object? sender, DrawItemEventArgs e)
+    private void OnArchiveMouseMove(object? sender, MouseEventArgs e)
     {
-        if (e.Index < 0 || e.Index >= _archives.Items.Count
+        int index = _archives.IndexFromPoint(e.Location);
+        if (index >= 0 && index < _archives.Items.Count
+            && _archives.Items[index] is ArchiveChoice choice)
+        {
+            _tip.SetToolTip(_archives, choice.Name);
+        }
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            _tip.Dispose();
+        }
+
+        base.Dispose(disposing);
+    }
+
+    private void OnArchiveDraw(object? sender, DrawItemEventArgs e)
+    {        if (e.Index < 0 || e.Index >= _archives.Items.Count
             || _archives.Items[e.Index] is not ArchiveChoice choice)
         {
             return;
@@ -258,7 +292,7 @@ internal sealed class ScopePanel : Panel
             Font,
             new Rectangle(e.Bounds.X + 4, e.Bounds.Y, e.Bounds.Width - 70, e.Bounds.Height),
             selected ? Theme.Text : Theme.Text,
-            TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis);
+            TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
         if (choice.Count > 0)
         {
             TextRenderer.DrawText(

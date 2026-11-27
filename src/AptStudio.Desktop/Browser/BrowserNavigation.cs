@@ -67,6 +67,11 @@ internal sealed class BrowserNavigation
         };
     }
 
+    public void SetSort(TextureSort sort, bool descending)
+    {
+        State = State with { Sort = sort, SortDescending = descending };
+    }
+
     public void SetListIndex(int index)
     {
         State = State with { ListIndex = index };

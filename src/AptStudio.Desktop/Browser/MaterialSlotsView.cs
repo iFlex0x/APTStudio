@@ -32,7 +32,11 @@ internal sealed class MaterialSlotsView : Panel
 
     public int SelectedSlot => _selectedSlot;
 
-    public void SetMaterial(MaterialData data, int sourceSlot, Func<ulong, int> copyCount)
+    public void SetMaterial(
+        MaterialData data,
+        int sourceSlot,
+        Func<ulong, int> copyCount,
+        string archive)
     {
         _data = data;
         _suppress = true;
@@ -51,8 +55,8 @@ internal sealed class MaterialSlotsView : Panel
             }
 
             _summary.Text =
-                $"0x{data.Head.NameHash:X16} · {data.Code} · {data.Slots.Count} filled of " +
-                $"{MaterialSlotRoles.Count} slots";
+                $"0x{data.Head.NameHash:X16} · {data.Code} · {archive} · " +
+                $"{data.Slots.Count} filled of {MaterialSlotRoles.Count} slots";
             _selectedSlot = sourceSlot;
             int row = RowForSlot(sourceSlot);
             if (row >= 0)

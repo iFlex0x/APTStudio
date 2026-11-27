@@ -13,7 +13,7 @@ internal sealed class ThumbnailCache : IDisposable
     private const int CacheLimit = 512;
     private readonly ConcurrentDictionary<(string ArchivePath, long Offset), Bitmap> _cache = new();
     private readonly ConcurrentDictionary<(string ArchivePath, long Offset), byte> _pending = new();
-    private readonly ConcurrentQueue<TextureEntry> _queue = new();
+    private readonly ConcurrentStack<TextureEntry> _queue = new();
     private readonly SemaphoreSlim _signal = new(0);
     private readonly CancellationTokenSource _cancel = new();
     private readonly SynchronizationContext? _sync;
@@ -64,7 +64,7 @@ internal sealed class ThumbnailCache : IDisposable
             return;
         }
 
-        _queue.Enqueue(texture);
+        _queue.Push(texture);
         _signal.Release();
     }
 
@@ -104,7 +104,7 @@ internal sealed class ThumbnailCache : IDisposable
                 return;
             }
 
-            if (!_queue.TryDequeue(out TextureEntry? texture))
+            if (!_queue.TryPop(out TextureEntry? texture))
             {
                 continue;
             }

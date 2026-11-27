@@ -26,6 +26,12 @@ public sealed class BrowserNavigationTests
         123456,
         "CODE_EYE");
 
+    private static readonly MaterialOccurrence GreeceEye = new(
+        0x011C25CCA6037D8E,
+        "GREECE.DPC",
+        654321,
+        "CODE_EYE");
+
     private static BrowserState TextureState() => new(
         BrowserView.Textures,
         "GREECE.DPC",
@@ -158,6 +164,49 @@ public sealed class BrowserNavigationTests
         navigation.Back();
         Assert.Equal(BrowserView.Material, navigation.State.View);
         Assert.Equal(13, navigation.State.MaterialSlot);
+    }
+
+    [Fact]
+    public void NestedMaterialBackKeepsEachMaterial()
+    {
+        BrowserNavigation navigation = new(TextureState());
+        navigation.OpenChooser();
+        navigation.OpenMaterial(ApocalypseEye, 0);
+        navigation.OpenLinkedTexture(CommonEye);
+        navigation.OpenChooser();
+        navigation.OpenMaterial(GreeceEye, 0);
+
+        Assert.Equal(GreeceEye, navigation.State.Material);
+
+        navigation.Back();
+
+        Assert.Equal(BrowserView.LinkedTexture, navigation.State.View);
+        Assert.Equal(ApocalypseEye, navigation.State.Material);
+
+        navigation.Back();
+
+        Assert.Equal(BrowserView.Material, navigation.State.View);
+        Assert.Equal(ApocalypseEye, navigation.State.Material);
+
+        navigation.Forward();
+        Assert.Equal(BrowserView.LinkedTexture, navigation.State.View);
+
+        navigation.Forward();
+        Assert.Equal(BrowserView.Material, navigation.State.View);
+        Assert.Equal(GreeceEye, navigation.State.Material);
+    }
+
+    [Fact]
+    public void SortChangesStateWithoutHistoryOrTextureChange()
+    {
+        BrowserNavigation navigation = new(TextureState());
+
+        navigation.SetSort(TextureSort.Hash, true);
+
+        Assert.Equal(TextureSort.Hash, navigation.State.Sort);
+        Assert.True(navigation.State.SortDescending);
+        Assert.Equal(Eye, navigation.State.Texture);
+        Assert.False(navigation.CanBack);
     }
 
     [Fact]

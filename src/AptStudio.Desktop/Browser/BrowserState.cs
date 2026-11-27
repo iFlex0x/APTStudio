@@ -12,6 +12,14 @@ internal enum BrowserView
     Placeholder,
 }
 
+internal enum TextureSort
+{
+    Archive,
+    Hash,
+    Size,
+    Mips,
+}
+
 internal sealed record TextureFilter(
     TextureCodec? Codec = null,
     int? Width = null,
@@ -83,4 +91,6 @@ internal sealed record BrowserState(
     int MaterialSlot,
     TextureOccurrence? LinkedTexture,
     AnimationOccurrence? Animation,
-    string PlaceholderName = "");
+    string PlaceholderName = "",
+    TextureSort Sort = TextureSort.Archive,
+    bool SortDescending = false);

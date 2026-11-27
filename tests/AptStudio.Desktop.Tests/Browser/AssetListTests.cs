@@ -33,5 +33,33 @@ public sealed class AssetListTests
         Assert.Equal("b", list.SelectedRow?.Key);
     }
 
+    [Fact]
+    public void MultiSelectKeepsKeysAcrossSetRows()
+    {
+        using AssetList list = new();
+        list.SetRows([Row("a"), Row("b"), Row("c")], "a", ["a", "c"]);
+
+        Assert.Equal(new[] { "a", "c" }, list.SelectedKeys.OrderBy(key => key).ToArray());
+        Assert.Equal("a", list.SelectedRow?.Key);
+
+        list.SetRows([Row("c"), Row("a"), Row("b")], "a", ["a", "c"]);
+
+        Assert.Equal(new[] { "a", "c" }, list.SelectedKeys.OrderBy(key => key).ToArray());
+        Assert.Equal("a", list.SelectedRow?.Key);
+        Assert.Equal(1, list.SelectedIndex);
+    }
+
+    [Fact]
+    public void SortPreservesLiveSelectedKeys()
+    {
+        using AssetList list = new();
+        list.SetRows([Row("a"), Row("b"), Row("c")], "a", ["a", "c"]);
+
+        list.SetRows([Row("c"), Row("b"), Row("a")], "a", list.SelectedKeys);
+
+        Assert.Equal(new[] { "a", "c" }, list.SelectedKeys.OrderBy(key => key).ToArray());
+        Assert.Equal("a", list.SelectedRow?.Key);
+    }
+
     private static AssetRow Row(string key) => new(key, [key], key);
 }

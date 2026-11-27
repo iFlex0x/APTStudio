@@ -84,17 +84,24 @@ internal sealed class MaterialSlotInspector : Panel
         _fit.Click += (_, _) => _preview.Fit();
         _actual.Click += (_, _) => _preview.ActualSize();
 
-        FlowLayoutPanel controls = new()
+        TableLayoutPanel controls = new()
         {
-            AutoSize = true,
-            WrapContents = false,
             Dock = DockStyle.Top,
+            Height = 28,
+            ColumnCount = 4,
+            RowCount = 1,
             BackColor = Theme.Surface,
         };
-        controls.Controls.Add(_copiesLabel);
-        controls.Controls.Add(_copies);
-        controls.Controls.Add(_fit);
-        controls.Controls.Add(_actual);
+        controls.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        controls.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        controls.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        controls.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        _copies.Dock = DockStyle.Fill;
+        _copies.Anchor = AnchorStyles.Left | AnchorStyles.Right;
+        controls.Controls.Add(_copiesLabel, 0, 0);
+        controls.Controls.Add(_copies, 1, 0);
+        controls.Controls.Add(_fit, 2, 0);
+        controls.Controls.Add(_actual, 3, 0);
 
         _open.Text = "Open texture";
         _open.FlatStyle = FlatStyle.Flat;
