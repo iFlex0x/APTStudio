@@ -16,6 +16,7 @@ internal sealed class PoseForm : Form
     private readonly AssetEntry _skin;
     private readonly ulong _skeletonRoot;
     private readonly ulong _animationHash;
+    private readonly AssetEntry? _animationEntry;
     private readonly MeshView _view = new();
     private readonly DataGridView _bones = new();
     private readonly Dictionary<ulong, int> _boneRows = new();
@@ -55,7 +56,7 @@ internal sealed class PoseForm : Form
         _skin = skin;
         _skeletonRoot = skeletonRoot;
         _animationHash = animationHash;
-
+        _animationEntry = null;
         Text = $"Pose 0x{skin.NameHash:X16}";
         Icon = Theme.AppIcon;
         BackColor = Theme.Background;
@@ -126,6 +127,17 @@ internal sealed class PoseForm : Form
             _cancel?.Cancel();
             _cancel?.Dispose();
         };
+    }
+
+    public PoseForm(
+        GameProfile profile,
+        IReadOnlyList<AssetEntry> assets,
+        AssetEntry skin,
+        ulong skeletonRoot,
+        AssetEntry animation)
+        : this(profile, assets, skin, skeletonRoot, animation.NameHash)
+    {
+        _animationEntry = animation;
     }
 
     internal async Task LoadForShotAsync() => await _ready.Task;
@@ -353,14 +365,16 @@ internal sealed class PoseForm : Form
 
     private AnimationClip LoadClip(ulong hash)
     {
-        AssetEntry? entry = _assets
-            .Where(row => row.ClassHash == AssetClass.Animation && row.NameHash == hash)
-            .GroupBy(row => (row.BodyArchivePath, row.Row.BodyOffset))
-            .Select(group => group
-                .OrderBy(row => row.ArchivePath, StringComparer.OrdinalIgnoreCase)
-                .First())
-            .FirstOrDefault()
-            ?? throw new InvalidDataException($"no Animation_Z row named 0x{hash:X16}.");
+        AssetEntry? entry = _animationEntry is not null && _animationEntry.NameHash == hash
+            ? _animationEntry
+            : _assets
+                .Where(row => row.ClassHash == AssetClass.Animation && row.NameHash == hash)
+                .GroupBy(row => (row.BodyArchivePath, row.Row.BodyOffset))
+                .Select(group => group
+                    .OrderBy(row => row.ArchivePath, StringComparer.OrdinalIgnoreCase)
+                    .First())
+                .FirstOrDefault()
+                ?? throw new InvalidDataException($"no Animation_Z row named 0x{hash:X16}.");
         using FileStream stream = new(
             entry.BodyArchivePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
         AnimationBody body = AnimationDecoder.ReadBody(stream, entry.BodyArchivePath, entry.Row);

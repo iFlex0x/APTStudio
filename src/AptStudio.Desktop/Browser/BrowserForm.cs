@@ -22,6 +22,7 @@ internal sealed class BrowserForm : Form
     private readonly MaterialChooserView _chooser = new();
     private readonly MaterialSlotsView _materialSlots = new();
     private readonly MaterialSlotInspector _slotInspector = new();
+    private readonly AnimationInspector _animationInspector = new();
     private ThumbnailCache _thumbnailCache = null!;
     private IReadOnlyList<TextureOccurrence> _inspectorCopies = Array.Empty<TextureOccurrence>();
     private readonly Label _resultsTitle = new();
@@ -47,12 +48,19 @@ internal sealed class BrowserForm : Form
         new("Format", 56, Muted: true),
         new("Storage", 64, Muted: true),
     ];
+    private static readonly AssetColumn[] AnimationColumns =
+    [
+        new("Hash", 0, Flexible: true, Mono: true),
+        new("Occurrences", 90, Right: true, Muted: true),
+    ];
     private CancellationTokenSource? _loadCancel;
     private BrowserNavigation? _navigation;
     private IReadOnlyList<AssetEntry> _assets = Array.Empty<AssetEntry>();
     private IReadOnlyList<ArchiveChoice> _archives = Array.Empty<ArchiveChoice>();
     private IReadOnlyDictionary<string, int> _animationCounts =
         new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+    private IReadOnlyDictionary<ulong, int> _animationOccurrences =
+        new Dictionary<ulong, int>();
     private GameProfile? _profile;
     private int _sidebarWidth = 216;
     private int _inspectorWidth = 420;
@@ -301,8 +309,11 @@ internal sealed class BrowserForm : Form
         _textureInspector.Visible = false;
         _slotInspector.Dock = DockStyle.Fill;
         _slotInspector.Visible = false;
+        _animationInspector.Dock = DockStyle.Fill;
+        _animationInspector.Visible = false;
         _inspector.Controls.Add(_textureInspector);
         _inspector.Controls.Add(_slotInspector);
+        _inspector.Controls.Add(_animationInspector);
         _inner.Panel1.Controls.Add(_results);
         _inner.Panel2.Controls.Add(_inspector);
         _outer.Panel2.Controls.Add(_inner);
@@ -378,7 +389,23 @@ internal sealed class BrowserForm : Form
             }
         };
         _thumbnailCache.ThumbnailReady += (_, _) => _textureList.Invalidate();
-        _textureList.SelectionChanged += (_, _) => OnTextureSelected();
+        _textureList.SelectionChanged += (_, _) => OnListSelected();
+    }
+
+    private void OnListSelected()
+    {
+        if (_navigation is null)
+        {
+            return;
+        }
+
+        if (_navigation.State.View == BrowserView.Animations)
+        {
+            OnAnimationSelected();
+            return;
+        }
+
+        OnTextureSelected();
     }
 
     private void OnTextureSelected()
@@ -550,6 +577,10 @@ internal sealed class BrowserForm : Form
                 .Where(entry => entry.ClassHash == AssetClass.Animation)
                 .GroupBy(entry => entry.ArchivePath, StringComparer.OrdinalIgnoreCase)
                 .ToDictionary(group => group.Key, group => group.Count(), StringComparer.OrdinalIgnoreCase);
+            _animationOccurrences = _assets
+                .Where(entry => entry.ClassHash == AssetClass.Animation)
+                .GroupBy(entry => entry.NameHash)
+                .ToDictionary(group => group.Key, group => group.Count());
 
             string selected = ChooseInitialArchive();
             _navigation = new BrowserNavigation(new BrowserState(
@@ -868,10 +899,10 @@ internal sealed class BrowserForm : Form
         bool textureView = state.View == BrowserView.Textures || state.View == BrowserView.LinkedTexture;
         _textureInspector.Visible = textureView;
         _slotInspector.Visible = state.View == BrowserView.Material;
+        _animationInspector.Visible = state.View == BrowserView.Animations;
         _materialSlots.Visible = state.View == BrowserView.Material
             || state.View == BrowserView.LinkedTexture;
-        bool labelView = state.View == BrowserView.Animations
-            || state.View == BrowserView.Placeholder;
+        bool labelView = state.View == BrowserView.Placeholder;
         _inspectorTitle.Visible = labelView;
         _inspectorBody.Visible = labelView;
 
@@ -882,6 +913,7 @@ internal sealed class BrowserForm : Form
             _chooser.Visible = true;
             _materialSlots.Visible = false;
             _slotInspector.Visible = false;
+            _animationInspector.Visible = false;
             _textureInspector.Visible = true;
             _inspectorTitle.Visible = false;
             _inspectorBody.Visible = false;
@@ -899,24 +931,21 @@ internal sealed class BrowserForm : Form
         _search.Enabled = true;
         _filterButton.Enabled = state.View == BrowserView.Textures;
         UpdateFilterButton(state.Filter);
-        _textureHost.Visible = state.View == BrowserView.Textures;
-        _resultsBody.Visible = state.View == BrowserView.Animations
-            || state.View == BrowserView.Placeholder;
+        _textureHost.Visible = state.View == BrowserView.Textures
+            || state.View == BrowserView.Animations;
+        _resultsBody.Visible = state.View == BrowserView.Placeholder;
 
         switch (state.View)
         {
             case BrowserView.Textures:
                 _resultsTitle.Text = "Textures";
+                SetListMode(false);
                 RenderTextureList(state);
                 break;
             case BrowserView.Animations:
                 _resultsTitle.Text = "Animations";
-                _resultsBody.Text =
-                    $"{Path.GetFileName(state.ArchivePath)} · " +
-                    $"{_animationCounts.GetValueOrDefault(state.ArchivePath):N0} clips\n" +
-                    "The inline player arrives in a later task.";
-                _inspectorTitle.Text = "Inspector";
-                _inspectorBody.Text = "Select a clip to see its render and playback controls.";
+                SetListMode(true);
+                RenderAnimationList(state);
                 break;
             case BrowserView.Material:
                 _resultsTitle.Text = "Material";
@@ -986,6 +1015,139 @@ internal sealed class BrowserForm : Form
             RenderInspector();
         }
     }
+
+    private void SetListMode(bool animations)
+    {
+        IReadOnlyList<AssetColumn> columns = animations ? AnimationColumns : TextureColumns;
+        _textureHeader.Columns = columns;
+        _textureList.Columns = columns;
+        _textureHeader.ShowThumbnails = !animations;
+        _textureList.ShowThumbnails = !animations;
+    }
+
+    private void RenderAnimationList(BrowserState state)
+    {
+        IReadOnlyList<AssetRow> rows = BuildAnimationRows(state);
+        string? keep = state.Animation is null ? null : AnimationKey(state.Animation);
+        _textureList.SetRows(rows, keep);
+        bool keepFound = keep is not null
+            && _textureList.SelectedRow?.Key.Equals(keep, StringComparison.Ordinal) == true;
+        if (!keepFound)
+        {
+            _textureList.SelectedIndex = rows.Count > 0 ? 0 : -1;
+            if (rows.Count > 0)
+            {
+                OnAnimationSelected();
+            }
+        }
+
+        _textureList.TopIndex = state.ListIndex;
+        _textureList.EnsureVisible(_textureList.SelectedIndex);
+        if (rows.Count == 0)
+        {
+            _animationInspector.ShowEmpty();
+        }
+        else
+        {
+            RenderAnimation();
+        }
+    }
+
+    private IReadOnlyList<AssetRow> BuildAnimationRows(BrowserState state)
+    {
+        List<AssetRow> rows = new();
+        HashSet<(string ArchivePath, long Offset)> seen = new();
+        string query = state.Query.Trim();
+        string needle = query.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
+            ? query[2..]
+            : query;
+        foreach (AssetEntry entry in _assets)
+        {
+            if (entry.ClassHash != AssetClass.Animation
+                || !entry.ArchivePath.Equals(state.ArchivePath, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (!seen.Add((entry.BodyArchivePath, entry.Row.BodyOffset)))
+            {
+                continue;
+            }
+
+            if (needle.Length > 0
+                && !entry.NameHash.ToString("X16", CultureInfo.InvariantCulture)
+                    .Contains(needle, StringComparison.OrdinalIgnoreCase)
+                && !entry.ArchivePath.Contains(needle, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            rows.Add(new AssetRow(
+                AnimationKey(entry),
+                [
+                    $"0x{entry.NameHash:X16}",
+                    _animationOccurrences.GetValueOrDefault(entry.NameHash)
+                        .ToString("N0", CultureInfo.InvariantCulture),
+                ],
+                entry));
+        }
+
+        rows.Sort((left, right) => ((AssetEntry)left.Tag!).NameHash
+            .CompareTo(((AssetEntry)right.Tag!).NameHash));
+        return rows;
+    }
+
+    private void OnAnimationSelected()
+    {
+        if (_navigation is null
+            || _navigation.State.View != BrowserView.Animations
+            || _textureList.SelectedRow?.Tag is not AssetEntry entry)
+        {
+            return;
+        }
+
+        _navigation.SetAnimation(ToAnimation(entry), _textureList.TopIndex);
+        RenderAnimation();
+        UpdateStatus();
+    }
+
+    private void RenderAnimation()
+    {
+        if (_navigation?.State.Animation is not { } animation || _profile is null)
+        {
+            _animationInspector.ShowEmpty();
+            return;
+        }
+
+        AssetEntry? entry = FindAnimationEntry(animation);
+        if (entry is null)
+        {
+            _animationInspector.ShowEmpty();
+            return;
+        }
+
+        _animationInspector.SetClip(entry, _assets, _profile);
+    }
+
+    private AssetEntry? FindAnimationEntry(AnimationOccurrence animation) =>
+        _assets.FirstOrDefault(entry =>
+            entry.ClassHash == AssetClass.Animation
+            && entry.NameHash == animation.Hash
+            && entry.BodyArchivePath.Equals(
+                animation.BodyArchivePath, StringComparison.OrdinalIgnoreCase)
+            && entry.Row.BodyOffset == animation.BodyOffset);
+
+    private static AnimationOccurrence ToAnimation(AssetEntry entry) => new(
+        entry.NameHash,
+        entry.ArchivePath,
+        entry.BodyArchivePath,
+        entry.Row.BodyOffset);
+
+    private static string AnimationKey(AssetEntry entry) =>
+        $"{entry.BodyArchivePath}|{entry.Row.BodyOffset}|{entry.NameHash:X16}";
+
+    private static string AnimationKey(AnimationOccurrence animation) =>
+        $"{animation.BodyArchivePath}|{animation.BodyOffset}|{animation.Hash:X16}";
 
     private IReadOnlyList<AssetRow> BuildTextureRows(BrowserState state)
     {
@@ -1573,6 +1735,15 @@ internal sealed class BrowserForm : Form
             _status.Text =
                 $"{Path.GetFileName(state.ArchivePath)} · {_textureList.Rows.Count:N0} of " +
                 $"{ArchiveCount(state.ArchivePath):N0} textures · {_archives.Count:N0} archives";
+            return;
+        }
+
+        if (state.View == BrowserView.Animations)
+        {
+            string noun = _textureList.Rows.Count == 1 ? "clip" : "clips";
+            _status.Text =
+                $"{Path.GetFileName(state.ArchivePath)} · {_textureList.Rows.Count:N0} {noun} · " +
+                $"{_archives.Count:N0} archives";
             return;
         }
 

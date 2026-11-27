@@ -57,6 +57,16 @@ internal sealed class BrowserNavigation
         State = State with { LinkedTexture = texture };
     }
 
+    public void SetAnimation(AnimationOccurrence animation, int listIndex)
+    {
+        ArgumentNullException.ThrowIfNull(animation);
+        State = State with
+        {
+            Animation = animation,
+            ListIndex = listIndex,
+        };
+    }
+
     public void SetListIndex(int index)
     {
         State = State with { ListIndex = index };
