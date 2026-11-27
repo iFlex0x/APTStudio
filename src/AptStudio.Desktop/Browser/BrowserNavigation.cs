@@ -67,6 +67,58 @@ internal sealed class BrowserNavigation
         };
     }
 
+    public void SelectMesh(MeshOccurrence mesh, int listIndex)
+    {
+        ArgumentNullException.ThrowIfNull(mesh);
+        State = State with
+        {
+            View = BrowserView.Meshes,
+            Mesh = mesh,
+            MeshCamera = null,
+            MeshWireframe = false,
+            Skin = null,
+            SkinPart = 0,
+            Skeleton = null,
+            ListIndex = listIndex,
+        };
+    }
+
+    public void SetMeshView(MeshCamera camera, bool wireframe)
+    {
+        State = State with { MeshCamera = camera, MeshWireframe = wireframe };
+    }
+
+    public void OpenSkin(SkinOccurrence skin, int part)
+    {
+        ArgumentNullException.ThrowIfNull(skin);
+        _back.Push(State);
+        _forward.Clear();
+        State = State with
+        {
+            View = BrowserView.Skin,
+            Skin = skin,
+            SkinPart = part,
+            Skeleton = null,
+        };
+    }
+
+    public void SetSkinPart(int part)
+    {
+        State = State with { SkinPart = part };
+    }
+
+    public void OpenSkeleton(SkeletonOccurrence skeleton)
+    {
+        ArgumentNullException.ThrowIfNull(skeleton);
+        _back.Push(State);
+        _forward.Clear();
+        State = State with
+        {
+            View = BrowserView.Skeleton,
+            Skeleton = skeleton,
+        };
+    }
+
     public void SetSort(TextureSort sort, bool descending)
     {
         State = State with { Sort = sort, SortDescending = descending };

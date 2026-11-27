@@ -22,6 +22,7 @@ internal sealed class SkinView : Panel
     private readonly Label _note = new();
     private float _dpiScale = 1f;
     private ulong _skeletonRoot;
+    private bool _suppressPart;
 
     public SkinView()
     {
@@ -48,7 +49,14 @@ internal sealed class SkinView : Panel
         header.Controls.Add(_title);
 
         ConfigureParts();
-        _parts.CurrentCellChanged += (_, _) => UpdateOpenEnabled();
+        _parts.CurrentCellChanged += (_, _) =>
+        {
+            UpdateOpenEnabled();
+            if (!_suppressPart)
+            {
+                PartChanged?.Invoke(SelectedPart);
+            }
+        };
         _parts.CellDoubleClick += (_, e) =>
         {
             if (e.RowIndex >= 0)
@@ -161,6 +169,18 @@ internal sealed class SkinView : Panel
 
     public event Action<ulong>? PoseRequested;
 
+    public event Action<int>? PartChanged;
+
+    public int SelectedPart => _parts.CurrentCell?.RowIndex ?? -1;
+
+    public void SetActionsVisible(bool openMesh, bool pose)
+    {
+        _open.Visible = openMesh;
+        _pose.Visible = pose;
+    }
+
+    public void SetNote(string text) => _note.Text = text;
+
     public ulong? SelectedMeshHash
     {
         get
@@ -183,28 +203,36 @@ internal sealed class SkinView : Panel
         _skeletonRoot = skeletonRoot;
         _openSkeleton.Enabled = skeletonRoot != 0;
         _pose.Enabled = skeletonRoot != 0;
-        _parts.Rows.Clear();
-        foreach (SkinPartRow part in parts)
+        _suppressPart = true;
+        try
         {
-            int index = _parts.Rows.Add(
-                part.Index.ToString(CultureInfo.InvariantCulture),
-                part.MeshHash.ToString("X16", CultureInfo.InvariantCulture),
-                part.Vertices.ToString("N0", CultureInfo.InvariantCulture),
-                part.Stride.ToString(CultureInfo.InvariantCulture),
-                part.PacketsParsed
-                    ? part.Packets.ToString(CultureInfo.InvariantCulture)
-                    : "?",
-                part.PacketsParsed
-                    ? part.MaterialHash.ToString("X16", CultureInfo.InvariantCulture)
-                    : "");
-            _parts.Rows[index].Tag = part.MeshHash;
-        }
+            _parts.Rows.Clear();
+            foreach (SkinPartRow part in parts)
+            {
+                int index = _parts.Rows.Add(
+                    part.Index.ToString(CultureInfo.InvariantCulture),
+                    part.MeshHash.ToString("X16", CultureInfo.InvariantCulture),
+                    part.Vertices.ToString("N0", CultureInfo.InvariantCulture),
+                    part.Stride.ToString(CultureInfo.InvariantCulture),
+                    part.PacketsParsed
+                        ? part.Packets.ToString(CultureInfo.InvariantCulture)
+                        : "?",
+                    part.PacketsParsed
+                        ? part.MaterialHash.ToString("X16", CultureInfo.InvariantCulture)
+                        : "");
+                _parts.Rows[index].Tag = part.MeshHash;
+            }
 
-        _parts.ClearSelection();
-        if (_parts.Rows.Count > 0)
+            _parts.ClearSelection();
+            if (_parts.Rows.Count > 0)
+            {
+                _parts.CurrentCell = _parts.Rows[0].Cells[0];
+                _parts.Rows[0].Selected = true;
+            }
+        }
+        finally
         {
-            _parts.CurrentCell = _parts.Rows[0].Cells[0];
-            _parts.Rows[0].Selected = true;
+            _suppressPart = false;
         }
 
         UpdateOpenEnabled();
@@ -221,12 +249,21 @@ internal sealed class SkinView : Panel
 
     public void Reset()
     {
-        _title.Text = "";
-        _subtitle.Text = "";
-        _skeletonRoot = 0;
-        _openSkeleton.Enabled = false;
-        _pose.Enabled = false;
-        _parts.Rows.Clear();
+        _suppressPart = true;
+        try
+        {
+            _title.Text = "";
+            _subtitle.Text = "";
+            _skeletonRoot = 0;
+            _openSkeleton.Enabled = false;
+            _pose.Enabled = false;
+            _parts.Rows.Clear();
+        }
+        finally
+        {
+            _suppressPart = false;
+        }
+
         UpdateOpenEnabled();
     }
 

@@ -9,6 +9,9 @@ internal enum BrowserView
     Material,
     LinkedTexture,
     Animations,
+    Meshes,
+    Skin,
+    Skeleton,
     Placeholder,
 }
 
@@ -75,6 +78,42 @@ internal sealed record AnimationOccurrence(
     public (string ArchivePath, long Offset) BodyKey => (BodyArchivePath, BodyOffset);
 }
 
+internal sealed record MeshOccurrence(
+    ulong Hash,
+    string ArchivePath,
+    string BodyArchivePath,
+    long BodyOffset)
+{
+    public string ArchiveName => Path.GetFileName(ArchivePath);
+
+    public string BodyArchiveName => Path.GetFileName(BodyArchivePath);
+
+    public bool IsExternal =>
+        !ArchivePath.Equals(BodyArchivePath, StringComparison.OrdinalIgnoreCase);
+}
+
+internal sealed record SkinOccurrence(
+    ulong Hash,
+    string ArchivePath,
+    string BodyArchivePath,
+    long BodyOffset)
+{
+    public string ArchiveName => Path.GetFileName(ArchivePath);
+
+    public string BodyArchiveName => Path.GetFileName(BodyArchivePath);
+
+    public bool IsExternal =>
+        !ArchivePath.Equals(BodyArchivePath, StringComparison.OrdinalIgnoreCase);
+}
+
+internal sealed record SkeletonOccurrence(
+    ulong Hash,
+    string ArchivePath,
+    long Offset)
+{
+    public string ArchiveName => Path.GetFileName(ArchivePath);
+}
+
 internal sealed record BrowserState(
     BrowserView View,
     string ArchivePath,
@@ -93,4 +132,10 @@ internal sealed record BrowserState(
     AnimationOccurrence? Animation,
     string PlaceholderName = "",
     TextureSort Sort = TextureSort.Archive,
-    bool SortDescending = false);
+    bool SortDescending = false,
+    MeshOccurrence? Mesh = null,
+    MeshCamera? MeshCamera = null,
+    bool MeshWireframe = false,
+    SkinOccurrence? Skin = null,
+    int SkinPart = 0,
+    SkeletonOccurrence? Skeleton = null);

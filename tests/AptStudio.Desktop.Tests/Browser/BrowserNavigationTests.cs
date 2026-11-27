@@ -210,6 +210,47 @@ public sealed class BrowserNavigationTests
     }
 
     [Fact]
+    public void MeshSkinSkeletonRoundTripRestoresCameraPartAndWireframe()
+    {
+        MeshOccurrence mesh = new(
+            0xF626B0795727EAA6,
+            @"C:\game\DATAS\SHARED.DPC",
+            @"C:\game\DATAS\SHARED.DPC",
+            485683);
+        SkinOccurrence skin = new(
+            0x7D6A523E1499A737,
+            @"C:\game\DATAS\SHARED.DPC",
+            @"C:\game\DATAS\SHARED.DPC",
+            5101973);
+        SkeletonOccurrence skeleton = new(
+            0x314127CD0F66EADA,
+            @"C:\game\DATAS\SHARED.DPC",
+            4203747);
+        BrowserNavigation navigation = new(TextureState());
+
+        navigation.SelectMesh(mesh, 37);
+        MeshCamera camera = new(1.2f, -0.3f, 2.4f, new PointF(11f, -7f));
+        navigation.SetMeshView(camera, true);
+        navigation.OpenSkin(skin, 7);
+        navigation.SetSkinPart(0);
+        navigation.OpenSkeleton(skeleton);
+
+        Assert.Equal(BrowserView.Skeleton, navigation.State.View);
+
+        navigation.Back();
+        Assert.Equal(BrowserView.Skin, navigation.State.View);
+        Assert.Equal(0, navigation.State.SkinPart);
+        Assert.Equal(skin, navigation.State.Skin);
+
+        navigation.Back();
+        Assert.Equal(BrowserView.Meshes, navigation.State.View);
+        Assert.Equal(mesh, navigation.State.Mesh);
+        Assert.Equal(camera, navigation.State.MeshCamera);
+        Assert.True(navigation.State.MeshWireframe);
+        Assert.Equal(37, navigation.State.ListIndex);
+    }
+
+    [Fact]
     public void SwitchScopeClearsHistory()
     {
         BrowserNavigation navigation = new(TextureState());

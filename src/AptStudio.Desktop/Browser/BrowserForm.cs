@@ -1,9 +1,13 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.Numerics;
 using AptStudio.Core.Assets;
 using AptStudio.Core.Games;
 using AptStudio.Core.Links;
 using AptStudio.Core.Materials;
+using AptStudio.Core.Meshes;
+using AptStudio.Core.Skeletons;
+using AptStudio.Core.Skins;
 using AptStudio.Core.Textures;
 
 namespace AptStudio.Desktop.Browser;
@@ -23,6 +27,10 @@ internal sealed class BrowserForm : Form
     private readonly MaterialSlotsView _materialSlots = new();
     private readonly MaterialSlotInspector _slotInspector = new();
     private readonly AnimationInspector _animationInspector = new();
+    private readonly MeshInspector _meshInspector = new();
+    private readonly MeshSkinChooserView _meshSkins = new();
+    private readonly SkinView _skinView = new();
+    private readonly SkeletonView _skeletonView = new();
     private ThumbnailCache _thumbnailCache = null!;
     private IReadOnlyList<TextureOccurrence> _inspectorCopies = Array.Empty<TextureOccurrence>();
     private readonly Label _resultsTitle = new();
@@ -40,8 +48,25 @@ internal sealed class BrowserForm : Form
     private readonly Button _sortDirection = new();
     private readonly Button _exportSelected = new();
     private readonly Label _selectionCount = new();
+    private Control _titleLine = new();
     private bool _suppressSort;
     private int _chooserArchiveCount;
+    private bool _meshSkinsOpen;
+    private SkinLinkIndex? _skinLinks;
+    private Task? _skinLinksTask;
+    private CancellationTokenSource? _skinLinksCancel;
+    private SkeletonCatalog? _skeletonCatalog;
+    private Task? _skeletonTask;
+    private CancellationTokenSource? _skeletonCancel;
+    private CancellationTokenSource? _meshCancel;
+    private CancellationTokenSource? _skinCancel;
+    private CancellationTokenSource? _skeletonDecodeCancel;
+    private string? _skinLoadedKey;
+    private string? _skeletonLoadedKey;
+    private IReadOnlyDictionary<ulong, AssetEntry> _meshRows =
+        new Dictionary<ulong, AssetEntry>();
+    private IReadOnlyDictionary<string, int> _meshCounts =
+        new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
     private readonly TextBox _search = new();
     private readonly Label _status = new();
     private readonly System.Windows.Forms.Timer _searchTimer = new() { Interval = 150 };
@@ -66,6 +91,11 @@ internal sealed class BrowserForm : Form
     [
         new("Hash", 0, Flexible: true, Mono: true),
         new("Occurrences", 90, Right: true, Muted: true),
+    ];
+    private static readonly AssetColumn[] MeshColumns =
+    [
+        new("Hash", 160, Mono: true),
+        new("Archive", 0, Flexible: true, Muted: true, MiddleEllipsis: true),
     ];
     private CancellationTokenSource? _loadCancel;
     private CancellationTokenSource? _listCancel;
@@ -128,6 +158,7 @@ internal sealed class BrowserForm : Form
         WireScope();
         WireTextureList();
         WireInspector();
+        WireMeshViews();
         _back.Click += (_, _) => Back();
         _forward.Click += (_, _) => Forward();
         _scopeButton.Click += (_, _) => ToggleScope();
@@ -173,6 +204,11 @@ internal sealed class BrowserForm : Form
             _loadCancel?.Cancel();
             _listCancel?.Cancel();
             _materialCancel?.Cancel();
+            _skinLinksCancel?.Cancel();
+            _skeletonCancel?.Cancel();
+            _meshCancel?.Cancel();
+            _skinCancel?.Cancel();
+            _skeletonDecodeCancel?.Cancel();
             SaveLayout();
         };
     }
@@ -452,8 +488,19 @@ internal sealed class BrowserForm : Form
         _materialSlots.Dock = DockStyle.Fill;
         _materialSlots.Visible = false;
 
+        _meshSkins.Dock = DockStyle.Fill;
+        _meshSkins.Visible = false;
+        _skinView.Dock = DockStyle.Fill;
+        _skinView.Visible = false;
+        _skeletonView.Dock = DockStyle.Fill;
+        _skeletonView.Visible = false;
+
+        _titleLine = titleLine;
         _results.Controls.Add(_chooser);
         _results.Controls.Add(_materialSlots);
+        _results.Controls.Add(_meshSkins);
+        _results.Controls.Add(_skinView);
+        _results.Controls.Add(_skeletonView);
         _results.Controls.Add(_textureHost);
         _results.Controls.Add(_textureToolbar);
         _results.Controls.Add(_resultsBody);
@@ -468,9 +515,12 @@ internal sealed class BrowserForm : Form
         _slotInspector.Visible = false;
         _animationInspector.Dock = DockStyle.Fill;
         _animationInspector.Visible = false;
+        _meshInspector.Dock = DockStyle.Fill;
+        _meshInspector.Visible = false;
         _inspector.Controls.Add(_textureInspector);
         _inspector.Controls.Add(_slotInspector);
         _inspector.Controls.Add(_animationInspector);
+        _inspector.Controls.Add(_meshInspector);
         _inner.Panel1.Controls.Add(_results);
         _inner.Panel2.Controls.Add(_inspector);
         _outer.Panel2.Controls.Add(_inner);
@@ -564,6 +614,10 @@ internal sealed class BrowserForm : Form
         {
             OnAnimationSelected();
         }
+        else if (_navigation.State.View == BrowserView.Meshes)
+        {
+            OnMeshSelected();
+        }
         else
         {
             OnTextureSelected();
@@ -622,6 +676,31 @@ internal sealed class BrowserForm : Form
         _slotInspector.CopyChanged += (_, index) => OnSlotCopyChanged(index);
     }
 
+    private void WireMeshViews()
+    {
+        _meshInspector.UsedByRequested += async (_, _) => await OpenMeshSkinsAsync();
+        _meshInspector.CameraChanged += (_, _) => UpdateMeshViewState();
+        _meshInspector.WireframeChanged += (_, _) => UpdateMeshViewState();
+        _meshSkins.OpenRequested += (_, row) => OpenSkin(row);
+        _skinView.SkeletonRequested += async root => await OpenSkeletonAsync(root);
+        _skinView.PartChanged += part =>
+        {
+            if (_navigation?.State.View == BrowserView.Skin)
+            {
+                _navigation.SetSkinPart(part);
+            }
+        };
+        _skinView.SetActionsVisible(openMesh: false, pose: false);
+    }
+
+    private void UpdateMeshViewState()
+    {
+        if (_navigation?.State.View == BrowserView.Meshes)
+        {
+            _navigation.SetMeshView(_meshInspector.Camera, _meshInspector.IsWireframe);
+        }
+    }
+
     private async Task OnShownAsync()
     {
         ApplySplitterLayout();
@@ -672,6 +751,27 @@ internal sealed class BrowserForm : Form
         _listCancel = null;
         _listVersion++;
         _listBuilding = false;
+        _skinLinksCancel?.Cancel();
+        _skinLinksCancel = null;
+        _skinLinks = null;
+        _skinLinksTask = null;
+        _skeletonCancel?.Cancel();
+        _skeletonCancel = null;
+        _skeletonCatalog = null;
+        _skeletonTask = null;
+        _meshCancel?.Cancel();
+        _meshCancel = null;
+        _skinCancel?.Cancel();
+        _skinCancel = null;
+        _skeletonDecodeCancel?.Cancel();
+        _skeletonDecodeCancel = null;
+        _skinLoadedKey = null;
+        _skeletonLoadedKey = null;
+        _meshSkinsOpen = false;
+        _meshInspector.ShowEmpty();
+        _skinView.Reset();
+        _skeletonView.Reset();
+        _meshSkins.SetRows([]);
         _materials = null;
         _materialTextures = null;
         _materialLoading = false;
@@ -755,6 +855,31 @@ internal sealed class BrowserForm : Form
                 .Where(entry => entry.ClassHash == AssetClass.Animation)
                 .GroupBy(entry => entry.NameHash)
                 .ToDictionary(group => group.Key, group => group.Count());
+            Dictionary<string, HashSet<(ulong Name, long Offset)>> meshKeys =
+                new(StringComparer.OrdinalIgnoreCase);
+            Dictionary<ulong, AssetEntry> meshRows = new();
+            foreach (AssetEntry entry in _assets)
+            {
+                if (entry.ClassHash != AssetClass.Mesh)
+                {
+                    continue;
+                }
+
+                meshRows.TryAdd(entry.NameHash, entry);
+                if (!meshKeys.TryGetValue(entry.ArchivePath, out HashSet<(ulong, long)>? keys))
+                {
+                    keys = new HashSet<(ulong, long)>();
+                    meshKeys[entry.ArchivePath] = keys;
+                }
+
+                keys.Add((entry.NameHash, entry.Row.BodyOffset));
+            }
+
+            _meshRows = meshRows;
+            _meshCounts = meshKeys.ToDictionary(
+                pair => pair.Key,
+                pair => pair.Value.Count,
+                StringComparer.OrdinalIgnoreCase);
 
             string selected = ChooseInitialArchive();
             _lastArchive = selected;
@@ -838,12 +963,13 @@ internal sealed class BrowserForm : Form
     {
         int textures = ArchiveCount(archivePath);
         int animations = _animationCounts.GetValueOrDefault(archivePath);
+        int meshes = _meshCounts.GetValueOrDefault(archivePath);
         return
         [
             new TypeChoice("Textures", textures, true),
             new TypeChoice("Animations", animations, true),
             new TypeChoice("Materials", 0, false),
-            new TypeChoice("Meshes", 0, false),
+            new TypeChoice("Meshes", meshes, true),
             new TypeChoice("Skins", 0, false),
             new TypeChoice("Skeletons", 0, false),
             new TypeChoice("Audio", 0, false),
@@ -859,9 +985,14 @@ internal sealed class BrowserForm : Form
         }
 
         BrowserState state = _navigation.State;
-        BrowserView view = state.View == BrowserView.Placeholder
-            ? BrowserView.Placeholder
-            : state.View == BrowserView.Animations ? BrowserView.Animations : BrowserView.Textures;
+        _meshSkinsOpen = false;
+        BrowserView view = state.View switch
+        {
+            BrowserView.Placeholder => BrowserView.Placeholder,
+            BrowserView.Animations => BrowserView.Animations,
+            BrowserView.Meshes or BrowserView.Skin or BrowserView.Skeleton => BrowserView.Meshes,
+            _ => BrowserView.Textures,
+        };
         if (archivePath.Length == 0)
         {
             view = BrowserView.Textures;
@@ -887,10 +1018,12 @@ internal sealed class BrowserForm : Form
             return;
         }
 
+        _meshSkinsOpen = false;
         BrowserView view = name switch
         {
             "Textures" => BrowserView.Textures,
             "Animations" => BrowserView.Animations,
+            "Meshes" => BrowserView.Meshes,
             _ => BrowserView.Placeholder,
         };
         string archive = _navigation.State.ArchivePath;
@@ -919,6 +1052,12 @@ internal sealed class BrowserForm : Form
 
     private void Back()
     {
+        if (_meshSkinsOpen)
+        {
+            CloseMeshSkins();
+            return;
+        }
+
         _navigation?.Back();
         RenderState();
     }
@@ -1116,7 +1255,7 @@ internal sealed class BrowserForm : Form
         _scope.SelectArchive(state.ArchivePath);
         _scope.SetActiveType(TypeName(state));
         _scopeButton.Text = _navigation.IsChooserOpen ? "All archives" : ScopeChip(state);
-        _back.Enabled = _navigation.CanBack;
+        _back.Enabled = _navigation.CanBack || _meshSkinsOpen;
         _forward.Enabled = _navigation.CanForward;
         _crumbs.Text = _navigation.IsChooserOpen ? ChooserCrumbs(state) : Crumbs(state);
         if (_search.Text != state.Query)
@@ -1125,11 +1264,18 @@ internal sealed class BrowserForm : Form
         }
 
         bool textureView = state.View == BrowserView.Textures || state.View == BrowserView.LinkedTexture;
+        bool detailView = state.View is BrowserView.Skin or BrowserView.Skeleton;
         _textureInspector.Visible = textureView;
         _slotInspector.Visible = state.View == BrowserView.Material;
         _animationInspector.Visible = state.View == BrowserView.Animations;
+        _meshInspector.Visible = state.View == BrowserView.Meshes;
         _materialSlots.Visible = state.View == BrowserView.Material
             || state.View == BrowserView.LinkedTexture;
+        _skinView.Visible = state.View == BrowserView.Skin;
+        _skeletonView.Visible = state.View == BrowserView.Skeleton;
+        _meshSkins.Visible = false;
+        _inner.Panel2Collapsed = detailView;
+        _titleLine.Visible = !detailView;
         bool labelView = state.View == BrowserView.Placeholder;
         _inspectorTitle.Visible = labelView;
         _inspectorBody.Visible = labelView;
@@ -1162,31 +1308,63 @@ internal sealed class BrowserForm : Form
         }
 
         _chooser.Visible = false;
-        _search.Enabled = true;
+        _search.Enabled = state.View is BrowserView.Textures
+            or BrowserView.Animations or BrowserView.Meshes;
         _filterButton.Enabled = state.View == BrowserView.Textures;
         UpdateFilterButton(state.Filter);
-        _textureHost.Visible = state.View == BrowserView.Textures
-            || state.View == BrowserView.Animations;
-        _textureToolbar.Visible = state.View is BrowserView.Textures or BrowserView.Animations;
-        _resultsBody.Visible = true;
+        _textureHost.Visible = state.View is BrowserView.Textures
+            or BrowserView.Animations or BrowserView.Meshes;
+        _textureToolbar.Visible = state.View == BrowserView.Textures;
+        _resultsBody.Visible = !detailView;
         _resultsBody.Height = labelView ? 44 : 18;
 
         switch (state.View)
         {
             case BrowserView.Textures:
                 _resultsTitle.Text = "Textures";
-                SetListMode(false);
+                SetListMode(BrowserView.Textures);
                 StartTextureList(state);
                 break;
             case BrowserView.Animations:
                 _resultsTitle.Text = "Animations";
-                SetListMode(true);
+                SetListMode(BrowserView.Animations);
                 RenderAnimationList(state);
                 _resultsCount.Text = $"{_textureList.Rows.Count:N0}";
                 string clipNoun = _textureList.Rows.Count == 1 ? "clip" : "clips";
                 _resultsBody.Text =
                     $"{ScopeName(state.ArchivePath)} · {_textureList.Rows.Count:N0} " +
                     $"{clipNoun} · hash order";
+                break;
+            case BrowserView.Meshes:
+                SetListMode(BrowserView.Meshes);
+                if (_meshSkinsOpen)
+                {
+                    _resultsTitle.Text = "Skins";
+                    _resultsCount.Text = $"{_meshSkins.RowCount:N0}";
+                    _resultsBody.Text =
+                        $"0x{state.Mesh?.Hash:X16} · skins that link this mesh";
+                    _textureHost.Visible = false;
+                    _textureToolbar.Visible = false;
+                    _meshSkins.Visible = true;
+                }
+                else
+                {
+                    _resultsTitle.Text = "Meshes";
+                    RenderMeshList(state);
+                }
+
+                break;
+            case BrowserView.Skin:
+                _textureHost.Visible = false;
+                _textureToolbar.Visible = false;
+                _skinView.Visible = true;
+                _ = RenderSkinAsync(state);
+                break;
+            case BrowserView.Skeleton:
+                _textureHost.Visible = false;
+                _textureToolbar.Visible = false;
+                _skeletonView.Visible = true;
+                _ = RenderSkeletonAsync(state);
                 break;
             case BrowserView.Material:
                 _resultsTitle.Text = "Material";
@@ -1382,19 +1560,23 @@ internal sealed class BrowserForm : Form
                 row.Tag is AssetEntry entry && entry.IsPreviewable);
     }
 
-    private void SetListMode(bool animations)
+    private void SetListMode(BrowserView view)
     {
         bool narrow = ClientSize.Width < BrowserLayout.CollapseWidth;
-        IReadOnlyList<AssetColumn> columns = animations
-            ? AnimationColumns
-            : narrow ? NarrowTextureColumns : TextureColumns;
+        IReadOnlyList<AssetColumn> columns = view switch
+        {
+            BrowserView.Animations => AnimationColumns,
+            BrowserView.Meshes => MeshColumns,
+            _ => narrow ? NarrowTextureColumns : TextureColumns,
+        };
+        bool textures = view == BrowserView.Textures;
         _textureHeader.Columns = columns;
         _textureList.Columns = columns;
-        _textureHeader.ShowThumbnails = !animations;
-        _textureList.ShowThumbnails = !animations;
-        _textureToolbar.Visible = !animations;
-        _textureList.AllowMultiSelect = !animations;
-        if (!animations && _navigation is not null)
+        _textureHeader.ShowThumbnails = textures;
+        _textureList.ShowThumbnails = textures;
+        _textureToolbar.Visible = textures;
+        _textureList.AllowMultiSelect = textures;
+        if (textures && _navigation is not null)
         {
             SyncSortControls(_navigation.State);
         }
@@ -1543,6 +1725,730 @@ internal sealed class BrowserForm : Form
 
     private static string AnimationKey(AnimationOccurrence animation) =>
         $"{animation.BodyArchivePath}|{animation.BodyOffset}|{animation.Hash:X16}";
+
+    private IReadOnlyList<AssetRow> BuildMeshRows(BrowserState state)
+    {
+        List<AssetRow> rows = new();
+        bool allArchives = string.IsNullOrEmpty(state.ArchivePath);
+        string query = state.Query.Trim();
+        string needle = query.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
+            ? query[2..]
+            : query;
+        HashSet<string> seen = new(StringComparer.Ordinal);
+        foreach (AssetEntry entry in _assets)
+        {
+            if (entry.ClassHash != AssetClass.Mesh)
+            {
+                continue;
+            }
+
+            if (!allArchives
+                && !entry.ArchivePath.Equals(state.ArchivePath, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (!seen.Add(BrowserKeys.Mesh(entry)))
+            {
+                continue;
+            }
+
+            if (needle.Length > 0
+                && !entry.NameHash.ToString("X16", CultureInfo.InvariantCulture)
+                    .Contains(needle, StringComparison.OrdinalIgnoreCase)
+                && !entry.ArchivePath.Contains(needle, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            rows.Add(new AssetRow(
+                BrowserKeys.Mesh(entry),
+                [
+                    $"0x{entry.NameHash:X16}",
+                    Path.GetFileName(entry.ArchivePath),
+                ],
+                entry));
+        }
+
+        rows.Sort((left, right) =>
+        {
+            AssetEntry a = (AssetEntry)left.Tag!;
+            AssetEntry b = (AssetEntry)right.Tag!;
+            int order = a.NameHash.CompareTo(b.NameHash);
+            if (order == 0)
+            {
+                order = string.Compare(
+                    a.ArchivePath, b.ArchivePath, StringComparison.OrdinalIgnoreCase);
+            }
+
+            return order == 0 ? a.Row.BodyOffset.CompareTo(b.Row.BodyOffset) : order;
+        });
+        return rows;
+    }
+
+    private void RenderMeshList(BrowserState state)
+    {
+        _meshSkins.Visible = false;
+        _textureHost.Visible = true;
+        _textureToolbar.Visible = false;
+        IReadOnlyList<AssetRow> rows = BuildMeshRows(state);
+        string? keep = state.Mesh is null ? null : BrowserKeys.Mesh(state.Mesh);
+        _textureList.SetRows(rows, keep);
+        bool keepFound = keep is not null
+            && _textureList.SelectedRow?.Key.Equals(keep, StringComparison.Ordinal) == true;
+        if (!keepFound)
+        {
+            _textureList.SelectedIndex = rows.Count > 0 ? 0 : -1;
+            if (rows.Count > 0)
+            {
+                OnMeshSelected();
+            }
+        }
+
+        _textureList.TopIndex = state.ListIndex;
+        _textureList.EnsureVisible(_textureList.SelectedIndex);
+        _resultsCount.Text = $"{rows.Count:N0}";
+        _resultsBody.Text =
+            $"{ScopeName(state.ArchivePath)} · {rows.Count:N0} meshes · hash order";
+        if (rows.Count == 0)
+        {
+            _meshInspector.ShowEmpty();
+        }
+        else if (keepFound)
+        {
+            _ = RenderMeshInspectorAsync(state);
+        }
+    }
+
+    private void OnMeshSelected()
+    {
+        if (_navigation is null
+            || _navigation.State.View != BrowserView.Meshes
+            || _textureList.SelectedRow?.Tag is not AssetEntry entry
+            || entry.ClassHash != AssetClass.Mesh)
+        {
+            return;
+        }
+
+        _navigation.SelectMesh(ToMesh(entry), _textureList.TopIndex);
+        _ = RenderMeshInspectorAsync(_navigation.State);
+        UpdateStatus();
+    }
+
+    private async Task RenderMeshInspectorAsync(BrowserState state)
+    {
+        if (state.Mesh is not { } occurrence)
+        {
+            _meshInspector.ShowEmpty();
+            return;
+        }
+
+        AssetEntry? entry = FindMeshEntry(occurrence);
+        if (entry is null)
+        {
+            _meshInspector.ShowMessage(
+                $"Mesh 0x{occurrence.Hash:X16} was not found.", true);
+            return;
+        }
+
+        string key = BrowserKeys.Mesh(entry);
+        if (_meshInspector.MeshKey == key)
+        {
+            _meshInspector.SetCamera(
+                state.MeshCamera ?? new MeshCamera(0.65f, 0.35f, 1f, PointF.Empty));
+            _meshInspector.SetWireframe(state.MeshWireframe);
+            UpdateMeshUsedBy();
+            return;
+        }
+
+        _meshCancel?.Cancel();
+        CancellationTokenSource cancel = new();
+        _meshCancel = cancel;
+        _meshInspector.SetLoading(entry);
+        _meshInspector.SetUsedByPending();
+        _ = EnsureSkinLinksAsync();
+        try
+        {
+            MeshGeometry geometry = await Task.Run(() =>
+            {
+                using FileStream stream = new(
+                    entry.BodyArchivePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                MeshData data = MeshDecoder.Read(stream, entry.BodyArchivePath, entry.Row);
+                return data.Streams.Count == 0
+                    ? new MeshGeometry([], [], Vector3.Zero, Vector3.Zero)
+                    : data.ToGeometry();
+            }, cancel.Token);
+            if (IsDisposed || cancel != _meshCancel
+                || _navigation?.State.View != BrowserView.Meshes
+                || _navigation.State.Mesh is not { } current
+                || current.Hash != occurrence.Hash
+                || !current.ArchivePath.Equals(
+                    occurrence.ArchivePath, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            BrowserState now = _navigation.State;
+            _meshInspector.SetMesh(entry, geometry, now.MeshCamera, now.MeshWireframe);
+            UpdateMeshUsedBy();
+            _status.Text =
+                $"{Path.GetFileName(entry.ArchivePath)} · " +
+                $"{geometry.Positions.Length:N0} verts · " +
+                $"{geometry.Indices.Length / 3:N0} tris";
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex) when (ex is InvalidDataException or IOException
+            or UnauthorizedAccessException)
+        {
+            if (!IsDisposed && cancel == _meshCancel)
+            {
+                _meshInspector.ShowMessage(ex.Message, true);
+            }
+        }
+    }
+
+    private async Task OpenMeshSkinsAsync()
+    {
+        if (_navigation?.State is not { View: BrowserView.Meshes, Mesh: { } mesh })
+        {
+            return;
+        }
+
+        _navigation.SetMeshView(_meshInspector.Camera, _meshInspector.IsWireframe);
+        await EnsureSkinLinksAsync();
+        if (IsDisposed
+            || _navigation?.State is not { View: BrowserView.Meshes, Mesh: { } current }
+            || current.Hash != mesh.Hash
+            || !current.ArchivePath.Equals(mesh.ArchivePath, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        IReadOnlyList<SkinLinkEntry> uses = _skinLinks is null
+            ? Array.Empty<SkinLinkEntry>()
+            : _skinLinks.ByMesh.GetValueOrDefault(mesh.Hash) ?? Array.Empty<SkinLinkEntry>();
+        _meshSkins.SetRows(uses);
+        _meshSkinsOpen = true;
+        RenderState();
+    }
+
+    private void CloseMeshSkins()
+    {
+        _meshSkinsOpen = false;
+        RenderState();
+    }
+
+    private void OpenSkin(SkinLinkEntry row)
+    {
+        if (_navigation?.State.Mesh is not { } mesh)
+        {
+            return;
+        }
+
+        int part = 0;
+        for (int index = 0; index < row.Links.MeshLinks.Count; index++)
+        {
+            if (row.Links.MeshLinks[index] == mesh.Hash)
+            {
+                part = index;
+                break;
+            }
+        }
+
+        _meshSkinsOpen = false;
+        _navigation.OpenSkin(ToSkin(row.Row), part);
+        RenderState();
+    }
+
+    private async Task RenderSkinAsync(BrowserState state)
+    {
+        if (state.Skin is not { } occurrence)
+        {
+            _skinView.Reset();
+            _skinView.SetNote("Select a skin.");
+            return;
+        }
+
+        AssetEntry? entry = FindSkinEntry(occurrence);
+        if (entry is null)
+        {
+            _skinView.Reset();
+            _skinView.SetNote($"Skin 0x{occurrence.Hash:X16} was not found.");
+            return;
+        }
+
+        string key = BrowserKeys.Skin(entry);
+        _skinView.SetActionsVisible(openMesh: false, pose: false);
+        if (_skinLoadedKey == key)
+        {
+            _skinView.SelectPart(state.SkinPart);
+            _status.Text =
+                $"{Path.GetFileName(entry.ArchivePath)} · Skin 0x{entry.NameHash:X16}";
+            return;
+        }
+
+        _skinCancel?.Cancel();
+        CancellationTokenSource cancel = new();
+        _skinCancel = cancel;
+        _skinLoadedKey = null;
+        _skinView.Reset();
+        _skinView.SetSkin($"Skin_Z 0x{entry.NameHash:X16}", "Loading...", [], 0);
+        try
+        {
+            (SkinData Skin, SkinBinding? Binding, string? BindingError, SkinPartRow[] Parts) result =
+                await Task.Run(() =>
+                {
+                    Dictionary<ulong, int?> counts = new();
+                    int? Verts(ulong mesh)
+                    {
+                        if (counts.TryGetValue(mesh, out int? known))
+                        {
+                            return known;
+                        }
+
+                        int? count = null;
+                        if (_meshRows.TryGetValue(mesh, out AssetEntry? row))
+                        {
+                            try
+                            {
+                                using FileStream stream = new(
+                                    row.BodyArchivePath,
+                                    FileMode.Open,
+                                    FileAccess.Read,
+                                    FileShare.ReadWrite);
+                                MeshData data = MeshDecoder.Read(
+                                    stream, row.BodyArchivePath, row.Row);
+                                count = data.Streams.Count > 0
+                                    ? data.Streams[0].VertexCount
+                                    : 0;
+                            }
+                            catch (InvalidDataException)
+                            {
+                                count = null;
+                            }
+                        }
+
+                        counts[mesh] = count;
+                        return count;
+                    }
+
+                    using FileStream stream = new(
+                        entry.BodyArchivePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                    SkinData skin = SkinDecoder.Read(
+                        stream, entry.BodyArchivePath, entry.Row, Verts);
+                    SkinBinding? binding = null;
+                    string? bindingError = null;
+                    try
+                    {
+                        binding = SkinBinding.Read(
+                            stream, entry.BodyArchivePath, entry.Row);
+                    }
+                    catch (InvalidDataException ex)
+                    {
+                        bindingError = ex.Message;
+                    }
+
+                    SkinPartRow[] parts = skin.Parts
+                        .Select(part => new SkinPartRow(
+                            part.Index,
+                            part.MeshHash,
+                            part.VertexCount,
+                            part.Stride,
+                            part.PacketCount,
+                            part.PacketsParsed,
+                            part.MaterialHash))
+                        .ToArray();
+                    return (skin, binding, bindingError, parts);
+                }, cancel.Token);
+            if (IsDisposed || cancel != _skinCancel
+                || _navigation?.State.View != BrowserView.Skin
+                || _navigation.State.Skin is not { } current
+                || current.Hash != occurrence.Hash
+                || !current.ArchivePath.Equals(
+                    occurrence.ArchivePath, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            int part = state.SkinPart;
+            if (state.Mesh is { } sourceMesh
+                && (part < 0 || part >= result.Parts.Length
+                    || result.Parts[part].MeshHash != sourceMesh.Hash))
+            {
+                for (int index = 0; index < result.Parts.Length; index++)
+                {
+                    if (result.Parts[index].MeshHash == sourceMesh.Hash)
+                    {
+                        part = index;
+                        break;
+                    }
+                }
+            }
+
+            ulong root = result.Binding?.SkeletonRoot ?? 0;
+            string rootText = SkinSkeletonText.Text(result.Binding, result.BindingError);
+            _skinLoadedKey = key;
+            _skinView.SetSkin(
+                $"Skin_Z 0x{entry.NameHash:X16}",
+                $"v{result.Skin.Head.Version} · {result.Skin.MeshLinks.Length:N0} meshes · " +
+                $"{result.Skin.Parts.Length:N0} parts · {result.Skin.Bones.Length:N0} bones · " +
+                $"{rootText} · {Path.GetFileName(entry.ArchivePath)}",
+                result.Parts,
+                root);
+            _skinView.SelectPart(part);
+            if (part != state.SkinPart)
+            {
+                _navigation?.SetSkinPart(part);
+            }
+
+            _skinView.SetNote(SourcePartNote(state, result.Parts, result.BindingError, root));
+            _status.Text =
+                $"{Path.GetFileName(entry.ArchivePath)} · {result.Skin.Parts.Length:N0} parts · " +
+                $"{rootText}";
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex) when (ex is InvalidDataException or IOException
+            or UnauthorizedAccessException)
+        {
+            if (!IsDisposed && cancel == _skinCancel)
+            {
+                _skinView.SetSkin(
+                    $"Skin_Z 0x{entry.NameHash:X16}",
+                    ex.Message,
+                    [],
+                    0);
+                _skinView.SetNote(ex.Message);
+            }
+        }
+    }
+
+    private string SourcePartNote(
+        BrowserState state,
+        IReadOnlyList<SkinPartRow> parts,
+        string? bindingError,
+        ulong root)
+    {
+        if (state.Mesh is { } mesh)
+        {
+            for (int index = 0; index < parts.Count; index++)
+            {
+                if (parts[index].MeshHash == mesh.Hash)
+                {
+                    return $"Part {index} is mesh 0x{mesh.Hash:X16}, the mesh that opened this skin.";
+                }
+            }
+        }
+
+        if (bindingError is not null)
+        {
+            return "The skin binding block could not be read.";
+        }
+
+        return root == 0
+            ? "No explicit skeleton binding."
+            : "Select a part, then Open Skeleton.";
+    }
+
+    private async Task OpenSkeletonAsync(ulong root)
+    {
+        if (_navigation?.State.View != BrowserView.Skin
+            || _navigation.State.Skin is null)
+        {
+            return;
+        }
+
+        _navigation.SetSkinPart(_skinView.SelectedPart);
+        await EnsureSkeletonCatalogAsync();
+        if (IsDisposed
+            || _navigation?.State.View != BrowserView.Skin
+            || _navigation.State.Skin is null)
+        {
+            return;
+        }
+
+        if (_skeletonCatalog is null)
+        {
+            _skinView.SetNote("The skeleton catalog could not be read.");
+            _status.Text = "skeleton catalog unavailable";
+            return;
+        }
+
+        SkeletonEntry? entry = _skeletonCatalog.Entries
+            .FirstOrDefault(item => item.NameHash == root);
+        if (entry is null)
+        {
+            string missing = SkinSkeletonText.Missing(root);
+            _skinView.SetNote(missing);
+            _status.Text = missing;
+            return;
+        }
+
+        _navigation.OpenSkeleton(new SkeletonOccurrence(
+            entry.NameHash, entry.ArchivePath, entry.Offset));
+        RenderState();
+    }
+
+    private async Task RenderSkeletonAsync(BrowserState state)
+    {
+        if (state.Skeleton is not { } occurrence)
+        {
+            _skeletonView.SetMessage("Skeleton", "Select a skeleton.");
+            return;
+        }
+
+        if (_skeletonCatalog is null)
+        {
+            _skeletonView.SetMessage("Skeleton", "Skeleton catalog unavailable.");
+            return;
+        }
+
+        SkeletonEntry? entry = _skeletonCatalog.Entries.FirstOrDefault(
+            item => item.NameHash == occurrence.Hash && item.Offset == occurrence.Offset);
+        if (entry is null)
+        {
+            _skeletonView.SetMessage(
+                "Skeleton not found",
+                $"0x{occurrence.Hash:X16} is not in the catalog.");
+            return;
+        }
+
+        string key = $"{entry.ArchivePath}|{entry.Offset}|{entry.NameHash:X16}";
+        if (_skeletonLoadedKey == key)
+        {
+            _status.Text =
+                $"{Path.GetFileName(entry.ArchivePath)} · {entry.NameHash:X16} skeleton";
+            return;
+        }
+
+        _skeletonDecodeCancel?.Cancel();
+        CancellationTokenSource cancel = new();
+        _skeletonDecodeCancel = cancel;
+        _skeletonLoadedKey = null;
+        _skeletonView.SetMessage($"Skel_Z 0x{entry.NameHash:X16}", "Loading...");
+        try
+        {
+            SkeletonData data = await Task.Run(() =>
+            {
+                using FileStream stream = new(
+                    entry.ArchivePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                return SkeletonDecoder.Read(stream, entry.ArchivePath, entry.Hit);
+            }, cancel.Token);
+            if (IsDisposed || cancel != _skeletonDecodeCancel
+                || _navigation?.State.View != BrowserView.Skeleton
+                || _navigation.State.Skeleton is not { } current
+                || current.Hash != occurrence.Hash
+                || current.Offset != occurrence.Offset)
+            {
+                return;
+            }
+
+            _skeletonLoadedKey = key;
+            _skeletonView.SetSkeleton(
+                $"Skel_Z 0x{entry.NameHash:X16}",
+                $"{Path.GetFileName(entry.ArchivePath)} · offset {entry.Offset:N0} · " +
+                $"v{data.Head.Version} · {data.Bones.Count:N0} bones",
+                data);
+            _status.Text =
+                $"{Path.GetFileName(entry.ArchivePath)} · {data.Bones.Count:N0} bones";
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex) when (ex is InvalidDataException or IOException
+            or UnauthorizedAccessException)
+        {
+            if (!IsDisposed && cancel == _skeletonDecodeCancel)
+            {
+                _skeletonView.SetMessage(
+                    $"Skel_Z 0x{entry.NameHash:X16}", "Could not read this skeleton.");
+                _status.Text = ex.Message;
+            }
+        }
+    }
+
+    private async Task EnsureSkinLinksAsync()
+    {
+        if (_skinLinks is not null)
+        {
+            return;
+        }
+
+        _skinLinksTask ??= LoadSkinLinksAsync();
+        await _skinLinksTask;
+    }
+
+    private async Task LoadSkinLinksAsync()
+    {
+        if (_profile is null)
+        {
+            return;
+        }
+
+        _skinLinksCancel?.Cancel();
+        CancellationTokenSource cancel = new();
+        _skinLinksCancel = cancel;
+        _status.Text = "Indexing skins...";
+        try
+        {
+            Progress<CatalogProgress> progress = new(value =>
+            {
+                if (!IsDisposed && cancel == _skinLinksCancel)
+                {
+                    _status.Text =
+                        $"Indexing skins {value.Index:N0}/{value.Total:N0}";
+                }
+            });
+            SkinLinkIndex index = await Task.Run(
+                () => SkinLinkIndex.Load(_assets, progress, cancel.Token),
+                cancel.Token);
+            if (IsDisposed || cancel != _skinLinksCancel)
+            {
+                return;
+            }
+
+            _skinLinks = index;
+            _status.Text =
+                $"{index.Entries.Count:N0} skins · {index.ByMesh.Count:N0} meshes";
+            UpdateMeshUsedBy();
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex) when (ex is InvalidDataException or IOException
+            or UnauthorizedAccessException)
+        {
+            if (!IsDisposed && cancel == _skinLinksCancel)
+            {
+                _status.Text = ex.Message;
+            }
+        }
+        finally
+        {
+            if (cancel == _skinLinksCancel)
+            {
+                _skinLinksTask = null;
+            }
+        }
+    }
+
+    private async Task EnsureSkeletonCatalogAsync()
+    {
+        if (_skeletonCatalog is not null)
+        {
+            return;
+        }
+
+        _skeletonTask ??= LoadSkeletonCatalogAsync();
+        await _skeletonTask;
+    }
+
+    private async Task LoadSkeletonCatalogAsync()
+    {
+        if (_profile is null)
+        {
+            return;
+        }
+
+        _skeletonCancel?.Cancel();
+        CancellationTokenSource cancel = new();
+        _skeletonCancel = cancel;
+        _status.Text = "Indexing skeletons...";
+        try
+        {
+            Progress<CatalogProgress> progress = new(value =>
+            {
+                if (!IsDisposed && cancel == _skeletonCancel)
+                {
+                    _status.Text =
+                        $"Indexing skeletons {value.Index:N0}/{value.Total:N0}";
+                }
+            });
+            SkeletonCatalog catalog = await Task.Run(
+                () => SkeletonCatalog.Load(_profile, false, progress, cancel.Token),
+                cancel.Token);
+            if (IsDisposed || cancel != _skeletonCancel)
+            {
+                return;
+            }
+
+            _skeletonCatalog = catalog;
+            _status.Text =
+                $"{catalog.Entries.Count:N0} skeletons · {catalog.UniqueNameCount:N0} names";
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex) when (ex is InvalidDataException or IOException
+            or UnauthorizedAccessException)
+        {
+            if (!IsDisposed && cancel == _skeletonCancel)
+            {
+                _status.Text = ex.Message;
+            }
+        }
+        finally
+        {
+            if (cancel == _skeletonCancel)
+            {
+                _skeletonTask = null;
+            }
+        }
+    }
+
+    private void UpdateMeshUsedBy()
+    {
+        if (_navigation?.State.Mesh is not { } mesh)
+        {
+            _meshInspector.SetUsedBy(0);
+            return;
+        }
+
+        if (_skinLinks is null)
+        {
+            _meshInspector.SetUsedByPending();
+            return;
+        }
+
+        int count = _skinLinks.ByMesh.TryGetValue(
+            mesh.Hash, out IReadOnlyList<SkinLinkEntry>? uses)
+            ? uses.Count
+            : 0;
+        _meshInspector.SetUsedBy(count);
+    }
+
+    private AssetEntry? FindMeshEntry(MeshOccurrence occurrence) =>
+        _assets.FirstOrDefault(entry =>
+            entry.ClassHash == AssetClass.Mesh
+            && entry.NameHash == occurrence.Hash
+            && entry.ArchivePath.Equals(occurrence.ArchivePath, StringComparison.OrdinalIgnoreCase)
+            && entry.BodyArchivePath.Equals(
+                occurrence.BodyArchivePath, StringComparison.OrdinalIgnoreCase)
+            && entry.Row.BodyOffset == occurrence.BodyOffset);
+
+    private AssetEntry? FindSkinEntry(SkinOccurrence occurrence) =>
+        _assets.FirstOrDefault(entry =>
+            entry.ClassHash == SkinHead.SkinClass
+            && entry.NameHash == occurrence.Hash
+            && entry.ArchivePath.Equals(occurrence.ArchivePath, StringComparison.OrdinalIgnoreCase)
+            && entry.BodyArchivePath.Equals(
+                occurrence.BodyArchivePath, StringComparison.OrdinalIgnoreCase)
+            && entry.Row.BodyOffset == occurrence.BodyOffset);
+
+    private static MeshOccurrence ToMesh(AssetEntry entry) => new(
+        entry.NameHash,
+        entry.ArchivePath,
+        entry.BodyArchivePath,
+        entry.Row.BodyOffset);
+
+    private static SkinOccurrence ToSkin(AssetEntry entry) => new(
+        entry.NameHash,
+        entry.ArchivePath,
+        entry.BodyArchivePath,
+        entry.Row.BodyOffset);
 
     private void RenderInspector()
     {
@@ -2188,6 +3094,19 @@ internal sealed class BrowserForm : Form
             return;
         }
 
+        if (state.View == BrowserView.Meshes)
+        {
+            _status.Text =
+                $"{ScopeName(state.ArchivePath)} · {_textureList.Rows.Count:N0} meshes · " +
+                $"{archiveCount:N0} archives";
+            return;
+        }
+
+        if (state.View is BrowserView.Skin or BrowserView.Skeleton)
+        {
+            return;
+        }
+
         if (state.View == BrowserView.Material && state.Material is { } material)
         {
             _status.Text =
@@ -2221,6 +3140,7 @@ internal sealed class BrowserForm : Form
     {
         BrowserView.Textures => "Textures",
         BrowserView.Animations => "Animations",
+        BrowserView.Meshes or BrowserView.Skin or BrowserView.Skeleton => "Meshes",
         BrowserView.Placeholder => state.PlaceholderName,
         _ => "Textures",
     };
@@ -2250,6 +3170,13 @@ internal sealed class BrowserForm : Form
         {
             BrowserView.Textures => $"{archive} / Textures",
             BrowserView.Animations => $"{archive} / Animations",
+            BrowserView.Meshes => $"{archive} / Meshes",
+            BrowserView.Skin => state.Skin is { } skin
+                ? $"{archive} / Meshes / Skin 0x{skin.Hash:X16}"
+                : $"{archive} / Meshes / Skin",
+            BrowserView.Skeleton => state.Skeleton is { } skeleton
+                ? $"{archive} / Meshes / Skeleton 0x{skeleton.Hash:X16}"
+                : $"{archive} / Meshes / Skeleton",
             BrowserView.Material => state.Material is { } material
                 ? compact
                     ? $"{archive} / 0x{material.Hash:X16}"

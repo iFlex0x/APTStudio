@@ -5,6 +5,8 @@ using AptStudio.Core.Meshes;
 
 namespace AptStudio.Desktop;
 
+internal readonly record struct MeshCamera(float Yaw, float Pitch, float Zoom, PointF Pan);
+
 internal sealed class MeshView : Control
 {
     private static readonly Vector3 LightDirection = Vector3.Normalize(new Vector3(0.35f, 0.8f, 0.5f));
@@ -40,6 +42,25 @@ internal sealed class MeshView : Control
             true);
         BackColor = Theme.Background;
         TabStop = true;
+    }
+
+    public event EventHandler? CameraChanged;
+
+    public event EventHandler? WireframeChanged;
+
+    public MeshCamera Camera => new(_yaw, _pitch, _zoom, _pan);
+
+    public bool Wireframe => _wireframe;
+
+    public void SetCamera(MeshCamera camera)
+    {
+        _yaw = camera.Yaw;
+        _pitch = camera.Pitch;
+        _zoom = camera.Zoom;
+        _pan = camera.Pan;
+        _dirty = true;
+        Invalidate();
+        CameraChanged?.Invoke(this, EventArgs.Empty);
     }
 
     public void SetMesh(MeshGeometry mesh)
@@ -94,6 +115,7 @@ internal sealed class MeshView : Control
         _pan = PointF.Empty;
         _dirty = true;
         Invalidate();
+        CameraChanged?.Invoke(this, EventArgs.Empty);
     }
 
     public void SetWireframe(bool wireframe)
@@ -106,6 +128,7 @@ internal sealed class MeshView : Control
         _wireframe = wireframe;
         _dirty = true;
         Invalidate();
+        WireframeChanged?.Invoke(this, EventArgs.Empty);
     }
 
     protected override void OnResize(EventArgs e)
@@ -156,6 +179,7 @@ internal sealed class MeshView : Control
 
         _dirty = true;
         Invalidate();
+        CameraChanged?.Invoke(this, EventArgs.Empty);
     }
 
     protected override void OnMouseUp(MouseEventArgs e)
@@ -178,6 +202,7 @@ internal sealed class MeshView : Control
         _zoom = Math.Clamp(_zoom * MathF.Pow(1.15f, e.Delta / 120f), 0.15f, 12f);
         _dirty = true;
         Invalidate();
+        CameraChanged?.Invoke(this, EventArgs.Empty);
     }
 
     protected override void OnDoubleClick(EventArgs e)

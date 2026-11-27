@@ -43,6 +43,26 @@ public sealed class SkinViewTests
     }
 
     [Fact]
+    public void PartChangedReportsTheSelectedPart()
+    {
+        using SkinView view = new();
+        view.SetSkin(
+            "Skin_Z 0x1",
+            "v11 | 2 meshes | 2 parts | 6 bones",
+            [
+                new SkinPartRow(0, 0x11, 64, 16, 1, true, 0xAA),
+                new SkinPartRow(1, 0x22, 32, 16, 1, true, 0xBB),
+            ],
+            0);
+        List<int> changed = new();
+        view.PartChanged += part => changed.Add(part);
+
+        view.SelectPart(1);
+
+        Assert.Equal([1], changed);
+    }
+
+    [Fact]
     public void SkeletonButtonFollowsBinding()
     {
         using SkinView view = new();
