@@ -30,7 +30,7 @@ internal sealed class BrowserForm : Form
     private readonly AnimationInspector _animationInspector = new();
     private readonly MeshInspector _meshInspector = new();
     private readonly MeshSkinChooserView _meshSkins = new();
-    private readonly SkinView _skinView = new();
+    private readonly SkinPartView _skinView = new();
     private readonly SkeletonView _skeletonView = new();
     private readonly AudioView _audioView = new();
     private ThumbnailCache _thumbnailCache = null!;
@@ -798,7 +798,6 @@ internal sealed class BrowserForm : Form
                 _navigation.SetSkinPart(part);
             }
         };
-        _skinView.SetActionsVisible(openMesh: false, pose: false);
     }
 
     private void WireAudio()
@@ -2202,7 +2201,6 @@ internal sealed class BrowserForm : Form
         }
 
         string key = BrowserKeys.Skin(entry);
-        _skinView.SetActionsVisible(openMesh: false, pose: false);
         if (_skinLoadedKey == key)
         {
             _skinView.SelectPart(state.SkinPart);
@@ -2216,21 +2214,29 @@ internal sealed class BrowserForm : Form
         _skinCancel = cancel;
         _skinLoadedKey = null;
         _skinView.Reset();
-        _skinView.SetSkin($"Skin_Z 0x{entry.NameHash:X16}", "Loading...", [], 0);
+        _skinView.SetSkin(
+            $"Skin_Z 0x{entry.NameHash:X16}",
+            "Loading...",
+            "Loading...",
+            0,
+            Array.Empty<SkinPartDisplay>(),
+            -1,
+            "");
         try
         {
-            (SkinData Skin, SkinBinding? Binding, string? BindingError, SkinPartRow[] Parts) result =
+            (SkinData Skin, SkinBinding? Binding, string? BindingError,
+                SkinPartRow[] Parts, MeshGeometry?[] Geometries) result =
                 await Task.Run(() =>
                 {
-                    Dictionary<ulong, int?> counts = new();
-                    int? Verts(ulong mesh)
+                    Dictionary<ulong, MeshGeometry?> geometries = new();
+                    MeshGeometry? Geometry(ulong mesh)
                     {
-                        if (counts.TryGetValue(mesh, out int? known))
+                        if (geometries.TryGetValue(mesh, out MeshGeometry? known))
                         {
                             return known;
                         }
 
-                        int? count = null;
+                        MeshGeometry? geometry = null;
                         if (_meshRows.TryGetValue(mesh, out AssetEntry? row))
                         {
                             try
@@ -2242,19 +2248,21 @@ internal sealed class BrowserForm : Form
                                     FileShare.ReadWrite);
                                 MeshData data = MeshDecoder.Read(
                                     stream, row.BodyArchivePath, row.Row);
-                                count = data.Streams.Count > 0
-                                    ? data.Streams[0].VertexCount
-                                    : 0;
+                                geometry = data.Streams.Count == 0
+                                    ? new MeshGeometry([], [], Vector3.Zero, Vector3.Zero)
+                                    : data.ToGeometry();
                             }
                             catch (InvalidDataException)
                             {
-                                count = null;
+                                geometry = null;
                             }
                         }
 
-                        counts[mesh] = count;
-                        return count;
+                        geometries[mesh] = geometry;
+                        return geometry;
                     }
+
+                    int? Verts(ulong mesh) => Geometry(mesh)?.Positions.Length;
 
                     using FileStream stream = new(
                         entry.BodyArchivePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
@@ -2282,7 +2290,10 @@ internal sealed class BrowserForm : Form
                             part.PacketsParsed,
                             part.MaterialHash))
                         .ToArray();
-                    return (skin, binding, bindingError, parts);
+                    MeshGeometry?[] partGeometries = skin.Parts
+                        .Select(part => Geometry(part.MeshHash))
+                        .ToArray();
+                    return (skin, binding, bindingError, parts, partGeometries);
                 }, cancel.Token);
             if (IsDisposed || cancel != _skinCancel
                 || _navigation?.State.View != BrowserView.Skin
@@ -2309,26 +2320,35 @@ internal sealed class BrowserForm : Form
                 }
             }
 
+            SkinPartDisplay[] displays = new SkinPartDisplay[result.Parts.Length];
+            for (int index = 0; index < displays.Length; index++)
+            {
+                displays[index] = new SkinPartDisplay(
+                    result.Parts[index], result.Geometries[index]);
+            }
+
             ulong root = result.Binding?.SkeletonRoot ?? 0;
             string rootText = SkinSkeletonText.Text(result.Binding, result.BindingError);
+            string skinBones = $"{result.Skin.Bones.Length:N0} skin bones";
             _skinLoadedKey = key;
             _skinView.SetSkin(
                 $"Skin_Z 0x{entry.NameHash:X16}",
                 $"v{result.Skin.Head.Version} · {result.Skin.MeshLinks.Length:N0} meshes · " +
-                $"{result.Skin.Parts.Length:N0} parts · {result.Skin.Bones.Length:N0} bones · " +
-                $"{rootText} · {Path.GetFileName(entry.ArchivePath)}",
-                result.Parts,
-                root);
-            _skinView.SelectPart(part);
+                $"{result.Skin.Parts.Length:N0} parts · {skinBones} · " +
+                $"{Path.GetFileName(entry.ArchivePath)}",
+                rootText,
+                root,
+                displays,
+                part,
+                SourcePartNote(state, result.Parts, result.BindingError, root));
             if (part != state.SkinPart)
             {
                 _navigation?.SetSkinPart(part);
             }
 
-            _skinView.SetNote(SourcePartNote(state, result.Parts, result.BindingError, root));
             _status.Text =
                 $"{Path.GetFileName(entry.ArchivePath)} · {result.Skin.Parts.Length:N0} parts · " +
-                $"{rootText}";
+                skinBones;
         }
         catch (OperationCanceledException)
         {
@@ -2341,9 +2361,11 @@ internal sealed class BrowserForm : Form
                 _skinView.SetSkin(
                     $"Skin_Z 0x{entry.NameHash:X16}",
                     ex.Message,
-                    [],
-                    0);
-                _skinView.SetNote(ex.Message);
+                    "",
+                    0,
+                    Array.Empty<SkinPartDisplay>(),
+                    -1,
+                    ex.Message);
             }
         }
     }
