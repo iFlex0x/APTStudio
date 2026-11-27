@@ -338,6 +338,56 @@ public sealed class BrowserNavigationTests
     }
 
     [Fact]
+    public void DirectSkeletonSelectionAndOpenBackRestoreTheSecondRow()
+    {
+        SkeletonOccurrence first = new(
+            0xC81A1F5B0C7D7DBB,
+            @"C:\game\DATAS\LEVELS\HUG.DPC",
+            712345);
+        SkeletonOccurrence second = new(
+            0xC81A1F5B0C7D7DBB,
+            @"C:\game\DATAS\LEVELS\HUG.DPC",
+            712410);
+        BrowserNavigation navigation = new(new BrowserState(
+            BrowserView.Skeletons,
+            @"C:\game\DATAS\LEVELS\HUG.DPC",
+            "",
+            TextureFilter.All,
+            null,
+            12,
+            0,
+            ChannelView.Rgb,
+            true,
+            1f,
+            PointF.Empty,
+            null,
+            0,
+            null,
+            null));
+
+        navigation.SetSkeletonListSelection(first, 11);
+        navigation.SetSkeletonListSelection(second, 12);
+
+        Assert.Equal(BrowserView.Skeletons, navigation.State.View);
+        Assert.Equal(second, navigation.State.Skeleton);
+        Assert.Null(navigation.State.Skin);
+        Assert.False(navigation.CanBack);
+
+        navigation.OpenSkeleton(second);
+        Assert.Equal(BrowserView.Skeleton, navigation.State.View);
+        Assert.Null(navigation.State.Skin);
+        Assert.Null(navigation.State.Mesh);
+        Assert.True(navigation.CanBack);
+
+        navigation.Back();
+
+        Assert.Equal(BrowserView.Skeletons, navigation.State.View);
+        Assert.Equal(second, navigation.State.Skeleton);
+        Assert.Equal(12, navigation.State.ListIndex);
+        Assert.False(navigation.CanBack);
+    }
+
+    [Fact]
     public void SwitchScopeClearsHistory()
     {
         BrowserNavigation navigation = new(TextureState());

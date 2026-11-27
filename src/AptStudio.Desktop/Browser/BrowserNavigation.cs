@@ -121,6 +121,18 @@ internal sealed class BrowserNavigation
         };
     }
 
+    public void SetSkeletonListSelection(SkeletonOccurrence skeleton, int listIndex)
+    {
+        ArgumentNullException.ThrowIfNull(skeleton);
+        State = State with
+        {
+            View = BrowserView.Skeletons,
+            Skin = null,
+            Skeleton = skeleton,
+            ListIndex = listIndex,
+        };
+    }
+
     public void OpenSkeleton(SkeletonOccurrence skeleton)
     {
         ArgumentNullException.ThrowIfNull(skeleton);

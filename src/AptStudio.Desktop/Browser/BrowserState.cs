@@ -13,6 +13,7 @@ internal enum BrowserView
     Meshes,
     Skins,
     Skin,
+    Skeletons,
     Skeleton,
     Audio,
     Placeholder,

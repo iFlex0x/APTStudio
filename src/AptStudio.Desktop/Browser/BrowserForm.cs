@@ -51,6 +51,7 @@ internal sealed class BrowserForm : Form
     private readonly Button _sortDirection = new();
     private readonly Button _exportSelected = new();
     private readonly Button _openSkin = new();
+    private readonly Button _openSkeleton = new();
     private readonly Label _selectionCount = new();
     private Control _titleLine = new();
     private bool _suppressSort;
@@ -114,6 +115,11 @@ internal sealed class BrowserForm : Form
         new("Archive", 0, Flexible: true, Muted: true, MiddleEllipsis: true),
     ];
     private static readonly AssetColumn[] SkinColumns =
+    [
+        new("Hash", 160, Mono: true),
+        new("Archive", 0, Flexible: true, Muted: true, MiddleEllipsis: true),
+    ];
+    private static readonly AssetColumn[] SkeletonColumns =
     [
         new("Hash", 160, Mono: true),
         new("Archive", 0, Flexible: true, Muted: true, MiddleEllipsis: true),
@@ -484,6 +490,16 @@ internal sealed class BrowserForm : Form
         _openSkin.Click += (_, _) => OpenSkinFromList();
         titleLine.Controls.Add(_openSkin);
 
+        StyleButton(_openSkeleton, "Open skeleton");
+        _openSkeleton.AutoSize = true;
+        _openSkeleton.MinimumSize = new Size(0, 24);
+        _openSkeleton.Font = BrowserVisual.RowSmall;
+        _openSkeleton.Margin = new Padding(8, 0, 0, 0);
+        _openSkeleton.Visible = false;
+        _openSkeleton.Enabled = false;
+        _openSkeleton.Click += (_, _) => OpenSkeletonFromList();
+        titleLine.Controls.Add(_openSkeleton);
+
         _resultsBody.Dock = DockStyle.Top;
         _resultsBody.Height = 18;
         _resultsBody.Font = BrowserVisual.RowSmall;
@@ -728,6 +744,10 @@ internal sealed class BrowserForm : Form
             {
                 OpenSkinFromList();
             }
+            else if (_navigation?.State.View == BrowserView.Skeletons)
+            {
+                OpenSkeletonFromList();
+            }
         };
         _textureList.SelectionChanged += (_, _) => OnListSelected();
     }
@@ -757,6 +777,17 @@ internal sealed class BrowserForm : Form
             }
 
             UpdateOpenSkinEnabled();
+            return;
+        }
+        else if (_navigation.State.View == BrowserView.Skeletons)
+        {
+            if (_textureList.SelectedRow?.Tag is SkeletonEntry skeleton)
+            {
+                _navigation.SetSkeletonListSelection(
+                    ToSkeleton(skeleton), _textureList.TopIndex);
+            }
+
+            UpdateOpenSkeletonEnabled();
             return;
         }
         else if (_navigation.State.View == BrowserView.Audio)
@@ -1151,6 +1182,7 @@ internal sealed class BrowserForm : Form
         int animations = _animationCounts.GetValueOrDefault(archivePath);
         int meshes = _meshCounts.GetValueOrDefault(archivePath);
         int skins = _skinCounts.GetValueOrDefault(archivePath);
+        int skeletons = SkeletonCount(archivePath);
         int audio = _audioLoaded ? _audio.Count : 0;
         return
         [
@@ -1159,9 +1191,25 @@ internal sealed class BrowserForm : Form
             new TypeChoice("Materials", 0, false),
             new TypeChoice("Meshes", meshes, true),
             new TypeChoice("Skins", skins, skins > 0),
-            new TypeChoice("Skeletons", 0, false),
+            new TypeChoice("Skeletons", skeletons, _skeletonCatalog is null || skeletons > 0),
             new TypeChoice("Audio", audio, true),
         ];
+    }
+
+    private int SkeletonCount(string archivePath)
+    {
+        if (_skeletonCatalog is null)
+        {
+            return 0;
+        }
+
+        if (archivePath.Length == 0)
+        {
+            return _skeletonCatalog.Entries.Count;
+        }
+
+        return _skeletonCatalog.Entries.Count(entry =>
+            entry.ArchivePath.Equals(archivePath, StringComparison.OrdinalIgnoreCase));
     }
 
     private void SwitchArchive(string archivePath)
@@ -1179,10 +1227,16 @@ internal sealed class BrowserForm : Form
             BrowserView.Placeholder => BrowserView.Placeholder,
             BrowserView.Animations => BrowserView.Animations,
             BrowserView.Skins => BrowserView.Skins,
+            BrowserView.Skeletons => BrowserView.Skeletons,
             BrowserView.Meshes => BrowserView.Meshes,
-            BrowserView.Skin or BrowserView.Skeleton => state.Mesh is null
+            BrowserView.Skin => state.Mesh is null
                 ? BrowserView.Skins
                 : BrowserView.Meshes,
+            BrowserView.Skeleton => state.Mesh is not null
+                ? BrowserView.Meshes
+                : state.Skin is not null
+                    ? BrowserView.Skins
+                    : BrowserView.Skeletons,
             _ => BrowserView.Textures,
         };
         if (archivePath.Length == 0)
@@ -1217,6 +1271,7 @@ internal sealed class BrowserForm : Form
             "Animations" => BrowserView.Animations,
             "Meshes" => BrowserView.Meshes,
             "Skins" => BrowserView.Skins,
+            "Skeletons" => BrowserView.Skeletons,
             "Audio" => BrowserView.Audio,
             _ => BrowserView.Placeholder,
         };
@@ -1483,7 +1538,7 @@ internal sealed class BrowserForm : Form
 
         bool textureView = state.View == BrowserView.Textures || state.View == BrowserView.LinkedTexture;
         bool detailView = state.View is BrowserView.Skin or BrowserView.Skeleton;
-        bool fullWidth = detailView || state.View == BrowserView.Skins;
+        bool fullWidth = detailView || state.View is BrowserView.Skins or BrowserView.Skeletons;
         _textureInspector.Visible = textureView;
         _slotInspector.Visible = state.View == BrowserView.Material;
         _animationInspector.Visible = state.View == BrowserView.Animations;
@@ -1497,6 +1552,7 @@ internal sealed class BrowserForm : Form
         _inner.Panel2Collapsed = fullWidth;
         _titleLine.Visible = !detailView;
         _openSkin.Visible = state.View == BrowserView.Skins;
+        _openSkeleton.Visible = state.View == BrowserView.Skeletons;
         if (state.View != BrowserView.Audio && _audioView.Entry is not null)
         {
             _audioView.Reset();
@@ -1535,7 +1591,7 @@ internal sealed class BrowserForm : Form
         _chooser.Visible = false;
         _search.Enabled = state.View is BrowserView.Textures
             or BrowserView.Animations or BrowserView.Meshes or BrowserView.Skins
-            or BrowserView.Audio;
+            or BrowserView.Skeletons or BrowserView.Audio;
         _filterButton.Enabled = state.View == BrowserView.Textures
             || (state.View == BrowserView.Audio && _audioLoaded);
         if (state.View == BrowserView.Audio)
@@ -1549,7 +1605,7 @@ internal sealed class BrowserForm : Form
 
         _textureHost.Visible = state.View is BrowserView.Textures
             or BrowserView.Animations or BrowserView.Meshes or BrowserView.Skins
-            or BrowserView.Audio;
+            or BrowserView.Skeletons or BrowserView.Audio;
         _textureToolbar.Visible = state.View is BrowserView.Textures or BrowserView.Audio;
         _resultsBody.Visible = !detailView;
         _resultsBody.Height = labelView ? 44 : 18;
@@ -1594,6 +1650,11 @@ internal sealed class BrowserForm : Form
                 _resultsTitle.Text = "Skins";
                 SetListMode(BrowserView.Skins);
                 RenderSkinList(state);
+                break;
+            case BrowserView.Skeletons:
+                _resultsTitle.Text = "Skeletons";
+                SetListMode(BrowserView.Skeletons);
+                RenderSkeletonList(state);
                 break;
             case BrowserView.Skin:
                 _textureHost.Visible = false;
@@ -1833,6 +1894,7 @@ internal sealed class BrowserForm : Form
             BrowserView.Animations => AnimationColumns,
             BrowserView.Meshes => MeshColumns,
             BrowserView.Skins => SkinColumns,
+            BrowserView.Skeletons => SkeletonColumns,
             BrowserView.Audio => narrow ? NarrowAudioColumns : AudioColumns,
             _ => narrow ? NarrowTextureColumns : TextureColumns,
         };
@@ -2219,6 +2281,123 @@ internal sealed class BrowserForm : Form
         _navigation.OpenSkin(skin, 0);
         RenderState();
     }
+
+    private IReadOnlyList<AssetRow> BuildSkeletonRows(BrowserState state)
+    {
+        List<AssetRow> rows = new();
+        if (_skeletonCatalog is null)
+        {
+            return rows;
+        }
+
+        bool allArchives = string.IsNullOrEmpty(state.ArchivePath);
+        string query = state.Query.Trim();
+        string needle = query.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
+            ? query[2..]
+            : query;
+        HashSet<string> seen = new(StringComparer.Ordinal);
+        foreach (SkeletonEntry entry in _skeletonCatalog.Entries)
+        {
+            if (!allArchives
+                && !entry.ArchivePath.Equals(state.ArchivePath, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (!seen.Add(BrowserKeys.Skeleton(entry)))
+            {
+                continue;
+            }
+
+            if (needle.Length > 0
+                && !entry.NameHash.ToString("X16", CultureInfo.InvariantCulture)
+                    .Contains(needle, StringComparison.OrdinalIgnoreCase)
+                && !entry.ArchivePath.Contains(needle, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            rows.Add(new AssetRow(
+                BrowserKeys.Skeleton(entry),
+                [
+                    $"0x{entry.NameHash:X16}",
+                    Path.GetFileName(entry.ArchivePath),
+                ],
+                entry));
+        }
+
+        rows.Sort((left, right) =>
+        {
+            SkeletonEntry a = (SkeletonEntry)left.Tag!;
+            SkeletonEntry b = (SkeletonEntry)right.Tag!;
+            int order = a.NameHash.CompareTo(b.NameHash);
+            if (order == 0)
+            {
+                order = string.Compare(
+                    a.ArchivePath, b.ArchivePath, StringComparison.OrdinalIgnoreCase);
+            }
+
+            return order == 0 ? a.Offset.CompareTo(b.Offset) : order;
+        });
+        return rows;
+    }
+
+    private void RenderSkeletonList(BrowserState state)
+    {
+        _skeletonView.Visible = false;
+        _textureHost.Visible = true;
+        _textureToolbar.Visible = false;
+        if (_skeletonCatalog is null)
+        {
+            _textureList.SetRows(Array.Empty<AssetRow>(), null);
+            _resultsCount.Text = "";
+            _resultsBody.Text = "Skel_Z objects · scanning...";
+            _status.Text = "Indexing skeletons...";
+            _ = EnsureSkeletonCatalogAsync();
+            UpdateOpenSkeletonEnabled();
+            return;
+        }
+
+        IReadOnlyList<AssetRow> rows = BuildSkeletonRows(state);
+        string? keep = state.Skeleton is null ? null : BrowserKeys.Skeleton(state.Skeleton);
+        _textureList.SetRows(rows, keep);
+        _textureList.TopIndex = state.ListIndex;
+        if (_textureList.SelectedIndex >= 0)
+        {
+            _textureList.EnsureVisible(_textureList.SelectedIndex);
+        }
+
+        _resultsCount.Text = $"{rows.Count:N0}";
+        _resultsBody.Text =
+            $"{ScopeName(state.ArchivePath)} · {rows.Count:N0} skeletons · hash order";
+        _openSkeleton.Visible = true;
+        UpdateOpenSkeletonEnabled();
+    }
+
+    private void UpdateOpenSkeletonEnabled()
+    {
+        _openSkeleton.Enabled = _navigation?.State.View == BrowserView.Skeletons
+            && _textureList.SelectedRow?.Tag is SkeletonEntry;
+    }
+
+    private void OpenSkeletonFromList()
+    {
+        if (_navigation?.State.View != BrowserView.Skeletons
+            || _textureList.SelectedRow?.Tag is not SkeletonEntry entry)
+        {
+            return;
+        }
+
+        SkeletonOccurrence skeleton = ToSkeleton(entry);
+        _navigation.SetSkeletonListSelection(skeleton, _textureList.TopIndex);
+        _navigation.OpenSkeleton(skeleton);
+        RenderState();
+    }
+
+    private static SkeletonOccurrence ToSkeleton(SkeletonEntry entry) => new(
+        entry.NameHash,
+        entry.ArchivePath,
+        entry.Offset);
 
     private void OnMeshSelected()
     {
@@ -2621,7 +2800,10 @@ internal sealed class BrowserForm : Form
         }
 
         SkeletonEntry? entry = _skeletonCatalog.Entries.FirstOrDefault(
-            item => item.NameHash == occurrence.Hash && item.Offset == occurrence.Offset);
+            item => item.NameHash == occurrence.Hash
+                && item.Offset == occurrence.Offset
+                && item.ArchivePath.Equals(
+                    occurrence.ArchivePath, StringComparison.OrdinalIgnoreCase));
         if (entry is null)
         {
             _skeletonView.SetMessage(
@@ -2792,6 +2974,16 @@ internal sealed class BrowserForm : Form
             _skeletonCatalog = catalog;
             _status.Text =
                 $"{catalog.Entries.Count:N0} skeletons · {catalog.UniqueNameCount:N0} names";
+            if (_navigation is not null)
+            {
+                _scope.SetTypes(
+                    BuildTypes(_navigation.State.ArchivePath),
+                    TypeName(_navigation.State));
+                if (_navigation.State.View == BrowserView.Skeletons)
+                {
+                    RenderState();
+                }
+            }
         }
         catch (OperationCanceledException)
         {
@@ -3956,6 +4148,14 @@ internal sealed class BrowserForm : Form
             return;
         }
 
+        if (state.View == BrowserView.Skeletons)
+        {
+            _status.Text =
+                $"{ScopeName(state.ArchivePath)} · {_textureList.Rows.Count:N0} skeletons · " +
+                $"{archiveCount:N0} archives";
+            return;
+        }
+
         if (state.View == BrowserView.Audio)
         {
             _status.Text =
@@ -4005,11 +4205,19 @@ internal sealed class BrowserForm : Form
         BrowserView.Animations => "Animations",
         BrowserView.Meshes => "Meshes",
         BrowserView.Skins => "Skins",
-        BrowserView.Skin or BrowserView.Skeleton =>
-            state.Mesh is null ? "Skins" : "Meshes",
+        BrowserView.Skeletons => "Skeletons",
+        BrowserView.Skin => state.Mesh is null ? "Skins" : "Meshes",
+        BrowserView.Skeleton => DetailSource(state),
         BrowserView.Audio => "Audio",
         BrowserView.Placeholder => state.PlaceholderName,
         _ => "Textures",
+    };
+
+    private static string DetailSource(BrowserState state) => state switch
+    {
+        { Mesh: not null } => "Meshes",
+        { Skin: not null } => "Skins",
+        _ => "Skeletons",
     };
 
     private static string ScopeName(string archivePath) =>
@@ -4057,12 +4265,13 @@ internal sealed class BrowserForm : Form
             BrowserView.Animations => $"{archive} / Animations",
             BrowserView.Meshes => $"{archive} / Meshes",
             BrowserView.Skins => $"{archive} / Skins",
+            BrowserView.Skeletons => $"{archive} / Skeletons",
             BrowserView.Skin => state.Skin is { } skin
                 ? $"{archive} / {(state.Mesh is null ? "Skins" : "Meshes")} / Skin 0x{skin.Hash:X16}"
                 : $"{archive} / {(state.Mesh is null ? "Skins" : "Meshes")} / Skin",
             BrowserView.Skeleton => state.Skeleton is { } skeleton
-                ? $"{archive} / {(state.Mesh is null ? "Skins" : "Meshes")} / Skeleton 0x{skeleton.Hash:X16}"
-                : $"{archive} / {(state.Mesh is null ? "Skins" : "Meshes")} / Skeleton",
+                ? $"{archive} / {DetailSource(state)} / Skeleton 0x{skeleton.Hash:X16}"
+                : $"{archive} / {DetailSource(state)} / Skeleton",
             BrowserView.Audio => "SOUNDBANKS / Audio",
             BrowserView.Material => state.Material is { } material
                 ? compact
