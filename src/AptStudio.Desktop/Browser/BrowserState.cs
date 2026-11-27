@@ -8,6 +8,7 @@ internal enum BrowserView
 {
     Textures,
     Material,
+    Materials,
     LinkedTexture,
     Animations,
     Meshes,
@@ -159,4 +160,7 @@ internal sealed record BrowserState(
     string? AudioPack = null,
     string? AudioLanguage = null,
     AudioSort AudioSort = AudioSort.Pack,
-    bool AudioSortDescending = false);
+    bool AudioSortDescending = false,
+    bool MaterialFromList = false,
+    string? MaterialError = null,
+    int ListScroll = 0);

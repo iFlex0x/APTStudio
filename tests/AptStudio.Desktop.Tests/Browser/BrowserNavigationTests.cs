@@ -79,6 +79,8 @@ public sealed class BrowserNavigationTests
         Assert.Equal(BrowserView.Material, navigation.State.View);
         Assert.Equal(ApocalypseEye, navigation.State.Material);
         Assert.Equal(13, navigation.State.MaterialSlot);
+        Assert.False(navigation.State.MaterialFromList);
+        Assert.Null(navigation.State.MaterialError);
 
         navigation.Back();
 
@@ -385,6 +387,107 @@ public sealed class BrowserNavigationTests
         Assert.Equal(second, navigation.State.Skeleton);
         Assert.Equal(12, navigation.State.ListIndex);
         Assert.False(navigation.CanBack);
+    }
+
+    [Fact]
+    public void DirectMaterialTextureBackTwiceRestoresSlotAndList()
+    {
+        MaterialOccurrence material = new(
+            0xECE8A8E11B7F30B8,
+            @"C:\game\DATAS\VENICE.DPC",
+            123456,
+            "CODE_EYE");
+        TextureOccurrence texture = new(
+            0x4B69508121C710A7,
+            @"C:\game\DATAS\VENICE.DPC",
+            @"C:\game\DATAS\VENICE.DPC",
+            654321,
+            Head(256, 256, 9, 0x1B));
+        BrowserNavigation navigation = new(new BrowserState(
+            BrowserView.Materials,
+            @"C:\game\DATAS\VENICE.DPC",
+            "CODE_EYE",
+            TextureFilter.All,
+            null,
+            0,
+            0,
+            ChannelView.Rgb,
+            true,
+            1f,
+            PointF.Empty,
+            null,
+            0,
+            null,
+            null));
+
+        navigation.SetMaterialListSelection(material, 41, 1234);
+        Assert.Equal(BrowserView.Materials, navigation.State.View);
+        Assert.Equal(material, navigation.State.Material);
+        Assert.True(navigation.State.MaterialFromList);
+        Assert.Equal(1234, navigation.State.ListScroll);
+        Assert.False(navigation.CanBack);
+
+        navigation.OpenMaterialFromList(material, 3);
+        Assert.Equal(BrowserView.Material, navigation.State.View);
+        Assert.Equal(3, navigation.State.MaterialSlot);
+        Assert.True(navigation.State.MaterialFromList);
+        Assert.True(navigation.CanBack);
+
+        navigation.OpenLinkedTexture(texture);
+        Assert.Equal(BrowserView.LinkedTexture, navigation.State.View);
+
+        navigation.Back();
+        Assert.Equal(BrowserView.Material, navigation.State.View);
+        Assert.Equal(3, navigation.State.MaterialSlot);
+        Assert.Equal(material, navigation.State.Material);
+
+        navigation.Back();
+        Assert.Equal(BrowserView.Materials, navigation.State.View);
+        Assert.Equal(material, navigation.State.Material);
+        Assert.Equal(41, navigation.State.ListIndex);
+        Assert.Equal(1234, navigation.State.ListScroll);
+        Assert.True(navigation.State.MaterialFromList);
+        Assert.False(navigation.CanBack);
+    }
+
+    [Fact]
+    public void DirectMaterialErrorOpensWithReadErrorAndBackReturnsList()
+    {
+        MaterialOccurrence material = new(
+            0x2222222222222222,
+            @"C:\game\DATAS\VENICE.DPC",
+            654321,
+            "");
+        BrowserNavigation navigation = new(new BrowserState(
+            BrowserView.Materials,
+            @"C:\game\DATAS\VENICE.DPC",
+            "",
+            TextureFilter.All,
+            null,
+            0,
+            0,
+            ChannelView.Rgb,
+            true,
+            1f,
+            PointF.Empty,
+            null,
+            0,
+            null,
+            null));
+
+        navigation.SetMaterialListSelection(material, 8);
+        navigation.OpenMaterialFromList(material, -1, "short read at 42");
+
+        Assert.Equal(BrowserView.Material, navigation.State.View);
+        Assert.Equal(-1, navigation.State.MaterialSlot);
+        Assert.Equal("short read at 42", navigation.State.MaterialError);
+
+        navigation.Back();
+
+        Assert.Equal(BrowserView.Materials, navigation.State.View);
+        Assert.Equal(material, navigation.State.Material);
+        Assert.Equal(8, navigation.State.ListIndex);
+        Assert.Null(navigation.State.MaterialError);
     }
 
     [Fact]

@@ -52,6 +52,7 @@ internal sealed class BrowserForm : Form
     private readonly Button _exportSelected = new();
     private readonly Button _openSkin = new();
     private readonly Button _openSkeleton = new();
+    private readonly Button _openMaterial = new();
     private readonly Label _selectionCount = new();
     private Control _titleLine = new();
     private bool _suppressSort;
@@ -124,6 +125,13 @@ internal sealed class BrowserForm : Form
         new("Hash", 160, Mono: true),
         new("Archive", 0, Flexible: true, Muted: true, MiddleEllipsis: true),
     ];
+    private static readonly AssetColumn[] MaterialColumns =
+    [
+        new("Hash", 160, Mono: true),
+        new("Code", 190),
+        new("Slots", 52, Right: true, Muted: true),
+        new("Archive", 0, Flexible: true, Muted: true, MiddleEllipsis: true),
+    ];
     private static readonly AssetColumn[] AudioColumns =
     [
         new("Pack", 140, Muted: true, MiddleEllipsis: true),
@@ -167,6 +175,15 @@ internal sealed class BrowserForm : Form
     private bool _materialLoading;
     private readonly Dictionary<(string Archive, long Offset, ulong Hash), MaterialData> _materialBodies =
         new();
+    private readonly MaterialSummaryCache _materialCache = new();
+    private CancellationTokenSource? _materialListCancel;
+    private CancellationTokenSource? _materialCatalogCancel;
+    private Task? _materialCatalogTask;
+    private int _materialListVersion;
+    private bool _materialListBuilding;
+    private string _materialListArchive = "";
+    private Stopwatch? _materialEntryWatch;
+    private Stopwatch? _materialFilterWatch;
     private IReadOnlyList<TextureOccurrence> _slotCopies = Array.Empty<TextureOccurrence>();
     private ulong _slotCopyHash;
     private string _slotCopyArchive = "";
@@ -281,6 +298,8 @@ internal sealed class BrowserForm : Form
             _loadCancel?.Cancel();
             _listCancel?.Cancel();
             _materialCancel?.Cancel();
+            _materialCatalogCancel?.Cancel();
+            _materialListCancel?.Cancel();
             _skinLinksCancel?.Cancel();
             _skeletonCancel?.Cancel();
             _meshCancel?.Cancel();
@@ -300,6 +319,8 @@ internal sealed class BrowserForm : Form
             _meshThumbnails?.Dispose();
             _loadCancel?.Dispose();
             _materialCancel?.Dispose();
+            _materialCatalogCancel?.Dispose();
+            _materialListCancel?.Dispose();
             _searchTimer.Dispose();
         }
 
@@ -499,6 +520,16 @@ internal sealed class BrowserForm : Form
         _openSkeleton.Enabled = false;
         _openSkeleton.Click += (_, _) => OpenSkeletonFromList();
         titleLine.Controls.Add(_openSkeleton);
+
+        StyleButton(_openMaterial, "Open material");
+        _openMaterial.AutoSize = true;
+        _openMaterial.MinimumSize = new Size(0, 24);
+        _openMaterial.Font = BrowserVisual.RowSmall;
+        _openMaterial.Margin = new Padding(8, 0, 0, 0);
+        _openMaterial.Visible = false;
+        _openMaterial.Enabled = false;
+        _openMaterial.Click += (_, _) => OpenMaterialFromList();
+        titleLine.Controls.Add(_openMaterial);
 
         _resultsBody.Dock = DockStyle.Top;
         _resultsBody.Height = 18;
@@ -748,6 +779,10 @@ internal sealed class BrowserForm : Form
             {
                 OpenSkeletonFromList();
             }
+            else if (_navigation?.State.View == BrowserView.Materials)
+            {
+                OpenMaterialFromList();
+            }
         };
         _textureList.SelectionChanged += (_, _) => OnListSelected();
     }
@@ -788,6 +823,17 @@ internal sealed class BrowserForm : Form
             }
 
             UpdateOpenSkeletonEnabled();
+            return;
+        }
+        else if (_navigation.State.View == BrowserView.Materials)
+        {
+            if (_textureList.SelectedRow?.Tag is MaterialRow material)
+            {
+                _navigation.SetMaterialListSelection(
+                    ToMaterial(material), _textureList.TopIndex, _textureList.ScrollOffset);
+            }
+
+            UpdateOpenMaterialEnabled();
             return;
         }
         else if (_navigation.State.View == BrowserView.Audio)
@@ -970,6 +1016,19 @@ internal sealed class BrowserForm : Form
         _materialTextures = null;
         _materialLoading = false;
         _materialBodies.Clear();
+        _materialListCancel?.Cancel();
+        _materialListCancel?.Dispose();
+        _materialListCancel = null;
+        _materialListVersion++;
+        _materialListBuilding = false;
+        _materialListArchive = "";
+        _materialEntryWatch = null;
+        _materialFilterWatch = null;
+        _materialCatalogCancel?.Cancel();
+        _materialCatalogCancel?.Dispose();
+        _materialCatalogCancel = null;
+        _materialCatalogTask = null;
+        _materialCache.Reset();
         _slotCopies = Array.Empty<TextureOccurrence>();
         _slotCopyHash = 0;
         _slotCopyArchive = "";
@@ -1183,17 +1242,34 @@ internal sealed class BrowserForm : Form
         int meshes = _meshCounts.GetValueOrDefault(archivePath);
         int skins = _skinCounts.GetValueOrDefault(archivePath);
         int skeletons = SkeletonCount(archivePath);
+        int materials = MaterialCount(archivePath);
         int audio = _audioLoaded ? _audio.Count : 0;
         return
         [
             new TypeChoice("Textures", textures, true),
             new TypeChoice("Animations", animations, true),
-            new TypeChoice("Materials", 0, false),
+            new TypeChoice("Materials", materials, _materials is null || materials > 0),
             new TypeChoice("Meshes", meshes, true),
             new TypeChoice("Skins", skins, skins > 0),
             new TypeChoice("Skeletons", skeletons, _skeletonCatalog is null || skeletons > 0),
             new TypeChoice("Audio", audio, true),
         ];
+    }
+
+    private int MaterialCount(string archivePath)
+    {
+        if (_materials is null)
+        {
+            return 0;
+        }
+
+        if (archivePath.Length == 0)
+        {
+            return _materials.Entries.Count;
+        }
+
+        return _materials.Archives.FirstOrDefault(archive =>
+            archive.Path.Equals(archivePath, StringComparison.OrdinalIgnoreCase))?.Count ?? 0;
     }
 
     private int SkeletonCount(string archivePath)
@@ -1228,6 +1304,7 @@ internal sealed class BrowserForm : Form
             BrowserView.Animations => BrowserView.Animations,
             BrowserView.Skins => BrowserView.Skins,
             BrowserView.Skeletons => BrowserView.Skeletons,
+            BrowserView.Materials => BrowserView.Materials,
             BrowserView.Meshes => BrowserView.Meshes,
             BrowserView.Skin => state.Mesh is null
                 ? BrowserView.Skins
@@ -1237,6 +1314,12 @@ internal sealed class BrowserForm : Form
                 : state.Skin is not null
                     ? BrowserView.Skins
                     : BrowserView.Skeletons,
+            BrowserView.Material => state.MaterialFromList
+                ? BrowserView.Materials
+                : BrowserView.Textures,
+            BrowserView.LinkedTexture => state.MaterialFromList
+                ? BrowserView.Materials
+                : BrowserView.Textures,
             _ => BrowserView.Textures,
         };
         if (archivePath.Length == 0)
@@ -1247,6 +1330,17 @@ internal sealed class BrowserForm : Form
         if (archivePath.Length > 0)
         {
             _lastArchive = archivePath;
+        }
+
+        if (view == BrowserView.Materials
+            && _materialCache.GetRows(archivePath) is null)
+        {
+            _materialEntryWatch = Stopwatch.StartNew();
+            BrowserTiming.Write($"materials-first start archive='{archivePath}'");
+        }
+        else if (view != BrowserView.Materials)
+        {
+            _materialEntryWatch = null;
         }
 
         _navigation.SwitchScope(
@@ -1272,6 +1366,7 @@ internal sealed class BrowserForm : Form
             "Meshes" => BrowserView.Meshes,
             "Skins" => BrowserView.Skins,
             "Skeletons" => BrowserView.Skeletons,
+            "Materials" => BrowserView.Materials,
             "Audio" => BrowserView.Audio,
             _ => BrowserView.Placeholder,
         };
@@ -1289,6 +1384,17 @@ internal sealed class BrowserForm : Form
             && archive.Equals(_navigation.State.ArchivePath, StringComparison.OrdinalIgnoreCase))
         {
             return;
+        }
+
+        if (view == BrowserView.Materials
+            && _materialCache.GetRows(archive) is null)
+        {
+            _materialEntryWatch = Stopwatch.StartNew();
+            BrowserTiming.Write($"materials-first start archive='{archive}'");
+        }
+        else if (view != BrowserView.Materials)
+        {
+            _materialEntryWatch = null;
         }
 
         _navigation.SwitchScope(
@@ -1337,6 +1443,13 @@ internal sealed class BrowserForm : Form
 
         _navigation.SetQuery(_search.Text);
         _navigation.SetListIndex(0);
+        _navigation.SetListScroll(0);
+        if (_navigation.State.View == BrowserView.Materials
+            && _materialCache.GetRows(_navigation.State.ArchivePath) is not null)
+        {
+            _materialFilterWatch = Stopwatch.StartNew();
+        }
+
         RenderState();
     }
 
@@ -1519,6 +1632,13 @@ internal sealed class BrowserForm : Form
             _audioListVersion++;
         }
 
+        if (state.View != BrowserView.Materials && _materialListBuilding)
+        {
+            _materialListCancel?.Cancel();
+            _materialListBuilding = false;
+            _materialListVersion++;
+        }
+
         _scope.SelectArchive(state.ArchivePath);
         _scope.SetActiveType(TypeName(state));
         _scopeButton.Text = _navigation.IsChooserOpen ? "All archives" : ScopeChip(state);
@@ -1528,6 +1648,7 @@ internal sealed class BrowserForm : Form
         _search.PlaceholderText = state.View switch
         {
             BrowserView.Audio => "pack, language, id",
+            BrowserView.Materials => "hash, code, archive",
             BrowserView.Textures => "hash, dimensions",
             _ => "hash, archive",
         };
@@ -1538,7 +1659,8 @@ internal sealed class BrowserForm : Form
 
         bool textureView = state.View == BrowserView.Textures || state.View == BrowserView.LinkedTexture;
         bool detailView = state.View is BrowserView.Skin or BrowserView.Skeleton;
-        bool fullWidth = detailView || state.View is BrowserView.Skins or BrowserView.Skeletons;
+        bool fullWidth = detailView || state.View is BrowserView.Skins or BrowserView.Skeletons
+            or BrowserView.Materials;
         _textureInspector.Visible = textureView;
         _slotInspector.Visible = state.View == BrowserView.Material;
         _animationInspector.Visible = state.View == BrowserView.Animations;
@@ -1553,6 +1675,7 @@ internal sealed class BrowserForm : Form
         _titleLine.Visible = !detailView;
         _openSkin.Visible = state.View == BrowserView.Skins;
         _openSkeleton.Visible = state.View == BrowserView.Skeletons;
+        _openMaterial.Visible = state.View == BrowserView.Materials;
         if (state.View != BrowserView.Audio && _audioView.Entry is not null)
         {
             _audioView.Reset();
@@ -1591,7 +1714,7 @@ internal sealed class BrowserForm : Form
         _chooser.Visible = false;
         _search.Enabled = state.View is BrowserView.Textures
             or BrowserView.Animations or BrowserView.Meshes or BrowserView.Skins
-            or BrowserView.Skeletons or BrowserView.Audio;
+            or BrowserView.Skeletons or BrowserView.Materials or BrowserView.Audio;
         _filterButton.Enabled = state.View == BrowserView.Textures
             || (state.View == BrowserView.Audio && _audioLoaded);
         if (state.View == BrowserView.Audio)
@@ -1605,7 +1728,7 @@ internal sealed class BrowserForm : Form
 
         _textureHost.Visible = state.View is BrowserView.Textures
             or BrowserView.Animations or BrowserView.Meshes or BrowserView.Skins
-            or BrowserView.Skeletons or BrowserView.Audio;
+            or BrowserView.Skeletons or BrowserView.Materials or BrowserView.Audio;
         _textureToolbar.Visible = state.View is BrowserView.Textures or BrowserView.Audio;
         _resultsBody.Visible = !detailView;
         _resultsBody.Height = labelView ? 44 : 18;
@@ -1656,6 +1779,11 @@ internal sealed class BrowserForm : Form
                 SetListMode(BrowserView.Skeletons);
                 RenderSkeletonList(state);
                 break;
+            case BrowserView.Materials:
+                _resultsTitle.Text = "Materials";
+                SetListMode(BrowserView.Materials);
+                RenderMaterialList(state);
+                break;
             case BrowserView.Skin:
                 _textureHost.Visible = false;
                 _textureToolbar.Visible = false;
@@ -1696,12 +1824,23 @@ internal sealed class BrowserForm : Form
                 _resultsTitle.Text = "Material";
                 ShowMaterialSlots(state);
                 RenderSlotInspector();
-                _resultsCount.Text =
-                    $"{MaterialFor(state)?.Slots.Count ?? 0:N0} of {MaterialSlotRoles.Count} slots";
+                if (state.MaterialError is { } error)
+                {
+                    _resultsCount.Text = "";
+                    _resultsBody.Text = state.Material is { } failed
+                        ? $"0x{failed.Hash:X16} · read error · {error}"
+                        : error;
+                    break;
+                }
+
+                MaterialData? materialData = MaterialFor(state);
+                int filled = materialData?.Slots.Count ?? 0;
+                _resultsCount.Text = $"{filled:N0} of {MaterialSlotRoles.Count} slots";
                 _resultsBody.Text = state.Material is { } material
                     ? $"0x{material.Hash:X16} · {material.Code} · {material.ArchiveName} · " +
-                        $"{MaterialFor(state)?.Slots.Count ?? 0:N0} filled of " +
-                        $"{MaterialSlotRoles.Count} slots"
+                        (filled == 0
+                            ? "no filled texture slots"
+                            : $"{filled:N0} filled of {MaterialSlotRoles.Count} slots")
                     : "";
                 break;
             case BrowserView.LinkedTexture:
@@ -1725,7 +1864,8 @@ internal sealed class BrowserForm : Form
                 break;
         }
 
-        if (!_loading && !_listBuilding && !_audioListBuilding && !_audioLoading)
+        if (!_loading && !_listBuilding && !_audioListBuilding && !_audioLoading
+            && !_materialListBuilding)
         {
             UpdateStatus();
         }
@@ -1895,6 +2035,7 @@ internal sealed class BrowserForm : Form
             BrowserView.Meshes => MeshColumns,
             BrowserView.Skins => SkinColumns,
             BrowserView.Skeletons => SkeletonColumns,
+            BrowserView.Materials => MaterialColumns,
             BrowserView.Audio => narrow ? NarrowAudioColumns : AudioColumns,
             _ => narrow ? NarrowTextureColumns : TextureColumns,
         };
@@ -2398,6 +2539,376 @@ internal sealed class BrowserForm : Form
         entry.NameHash,
         entry.ArchivePath,
         entry.Offset);
+
+    private void RenderMaterialList(BrowserState state)
+    {
+        _textureHost.Visible = true;
+        _textureToolbar.Visible = false;
+        if (_materials is null)
+        {
+            _textureList.SetRows(Array.Empty<AssetRow>(), null);
+            _resultsCount.Text = "";
+            _resultsBody.Text = "Material_Z objects · scanning...";
+            _status.Text = "Scanning materials...";
+            _ = EnsureMaterialCatalogAsync();
+            UpdateOpenMaterialEnabled();
+            return;
+        }
+
+        if (state.ArchivePath.Length == 0)
+        {
+            _textureList.SetRows(Array.Empty<AssetRow>(), null);
+            _resultsCount.Text = "";
+            _resultsBody.Text = "Select an archive to browse materials.";
+            UpdateOpenMaterialEnabled();
+            return;
+        }
+
+        if (_materialCache.GetRows(state.ArchivePath) is not null)
+        {
+            _materialEntryWatch = null;
+            ApplyMaterialList(
+                state, firstEntry: false, firstWatch: null, filterWatch: _materialFilterWatch);
+            return;
+        }
+
+        if (_materialListBuilding
+            && _materialListArchive.Equals(state.ArchivePath, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        StartMaterialList(state);
+    }
+
+    private void StartMaterialList(BrowserState state)
+    {
+        _materialListCancel?.Cancel();
+        _materialListCancel?.Dispose();
+        CancellationTokenSource cancel = new();
+        _materialListCancel = cancel;
+        int version = ++_materialListVersion;
+        _materialListBuilding = true;
+        _materialListArchive = state.ArchivePath;
+        _resultsCount.Text = "";
+        _resultsBody.Text = $"{ScopeName(state.ArchivePath)} · decoding materials...";
+        _status.Text = "Decoding materials...";
+        Stopwatch watch = _materialEntryWatch ?? Stopwatch.StartNew();
+        _materialEntryWatch = watch;
+        int generation = _materialCache.Generation;
+        _ = BuildMaterialListAsync(state, cancel, version, generation, watch);
+    }
+
+    private async Task BuildMaterialListAsync(
+        BrowserState state,
+        CancellationTokenSource cancel,
+        int version,
+        int generation,
+        Stopwatch watch)
+    {
+        if (_materials is null)
+        {
+            return;
+        }
+
+        string archive = state.ArchivePath;
+        List<MaterialEntry> entries = _materials.Entries
+            .Where(entry => entry.ArchivePath.Equals(archive, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        Progress<int> progress = new(count =>
+        {
+            if (IsDisposed || !_materialListBuilding || version != _materialListVersion
+                || cancel != _materialListCancel)
+            {
+                return;
+            }
+
+            _resultsBody.Text =
+                $"{ScopeName(archive)} · decoding materials... {count:N0} of {entries.Count:N0}";
+            _status.Text = $"Decoding materials {count:N0}/{entries.Count:N0}";
+        });
+
+        try
+        {
+            MaterialListResult result = await Task.Run(() =>
+            {
+                using FileStream stream = new(
+                    archive, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                return MaterialListBuilder.Build(
+                    entries,
+                    entry =>
+                    {
+                        MaterialData data = MaterialDecoder.Read(
+                            stream, entry.ArchivePath, entry.Hit);
+                        return (data.Code, data.Slots.Count);
+                    },
+                    cancel.Token,
+                    progress);
+            }, cancel.Token);
+            if (IsDisposed || cancel != _materialListCancel || version != _materialListVersion)
+            {
+                return;
+            }
+
+            if (!_materialCache.TryStore(generation, archive, result))
+            {
+                return;
+            }
+
+            _materialListBuilding = false;
+            BrowserTiming.Write(
+                $"materials-first decoded {watch.ElapsedMilliseconds}ms " +
+                $"rows={result.Rows.Count:N0} decodes={result.DecodeCount:N0}");
+            if (_navigation?.State.View != BrowserView.Materials
+                || !_navigation.State.ArchivePath.Equals(archive, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            ApplyMaterialList(
+                _navigation.State, firstEntry: true, firstWatch: watch, filterWatch: null);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex) when (ex is InvalidDataException or IOException
+            or UnauthorizedAccessException)
+        {
+            if (!IsDisposed && cancel == _materialListCancel && version == _materialListVersion)
+            {
+                _status.Text = ex.Message;
+                _resultsBody.Text = ex.Message;
+            }
+        }
+        finally
+        {
+            if (cancel == _materialListCancel)
+            {
+                _materialListBuilding = false;
+            }
+        }
+    }
+
+    private void ApplyMaterialList(
+        BrowserState state,
+        bool firstEntry,
+        Stopwatch? firstWatch,
+        Stopwatch? filterWatch)
+    {
+        IReadOnlyList<MaterialRow>? cached = _materialCache.GetRows(state.ArchivePath);
+        if (_navigation is null || state.View != BrowserView.Materials || cached is null)
+        {
+            return;
+        }
+
+        IReadOnlyList<MaterialRow> rows = MaterialListBuilder.Filter(cached, state.Query);
+        List<AssetRow> assetRows = new(rows.Count);
+        foreach (MaterialRow row in rows)
+        {
+            assetRows.Add(new AssetRow(
+                BrowserKeys.Material(row.Entry),
+                [
+                    $"0x{row.Hash:X16}",
+                    row.DisplayCode,
+                    row.DisplaySlots,
+                    row.ArchiveName,
+                ],
+                row));
+        }
+
+        string? keep = state.Material is null ? null : BrowserKeys.Material(state.Material);
+        _textureList.SetRows(assetRows, keep);
+        if (state.Material is not null)
+        {
+            _textureList.ScrollOffset = state.ListScroll;
+        }
+        else
+        {
+            _textureList.TopIndex = state.ListIndex;
+        }
+
+        _resultsCount.Text = rows.Count == cached.Count
+            ? $"{rows.Count:N0}"
+            : $"{rows.Count:N0} of {cached.Count:N0}";
+        _resultsBody.Text =
+            $"{ScopeName(state.ArchivePath)} · {cached.Count:N0} materials · hash order" +
+            (state.Query.Trim().Length == 0 ? "" : " · filtered");
+        _openMaterial.Visible = true;
+        UpdateOpenMaterialEnabled();
+        UpdateStatus();
+        if (firstEntry && firstWatch is not null)
+        {
+            BrowserTiming.Write(
+                $"materials-first applied {firstWatch.ElapsedMilliseconds}ms " +
+                $"rows={rows.Count:N0} decodes={_materialCache.DecodeCount:N0}");
+            _materialEntryWatch = null;
+            _materialFilterWatch = null;
+        }
+        else if (filterWatch is not null)
+        {
+            BrowserTiming.Write(
+                $"materials-filter applied {filterWatch.ElapsedMilliseconds}ms " +
+                $"query='{state.Query}' rows={rows.Count:N0} decodes={_materialCache.DecodeCount:N0}");
+            _materialFilterWatch = null;
+        }
+    }
+
+    private void UpdateOpenMaterialEnabled()
+    {
+        _openMaterial.Enabled = _navigation?.State.View == BrowserView.Materials
+            && _textureList.SelectedRow?.Tag is MaterialRow;
+    }
+
+    private void OpenMaterialFromList()
+    {
+        if (_navigation?.State.View != BrowserView.Materials
+            || _textureList.SelectedRow?.Tag is not MaterialRow row)
+        {
+            return;
+        }
+
+        MaterialOccurrence occurrence = ToMaterial(row);
+        if (row.State == MaterialRowState.Error)
+        {
+            _navigation.SetMaterialListSelection(
+                occurrence, _textureList.TopIndex, _textureList.ScrollOffset);
+            _navigation.OpenMaterialFromList(occurrence, -1, row.Error);
+            RenderState();
+            return;
+        }
+
+        MaterialData? data = MaterialDataFor(row);
+        if (data is null)
+        {
+            string message = _status.Text.Length > 0
+                ? _status.Text
+                : "Could not read this material.";
+            _navigation.SetMaterialListSelection(
+                occurrence, _textureList.TopIndex, _textureList.ScrollOffset);
+            _navigation.OpenMaterialFromList(occurrence, -1, message);
+            RenderState();
+            return;
+        }
+
+        int slot = data.Slots.Count > 0 ? data.Slots[0].Index : -1;
+        _navigation.SetMaterialListSelection(
+            occurrence, _textureList.TopIndex, _textureList.ScrollOffset);
+        _navigation.OpenMaterialFromList(occurrence, slot);
+        RenderState();
+    }
+
+    private MaterialData? MaterialDataFor(MaterialRow row)
+    {
+        (string Archive, long Offset, ulong Hash) key = (
+            row.Entry.ArchivePath, row.Entry.Offset, row.Hash);
+        if (_materialBodies.TryGetValue(key, out MaterialData? cached))
+        {
+            return cached;
+        }
+
+        try
+        {
+            using FileStream stream = new(
+                row.Entry.ArchivePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            MaterialData data = MaterialDecoder.Read(stream, row.Entry.ArchivePath, row.Entry.Hit);
+            _materialBodies[key] = data;
+            _materialCache.AddDecodes(1);
+            return data;
+        }
+        catch (Exception ex) when (ex is InvalidDataException or IOException
+            or UnauthorizedAccessException)
+        {
+            _status.Text = ex.Message;
+            return null;
+        }
+    }
+
+    private static MaterialOccurrence ToMaterial(MaterialRow row) => new(
+        row.Hash,
+        row.Entry.ArchivePath,
+        row.Entry.Offset,
+        row.Code);
+
+    private async Task EnsureMaterialCatalogAsync()
+    {
+        if (_materials is not null)
+        {
+            return;
+        }
+
+        _materialCatalogTask ??= LoadMaterialCatalogAsync();
+        await _materialCatalogTask;
+    }
+
+    private async Task LoadMaterialCatalogAsync()
+    {
+        if (_profile is null)
+        {
+            return;
+        }
+
+        _materialCatalogCancel?.Cancel();
+        _materialCatalogCancel?.Dispose();
+        CancellationTokenSource cancel = new();
+        _materialCatalogCancel = cancel;
+        Stopwatch watch = Stopwatch.StartNew();
+        _status.Text = "Scanning materials...";
+        try
+        {
+            Progress<CatalogProgress> progress = new(item =>
+            {
+                if (!IsDisposed && cancel == _materialCatalogCancel)
+                {
+                    _status.Text =
+                        $"Materials {Path.GetFileName(item.ArchivePath)} " +
+                        $"{item.Index:N0}/{item.Total:N0}";
+                }
+            });
+            MaterialCatalog catalog = await Task.Run(
+                () => MaterialCatalog.Load(_profile, false, progress, cancel.Token),
+                cancel.Token);
+            if (IsDisposed || cancel != _materialCatalogCancel)
+            {
+                return;
+            }
+
+            _materials = catalog;
+            BrowserTiming.Write(
+                $"materials-catalog loaded {watch.ElapsedMilliseconds}ms " +
+                $"entries={catalog.Entries.Count:N0} archives={catalog.Archives.Count:N0}");
+            _status.Text =
+                $"{catalog.Entries.Count:N0} materials · {catalog.Archives.Count:N0} archives";
+            if (_navigation is not null)
+            {
+                _scope.SetTypes(
+                    BuildTypes(_navigation.State.ArchivePath),
+                    TypeName(_navigation.State));
+                if (_navigation.State.View == BrowserView.Materials)
+                {
+                    RenderState();
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex) when (ex is InvalidDataException or IOException
+            or UnauthorizedAccessException)
+        {
+            if (!IsDisposed && cancel == _materialCatalogCancel)
+            {
+                _status.Text = ex.Message;
+                _resultsBody.Text = ex.Message;
+            }
+        }
+        finally
+        {
+            if (cancel == _materialCatalogCancel)
+            {
+                _materialCatalogTask = null;
+            }
+        }
+    }
 
     private void OnMeshSelected()
     {
@@ -3795,33 +4306,39 @@ internal sealed class BrowserForm : Form
         _materialLoading = true;
         _textureInspector.SetBusy(true);
         _status.Text = "Loading materials...";
-        _materialCancel?.Cancel();
-        _materialCancel?.Dispose();
-        CancellationTokenSource cancel = new();
-        _materialCancel = cancel;
-        IProgress<CatalogProgress> progress = new Progress<CatalogProgress>(item =>
-        {
-            if (!IsDisposed && cancel == _materialCancel)
-            {
-                _status.Text =
-                    $"Materials {Path.GetFileName(item.ArchivePath)} {item.Index}/{item.Total}";
-            }
-        });
-
         try
         {
-            MaterialCatalog catalog = await Task.Run(
-                () => MaterialCatalog.Load(_profile, false, progress, cancel.Token),
-                cancel.Token);
+            if (_materials is null)
+            {
+                await EnsureMaterialCatalogAsync();
+            }
+
+            if (IsDisposed || _materials is null)
+            {
+                return false;
+            }
+
+            _materialCancel?.Cancel();
+            _materialCancel?.Dispose();
+            CancellationTokenSource cancel = new();
+            _materialCancel = cancel;
+            IProgress<CatalogProgress> progress = new Progress<CatalogProgress>(item =>
+            {
+                if (!IsDisposed && cancel == _materialCancel)
+                {
+                    _status.Text =
+                        $"Linking {Path.GetFileName(item.ArchivePath)} {item.Index}/{item.Total}";
+                }
+            });
+            _status.Text = "Linking materials to textures...";
             MaterialTextureIndex index = await Task.Run(
-                () => MaterialTextureIndex.Load(catalog, progress, cancel.Token),
+                () => MaterialTextureIndex.Load(_materials, progress, cancel.Token),
                 cancel.Token);
             if (IsDisposed || cancel != _materialCancel)
             {
                 return false;
             }
 
-            _materials = catalog;
             _materialTextures = index;
             return true;
         }
@@ -3832,7 +4349,7 @@ internal sealed class BrowserForm : Form
         catch (Exception ex) when (ex is InvalidDataException or IOException
             or UnauthorizedAccessException)
         {
-            if (!IsDisposed && cancel == _materialCancel)
+            if (!IsDisposed)
             {
                 _status.Text = ex.Message;
             }
@@ -3841,9 +4358,9 @@ internal sealed class BrowserForm : Form
         }
         finally
         {
-            if (cancel == _materialCancel)
+            _materialLoading = false;
+            if (!IsDisposed)
             {
-                _materialLoading = false;
                 _textureInspector.SetBusy(false);
             }
         }
@@ -3940,9 +4457,23 @@ internal sealed class BrowserForm : Form
 
     private void ShowMaterialSlots(BrowserState state)
     {
+        if (state.MaterialError is { } error)
+        {
+            _materialSlots.ShowNotice("Could not read this material", true);
+            _status.Text = error;
+            return;
+        }
+
         MaterialData? data = MaterialFor(state);
         if (data is null)
         {
+            _materialSlots.ShowNotice("Material unavailable", true);
+            return;
+        }
+
+        if (data.Slots.Count == 0)
+        {
+            _materialSlots.ShowNotice("No filled texture slots", false);
             return;
         }
 
@@ -3966,10 +4497,25 @@ internal sealed class BrowserForm : Form
             return;
         }
 
+        if (_navigation.State.MaterialError is { } error)
+        {
+            _slotInspector.ShowNotice("Could not read this material", error, true);
+            return;
+        }
+
         MaterialData? data = MaterialFor(_navigation.State);
         if (data is null)
         {
             _slotInspector.ShowEmpty();
+            return;
+        }
+
+        if (data.Slots.Count == 0)
+        {
+            _slotInspector.ShowNotice(
+                "No filled texture slots",
+                "This material has no texture slots.",
+                false);
             return;
         }
 
@@ -4156,6 +4702,14 @@ internal sealed class BrowserForm : Form
             return;
         }
 
+        if (state.View == BrowserView.Materials)
+        {
+            _status.Text =
+                $"{ScopeName(state.ArchivePath)} · {_textureList.Rows.Count:N0} materials · " +
+                $"{archiveCount:N0} archives";
+            return;
+        }
+
         if (state.View == BrowserView.Audio)
         {
             _status.Text =
@@ -4170,11 +4724,22 @@ internal sealed class BrowserForm : Form
             return;
         }
 
-        if (state.View == BrowserView.Material && state.Material is { } material)
+        if (state.View == BrowserView.Material)
         {
-            _status.Text =
-                $"{material.ArchiveName} · {material.Code} · " +
-                $"{MaterialFor(state)?.Slots.Count ?? 0} slots";
+            if (state.MaterialError is { } error)
+            {
+                _status.Text = $"read error · {error}";
+                return;
+            }
+
+            if (state.Material is { } material)
+            {
+                MaterialData? data = MaterialFor(state);
+                _status.Text = data is null
+                    ? $"{material.ArchiveName} · {material.Code}"
+                    : $"{material.ArchiveName} · {material.Code} · {data.Slots.Count:N0} slots";
+            }
+
             return;
         }
 
@@ -4206,6 +4771,9 @@ internal sealed class BrowserForm : Form
         BrowserView.Meshes => "Meshes",
         BrowserView.Skins => "Skins",
         BrowserView.Skeletons => "Skeletons",
+        BrowserView.Materials => "Materials",
+        BrowserView.Material => state.MaterialFromList ? "Materials" : "Textures",
+        BrowserView.LinkedTexture => state.MaterialFromList ? "Materials" : "Textures",
         BrowserView.Skin => state.Mesh is null ? "Skins" : "Meshes",
         BrowserView.Skeleton => DetailSource(state),
         BrowserView.Audio => "Audio",
@@ -4273,18 +4841,30 @@ internal sealed class BrowserForm : Form
                 ? $"{archive} / {DetailSource(state)} / Skeleton 0x{skeleton.Hash:X16}"
                 : $"{archive} / {DetailSource(state)} / Skeleton",
             BrowserView.Audio => "SOUNDBANKS / Audio",
+            BrowserView.Materials => $"{archive} / Materials",
             BrowserView.Material => state.Material is { } material
-                ? compact
-                    ? $"{archive} / 0x{material.Hash:X16}"
-                    : $"{archive} / Textures / 0x{material.Hash:X16} / Materials"
+                ? state.MaterialFromList
+                    ? $"{archive} / Materials / 0x{material.Hash:X16}"
+                    : compact
+                        ? $"{archive} / 0x{material.Hash:X16}"
+                        : $"{archive} / Textures / 0x{material.Hash:X16} / Materials"
                 : $"{archive} / Materials",
             BrowserView.LinkedTexture => state.LinkedTexture is { } linked
-                ? compact
-                    ? $"{archive} / {linked.ArchiveName}"
-                        + (linked.IsExternal ? $" / {linked.BodyArchiveName}" : "")
-                    : $"{archive} / Textures / Materials / {linked.ArchiveName} occurrence"
-                        + (linked.IsExternal ? $" / data {linked.BodyArchiveName}" : "")
-                : $"{archive} / Textures / Materials",
+                ? state.MaterialFromList
+                    ? compact
+                        ? $"{archive} / Materials / 0x{linked.Hash:X16}"
+                        : $"{archive} / Materials / " +
+                            (state.Material is { } source ? $"0x{source.Hash:X16} / " : "") +
+                            $"{linked.ArchiveName} occurrence"
+                            + (linked.IsExternal ? $" / data {linked.BodyArchiveName}" : "")
+                    : compact
+                        ? $"{archive} / {linked.ArchiveName}"
+                            + (linked.IsExternal ? $" / {linked.BodyArchiveName}" : "")
+                        : $"{archive} / Textures / Materials / {linked.ArchiveName} occurrence"
+                            + (linked.IsExternal ? $" / data {linked.BodyArchiveName}" : "")
+                : state.MaterialFromList
+                    ? $"{archive} / Materials"
+                    : $"{archive} / Textures / Materials",
             _ => $"{archive} / {state.PlaceholderName}",
         };
     }

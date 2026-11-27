@@ -194,21 +194,35 @@ internal sealed class MaterialSlotInspector : Panel
 
     public int CopyIndex => _copyIndex;
 
-    public void ShowEmpty()
+    internal bool NoticeActive { get; private set; }
+
+    internal string NoticeTitle => _title.Text;
+
+    internal bool OpenTextureEnabled => _open.Enabled;
+
+    public void ShowNotice(string title, string subtitle, bool error)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(title);
+        ArgumentException.ThrowIfNullOrWhiteSpace(subtitle);
         _generation.Begin();
         _data = null;
         _slot = null;
         _occurrence = null;
         _texture = null;
-        _open.Enabled = false;
+        SetOpenAvailable(false);
         _copies.Visible = false;
         _copiesLabel.Visible = false;
-        _title.Text = "Material slot";
-        _subtitle.Text = "Select a slot.";
+        _title.Text = title;
+        _subtitle.Text = subtitle;
         _context.Text = "";
-        _preview.ShowMessage("Select a slot.", false);
+        _preview.ShowMessage(subtitle, error);
         _detailsPanel.Visible = false;
+        NoticeActive = true;
+    }
+
+    public void ShowEmpty()
+    {
+        ShowNotice("Material slot", "Select a slot.", false);
     }
 
     public void SetSlot(
@@ -229,6 +243,7 @@ internal sealed class MaterialSlotInspector : Panel
         _slot = slot;
         _occurrence = occurrence;
         _texture = texture;
+        NoticeActive = false;
         _copyList = copies;
         _copyIndex = Math.Clamp(copyIndex, 0, Math.Max(0, copies.Count - 1));
         _title.Text = $"Slot {slot.Index} · {slot.Role.Authoring}";
@@ -237,7 +252,7 @@ internal sealed class MaterialSlotInspector : Panel
             $"{occurrence.Head.Width} × {occurrence.Head.Height} · " +
             $"{occurrence.Head.Format.DisplayName}";
         _context.Text = context;
-        _open.Enabled = true;
+        SetOpenAvailable(true);
         _copies.Visible = copies.Count > 1;
         _copiesLabel.Visible = copies.Count > 1;
         _suppress = true;
@@ -346,6 +361,13 @@ internal sealed class MaterialSlotInspector : Panel
             AutoSize = true,
             Margin = new Padding(0, 1, 0, 1),
         }, 1, row);
+    }
+
+    private void SetOpenAvailable(bool available)
+    {
+        _open.Enabled = available;
+        _open.BackColor = available ? Theme.Accent : BrowserVisual.BorderStrong;
+        _open.ForeColor = available ? BrowserVisual.PrimaryText : Theme.Muted;
     }
 
     private static void StyleSmall(Button button)

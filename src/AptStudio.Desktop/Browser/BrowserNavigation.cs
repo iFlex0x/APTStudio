@@ -181,6 +181,11 @@ internal sealed class BrowserNavigation
         State = State with { ListIndex = index };
     }
 
+    public void SetListScroll(int scroll)
+    {
+        State = State with { ListScroll = Math.Max(0, scroll) };
+    }
+
     public void SetMip(int mip)
     {
         State = State with { Mip = mip };
@@ -233,6 +238,41 @@ internal sealed class BrowserNavigation
             View = BrowserView.Material,
             Material = material,
             MaterialSlot = slot,
+            MaterialFromList = false,
+            MaterialError = null,
+            LinkedTexture = null,
+        };
+    }
+
+    public void SetMaterialListSelection(
+        MaterialOccurrence material, int listIndex, int listScroll = 0)
+    {
+        ArgumentNullException.ThrowIfNull(material);
+        State = State with
+        {
+            View = BrowserView.Materials,
+            Material = material,
+            MaterialSlot = -1,
+            MaterialFromList = true,
+            MaterialError = null,
+            ListIndex = listIndex,
+            ListScroll = Math.Max(0, listScroll),
+        };
+    }
+
+    public void OpenMaterialFromList(MaterialOccurrence material, int slot, string? error = null)
+    {
+        ArgumentNullException.ThrowIfNull(material);
+        _back.Push(State);
+        _forward.Clear();
+        _chooserSource = null;
+        State = State with
+        {
+            View = BrowserView.Material,
+            Material = material,
+            MaterialSlot = slot,
+            MaterialFromList = true,
+            MaterialError = error,
             LinkedTexture = null,
         };
     }

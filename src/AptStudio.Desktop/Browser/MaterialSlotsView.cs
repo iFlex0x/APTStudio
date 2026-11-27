@@ -7,6 +7,7 @@ internal sealed class MaterialSlotsView : Panel
 {
     private readonly DataGridView _grid = new();
     private readonly TableLayoutPanel _detail = new();
+    private readonly Label _notice = new();
     private readonly Label _role = new();
     private readonly Label _binding = new();
     private readonly Font _monoFont = new("Consolas", 8.625f);
@@ -20,6 +21,15 @@ internal sealed class MaterialSlotsView : Panel
         ConfigureGrid();
         ConfigureDetail();
 
+        _notice.Dock = DockStyle.Fill;
+        _notice.TextAlign = ContentAlignment.MiddleCenter;
+        _notice.Font = BrowserVisual.Ui;
+        _notice.ForeColor = Theme.Muted;
+        _notice.BackColor = Theme.Background;
+        _notice.AutoEllipsis = true;
+        _notice.Padding = new Padding(24, 0, 24, 0);
+        _notice.Visible = false;
+
         TableLayoutPanel root = new()
         {
             Dock = DockStyle.Fill,
@@ -30,6 +40,7 @@ internal sealed class MaterialSlotsView : Panel
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         root.Controls.Add(_grid, 0, 0);
+        root.Controls.Add(_notice, 0, 0);
         root.Controls.Add(_detail, 0, 1);
         Controls.Add(root);
         Resize += (_, _) => UpdateDetailWidth();
@@ -42,12 +53,45 @@ internal sealed class MaterialSlotsView : Panel
 
     public int SelectedSlot => _selectedSlot;
 
+    internal bool NoticeActive { get; private set; }
+
+    internal string NoticeText => _notice.Text;
+
+    public void ShowNotice(string message, bool error)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(message);
+        _data = null;
+        _selectedSlot = -1;
+        _suppress = true;
+        try
+        {
+            _grid.Rows.Clear();
+        }
+        finally
+        {
+            _suppress = false;
+        }
+
+        _grid.Visible = false;
+        _notice.Text = message;
+        _notice.ForeColor = error ? Theme.Error : Theme.Muted;
+        _notice.Visible = true;
+        _notice.BringToFront();
+        _role.Text = "";
+        _binding.Text = "";
+        NoticeActive = true;
+    }
+
     public void SetMaterial(
         MaterialData data,
         int sourceSlot,
         Func<ulong, int> copyCount)
     {
         _data = data;
+        NoticeActive = false;
+        _notice.Visible = false;
+        _grid.Visible = true;
+        _grid.BringToFront();
         _suppress = true;
         try
         {

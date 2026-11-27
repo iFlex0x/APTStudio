@@ -163,6 +163,17 @@ internal sealed class AssetList : ScrollableControl
         }
     }
 
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public int ScrollOffset
+    {
+        get => _scrollY;
+        set
+        {
+            ScrollTo(Math.Max(0, value));
+            Invalidate();
+        }
+    }
+
     private int MaxScrollY => Math.Max(0, _rows.Count * RowHeight - ClientSize.Height);
 
     private void ScrollTo(int y)
