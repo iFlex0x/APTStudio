@@ -11,6 +11,7 @@ internal enum BrowserView
     LinkedTexture,
     Animations,
     Meshes,
+    Skins,
     Skin,
     Skeleton,
     Audio,

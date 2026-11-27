@@ -50,6 +50,7 @@ internal sealed class BrowserForm : Form
     private readonly ComboBox _sortCombo = new();
     private readonly Button _sortDirection = new();
     private readonly Button _exportSelected = new();
+    private readonly Button _openSkin = new();
     private readonly Label _selectionCount = new();
     private Control _titleLine = new();
     private bool _suppressSort;
@@ -69,6 +70,8 @@ internal sealed class BrowserForm : Form
     private IReadOnlyDictionary<ulong, AssetEntry> _meshRows =
         new Dictionary<ulong, AssetEntry>();
     private IReadOnlyDictionary<string, int> _meshCounts =
+        new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+    private IReadOnlyDictionary<string, int> _skinCounts =
         new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
     private IReadOnlyList<AudioEntry> _audio = Array.Empty<AudioEntry>();
     private bool _audioLoaded;
@@ -106,6 +109,11 @@ internal sealed class BrowserForm : Form
         new("Occurrences", 90, Right: true, Muted: true),
     ];
     private static readonly AssetColumn[] MeshColumns =
+    [
+        new("Hash", 160, Mono: true),
+        new("Archive", 0, Flexible: true, Muted: true, MiddleEllipsis: true),
+    ];
+    private static readonly AssetColumn[] SkinColumns =
     [
         new("Hash", 160, Mono: true),
         new("Archive", 0, Flexible: true, Muted: true, MiddleEllipsis: true),
@@ -466,6 +474,16 @@ internal sealed class BrowserForm : Form
         titleLine.Controls.Add(_resultsTitle);
         titleLine.Controls.Add(_resultsCount);
 
+        StyleButton(_openSkin, "Open skin");
+        _openSkin.AutoSize = true;
+        _openSkin.MinimumSize = new Size(0, 24);
+        _openSkin.Font = BrowserVisual.RowSmall;
+        _openSkin.Margin = new Padding(8, 0, 0, 0);
+        _openSkin.Visible = false;
+        _openSkin.Enabled = false;
+        _openSkin.Click += (_, _) => OpenSkinFromList();
+        titleLine.Controls.Add(_openSkin);
+
         _resultsBody.Dock = DockStyle.Top;
         _resultsBody.Height = 18;
         _resultsBody.Font = BrowserVisual.RowSmall;
@@ -704,6 +722,13 @@ internal sealed class BrowserForm : Form
         };
         _thumbnailCache.ThumbnailReady += (_, _) => _textureList.Invalidate();
         _meshThumbnails.ThumbnailReady += (_, _) => _textureList.Invalidate();
+        _textureList.OpenRequested += (_, _) =>
+        {
+            if (_navigation?.State.View == BrowserView.Skins)
+            {
+                OpenSkinFromList();
+            }
+        };
         _textureList.SelectionChanged += (_, _) => OnListSelected();
     }
 
@@ -721,6 +746,18 @@ internal sealed class BrowserForm : Form
         else if (_navigation.State.View == BrowserView.Meshes)
         {
             OnMeshSelected();
+        }
+        else if (_navigation.State.View == BrowserView.Skins)
+        {
+            if (_textureList.SelectedRow?.Tag is AssetEntry entry
+                && entry.ClassHash == AssetClass.Skin)
+            {
+                _navigation.SetSkinListSelection(
+                    ToSkin(entry), _textureList.TopIndex);
+            }
+
+            UpdateOpenSkinEnabled();
+            return;
         }
         else if (_navigation.State.View == BrowserView.Audio)
         {
@@ -1007,6 +1044,29 @@ internal sealed class BrowserForm : Form
                 pair => pair.Value.Count,
                 StringComparer.OrdinalIgnoreCase);
 
+            Dictionary<string, HashSet<string>> skinKeys =
+                new(StringComparer.OrdinalIgnoreCase);
+            foreach (AssetEntry entry in _assets)
+            {
+                if (entry.ClassHash != AssetClass.Skin)
+                {
+                    continue;
+                }
+
+                if (!skinKeys.TryGetValue(entry.ArchivePath, out HashSet<string>? keys))
+                {
+                    keys = new HashSet<string>(StringComparer.Ordinal);
+                    skinKeys[entry.ArchivePath] = keys;
+                }
+
+                keys.Add(BrowserKeys.Skin(entry));
+            }
+
+            _skinCounts = skinKeys.ToDictionary(
+                pair => pair.Key,
+                pair => pair.Value.Count,
+                StringComparer.OrdinalIgnoreCase);
+
             string selected = ChooseInitialArchive();
             _lastArchive = selected;
             _navigation = new BrowserNavigation(new BrowserState(
@@ -1090,6 +1150,7 @@ internal sealed class BrowserForm : Form
         int textures = ArchiveCount(archivePath);
         int animations = _animationCounts.GetValueOrDefault(archivePath);
         int meshes = _meshCounts.GetValueOrDefault(archivePath);
+        int skins = _skinCounts.GetValueOrDefault(archivePath);
         int audio = _audioLoaded ? _audio.Count : 0;
         return
         [
@@ -1097,7 +1158,7 @@ internal sealed class BrowserForm : Form
             new TypeChoice("Animations", animations, true),
             new TypeChoice("Materials", 0, false),
             new TypeChoice("Meshes", meshes, true),
-            new TypeChoice("Skins", 0, false),
+            new TypeChoice("Skins", skins, skins > 0),
             new TypeChoice("Skeletons", 0, false),
             new TypeChoice("Audio", audio, true),
         ];
@@ -1117,7 +1178,11 @@ internal sealed class BrowserForm : Form
         {
             BrowserView.Placeholder => BrowserView.Placeholder,
             BrowserView.Animations => BrowserView.Animations,
-            BrowserView.Meshes or BrowserView.Skin or BrowserView.Skeleton => BrowserView.Meshes,
+            BrowserView.Skins => BrowserView.Skins,
+            BrowserView.Meshes => BrowserView.Meshes,
+            BrowserView.Skin or BrowserView.Skeleton => state.Mesh is null
+                ? BrowserView.Skins
+                : BrowserView.Meshes,
             _ => BrowserView.Textures,
         };
         if (archivePath.Length == 0)
@@ -1151,6 +1216,7 @@ internal sealed class BrowserForm : Form
             "Textures" => BrowserView.Textures,
             "Animations" => BrowserView.Animations,
             "Meshes" => BrowserView.Meshes,
+            "Skins" => BrowserView.Skins,
             "Audio" => BrowserView.Audio,
             _ => BrowserView.Placeholder,
         };
@@ -1417,6 +1483,7 @@ internal sealed class BrowserForm : Form
 
         bool textureView = state.View == BrowserView.Textures || state.View == BrowserView.LinkedTexture;
         bool detailView = state.View is BrowserView.Skin or BrowserView.Skeleton;
+        bool fullWidth = detailView || state.View == BrowserView.Skins;
         _textureInspector.Visible = textureView;
         _slotInspector.Visible = state.View == BrowserView.Material;
         _animationInspector.Visible = state.View == BrowserView.Animations;
@@ -1427,8 +1494,9 @@ internal sealed class BrowserForm : Form
         _skinView.Visible = state.View == BrowserView.Skin;
         _skeletonView.Visible = state.View == BrowserView.Skeleton;
         _meshSkins.Visible = false;
-        _inner.Panel2Collapsed = detailView;
+        _inner.Panel2Collapsed = fullWidth;
         _titleLine.Visible = !detailView;
+        _openSkin.Visible = state.View == BrowserView.Skins;
         if (state.View != BrowserView.Audio && _audioView.Entry is not null)
         {
             _audioView.Reset();
@@ -1466,7 +1534,8 @@ internal sealed class BrowserForm : Form
 
         _chooser.Visible = false;
         _search.Enabled = state.View is BrowserView.Textures
-            or BrowserView.Animations or BrowserView.Meshes or BrowserView.Audio;
+            or BrowserView.Animations or BrowserView.Meshes or BrowserView.Skins
+            or BrowserView.Audio;
         _filterButton.Enabled = state.View == BrowserView.Textures
             || (state.View == BrowserView.Audio && _audioLoaded);
         if (state.View == BrowserView.Audio)
@@ -1479,7 +1548,8 @@ internal sealed class BrowserForm : Form
         }
 
         _textureHost.Visible = state.View is BrowserView.Textures
-            or BrowserView.Animations or BrowserView.Meshes or BrowserView.Audio;
+            or BrowserView.Animations or BrowserView.Meshes or BrowserView.Skins
+            or BrowserView.Audio;
         _textureToolbar.Visible = state.View is BrowserView.Textures or BrowserView.Audio;
         _resultsBody.Visible = !detailView;
         _resultsBody.Height = labelView ? 44 : 18;
@@ -1519,6 +1589,11 @@ internal sealed class BrowserForm : Form
                     RenderMeshList(state);
                 }
 
+                break;
+            case BrowserView.Skins:
+                _resultsTitle.Text = "Skins";
+                SetListMode(BrowserView.Skins);
+                RenderSkinList(state);
                 break;
             case BrowserView.Skin:
                 _textureHost.Visible = false;
@@ -1757,6 +1832,7 @@ internal sealed class BrowserForm : Form
         {
             BrowserView.Animations => AnimationColumns,
             BrowserView.Meshes => MeshColumns,
+            BrowserView.Skins => SkinColumns,
             BrowserView.Audio => narrow ? NarrowAudioColumns : AudioColumns,
             _ => narrow ? NarrowTextureColumns : TextureColumns,
         };
@@ -2039,6 +2115,109 @@ internal sealed class BrowserForm : Form
         {
             _ = RenderMeshInspectorAsync(state);
         }
+    }
+
+    private IReadOnlyList<AssetRow> BuildSkinRows(BrowserState state)
+    {
+        List<AssetRow> rows = new();
+        bool allArchives = string.IsNullOrEmpty(state.ArchivePath);
+        string query = state.Query.Trim();
+        string needle = query.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
+            ? query[2..]
+            : query;
+        HashSet<string> seen = new(StringComparer.Ordinal);
+        foreach (AssetEntry entry in _assets)
+        {
+            if (entry.ClassHash != AssetClass.Skin)
+            {
+                continue;
+            }
+
+            if (!allArchives
+                && !entry.ArchivePath.Equals(state.ArchivePath, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (!seen.Add(BrowserKeys.Skin(entry)))
+            {
+                continue;
+            }
+
+            if (needle.Length > 0
+                && !entry.NameHash.ToString("X16", CultureInfo.InvariantCulture)
+                    .Contains(needle, StringComparison.OrdinalIgnoreCase)
+                && !entry.ArchivePath.Contains(needle, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            rows.Add(new AssetRow(
+                BrowserKeys.Skin(entry),
+                [
+                    $"0x{entry.NameHash:X16}",
+                    Path.GetFileName(entry.ArchivePath),
+                ],
+                entry));
+        }
+
+        rows.Sort((left, right) =>
+        {
+            AssetEntry a = (AssetEntry)left.Tag!;
+            AssetEntry b = (AssetEntry)right.Tag!;
+            int order = a.NameHash.CompareTo(b.NameHash);
+            if (order == 0)
+            {
+                order = string.Compare(
+                    a.ArchivePath, b.ArchivePath, StringComparison.OrdinalIgnoreCase);
+            }
+
+            return order == 0 ? a.Row.BodyOffset.CompareTo(b.Row.BodyOffset) : order;
+        });
+        return rows;
+    }
+
+    private void RenderSkinList(BrowserState state)
+    {
+        _skinView.Visible = false;
+        _textureHost.Visible = true;
+        _textureToolbar.Visible = false;
+        IReadOnlyList<AssetRow> rows = BuildSkinRows(state);
+        string? keep = state.Skin is null ? null : BrowserKeys.Skin(state.Skin);
+        _textureList.SetRows(rows, keep);
+        _textureList.TopIndex = state.ListIndex;
+        if (_textureList.SelectedIndex >= 0)
+        {
+            _textureList.EnsureVisible(_textureList.SelectedIndex);
+        }
+
+        _resultsCount.Text = $"{rows.Count:N0}";
+        _resultsBody.Text =
+            $"{ScopeName(state.ArchivePath)} · {rows.Count:N0} skins · hash order";
+        _openSkin.Visible = true;
+        UpdateOpenSkinEnabled();
+    }
+
+    private void UpdateOpenSkinEnabled()
+    {
+        _openSkin.Enabled = _navigation?.State.View == BrowserView.Skins
+            && _textureList.SelectedRow?.Tag is AssetEntry entry
+            && entry.ClassHash == AssetClass.Skin;
+    }
+
+    private void OpenSkinFromList()
+    {
+        if (_navigation?.State.View != BrowserView.Skins
+            || _textureList.SelectedRow?.Tag is not AssetEntry entry
+            || entry.ClassHash != AssetClass.Skin)
+        {
+            return;
+        }
+
+        SkinOccurrence skin = ToSkin(entry);
+        _navigation.SetSkinListSelection(skin, _textureList.TopIndex);
+        _navigation.OpenSkin(skin, 0);
+        RenderState();
     }
 
     private void OnMeshSelected()
@@ -2340,7 +2519,7 @@ internal sealed class BrowserForm : Form
                 root,
                 displays,
                 part,
-                SourcePartNote(state, result.Parts, result.BindingError, root));
+                SourcePartNote(state, result.Parts));
             if (part != state.SkinPart)
             {
                 _navigation?.SetSkinPart(part);
@@ -2372,9 +2551,7 @@ internal sealed class BrowserForm : Form
 
     private string SourcePartNote(
         BrowserState state,
-        IReadOnlyList<SkinPartRow> parts,
-        string? bindingError,
-        ulong root)
+        IReadOnlyList<SkinPartRow> parts)
     {
         if (state.Mesh is { } mesh)
         {
@@ -2387,14 +2564,7 @@ internal sealed class BrowserForm : Form
             }
         }
 
-        if (bindingError is not null)
-        {
-            return "The skin binding block could not be read.";
-        }
-
-        return root == 0
-            ? "No explicit skeleton binding."
-            : "Select a part, then Open Skeleton.";
+        return "";
     }
 
     private async Task OpenSkeletonAsync(ulong root)
@@ -3778,6 +3948,14 @@ internal sealed class BrowserForm : Form
             return;
         }
 
+        if (state.View == BrowserView.Skins)
+        {
+            _status.Text =
+                $"{ScopeName(state.ArchivePath)} · {_textureList.Rows.Count:N0} skins · " +
+                $"{archiveCount:N0} archives";
+            return;
+        }
+
         if (state.View == BrowserView.Audio)
         {
             _status.Text =
@@ -3825,7 +4003,10 @@ internal sealed class BrowserForm : Form
     {
         BrowserView.Textures => "Textures",
         BrowserView.Animations => "Animations",
-        BrowserView.Meshes or BrowserView.Skin or BrowserView.Skeleton => "Meshes",
+        BrowserView.Meshes => "Meshes",
+        BrowserView.Skins => "Skins",
+        BrowserView.Skin or BrowserView.Skeleton =>
+            state.Mesh is null ? "Skins" : "Meshes",
         BrowserView.Audio => "Audio",
         BrowserView.Placeholder => state.PlaceholderName,
         _ => "Textures",
@@ -3875,12 +4056,13 @@ internal sealed class BrowserForm : Form
             BrowserView.Textures => $"{archive} / Textures",
             BrowserView.Animations => $"{archive} / Animations",
             BrowserView.Meshes => $"{archive} / Meshes",
+            BrowserView.Skins => $"{archive} / Skins",
             BrowserView.Skin => state.Skin is { } skin
-                ? $"{archive} / Meshes / Skin 0x{skin.Hash:X16}"
-                : $"{archive} / Meshes / Skin",
+                ? $"{archive} / {(state.Mesh is null ? "Skins" : "Meshes")} / Skin 0x{skin.Hash:X16}"
+                : $"{archive} / {(state.Mesh is null ? "Skins" : "Meshes")} / Skin",
             BrowserView.Skeleton => state.Skeleton is { } skeleton
-                ? $"{archive} / Meshes / Skeleton 0x{skeleton.Hash:X16}"
-                : $"{archive} / Meshes / Skeleton",
+                ? $"{archive} / {(state.Mesh is null ? "Skins" : "Meshes")} / Skeleton 0x{skeleton.Hash:X16}"
+                : $"{archive} / {(state.Mesh is null ? "Skins" : "Meshes")} / Skeleton",
             BrowserView.Audio => "SOUNDBANKS / Audio",
             BrowserView.Material => state.Material is { } material
                 ? compact

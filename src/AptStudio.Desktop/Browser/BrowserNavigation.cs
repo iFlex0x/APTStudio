@@ -108,6 +108,19 @@ internal sealed class BrowserNavigation
         State = State with { SkinPart = part };
     }
 
+    public void SetSkinListSelection(SkinOccurrence skin, int listIndex)
+    {
+        ArgumentNullException.ThrowIfNull(skin);
+        State = State with
+        {
+            View = BrowserView.Skins,
+            Skin = skin,
+            SkinPart = 0,
+            Skeleton = null,
+            ListIndex = listIndex,
+        };
+    }
+
     public void OpenSkeleton(SkeletonOccurrence skeleton)
     {
         ArgumentNullException.ThrowIfNull(skeleton);

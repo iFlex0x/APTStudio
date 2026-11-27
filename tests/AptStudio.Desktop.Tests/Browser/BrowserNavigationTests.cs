@@ -288,6 +288,56 @@ public sealed class BrowserNavigationTests
     }
 
     [Fact]
+    public void DirectSkinSelectionAndOpenBackRestoreTheSecondRow()
+    {
+        SkinOccurrence first = new(
+            0x84316AA817823056,
+            @"C:\game\DATAS\LEVELS\SCENE.DPC",
+            @"C:\game\DATAS\COMMON.DPC",
+            5101973);
+        SkinOccurrence second = new(
+            0x84316AA817823056,
+            @"C:\game\DATAS\LEVELS\SCENE.DPC",
+            @"C:\game\DATAS\COMMON.DPC",
+            5102041);
+        BrowserNavigation navigation = new(new BrowserState(
+            BrowserView.Skins,
+            @"C:\game\DATAS\LEVELS\SCENE.DPC",
+            "",
+            TextureFilter.All,
+            null,
+            12,
+            0,
+            ChannelView.Rgb,
+            true,
+            1f,
+            PointF.Empty,
+            null,
+            0,
+            null,
+            null));
+
+        navigation.SetSkinListSelection(first, 11);
+        navigation.SetSkinListSelection(second, 12);
+
+        Assert.Equal(BrowserView.Skins, navigation.State.View);
+        Assert.Equal(second, navigation.State.Skin);
+        Assert.False(navigation.CanBack);
+
+        navigation.OpenSkin(second, 0);
+        Assert.Equal(BrowserView.Skin, navigation.State.View);
+        Assert.Null(navigation.State.Mesh);
+        Assert.True(navigation.CanBack);
+
+        navigation.Back();
+
+        Assert.Equal(BrowserView.Skins, navigation.State.View);
+        Assert.Equal(second, navigation.State.Skin);
+        Assert.Equal(12, navigation.State.ListIndex);
+        Assert.False(navigation.CanBack);
+    }
+
+    [Fact]
     public void SwitchScopeClearsHistory()
     {
         BrowserNavigation navigation = new(TextureState());
