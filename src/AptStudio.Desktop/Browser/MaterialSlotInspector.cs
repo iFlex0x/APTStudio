@@ -31,34 +31,38 @@ internal sealed class MaterialSlotInspector : Panel
     public MaterialSlotInspector()
     {
         BackColor = Theme.Surface;
-        Padding = new Padding(12, 10, 12, 10);
+        Padding = new Padding(14, 13, 14, 10);
 
         _type.Text = "MATERIAL_Z · SLOT";
-        _type.ForeColor = Theme.Muted;
-        _type.Font = new Font("Segoe UI", 8f);
+        _type.ForeColor = BrowserVisual.Faint;
+        _type.Font = BrowserVisual.Section;
         _type.Dock = DockStyle.Top;
-        _type.Height = 16;
+        _type.Height = 15;
 
-        _title.Font = new Font("Segoe UI Semibold", 10f);
+        _title.Font = BrowserVisual.Title;
         _title.ForeColor = Theme.Text;
         _title.Dock = DockStyle.Top;
-        _title.Height = 22;
+        _title.Height = 24;
         _title.AutoEllipsis = true;
 
+        _subtitle.Font = BrowserVisual.UiSmall;
         _subtitle.ForeColor = Theme.Muted;
         _subtitle.Dock = DockStyle.Top;
-        _subtitle.Height = 20;
+        _subtitle.Height = 18;
         _subtitle.AutoEllipsis = true;
 
+        _context.Font = BrowserVisual.UiSmall;
         _context.ForeColor = Theme.Muted;
         _context.Dock = DockStyle.Top;
-        _context.Height = 34;
+        _context.Height = 30;
         _context.AutoEllipsis = true;
 
         _preview.Dock = DockStyle.Fill;
+        BrowserVisual.Frame(_preview);
 
         _copies.DropDownStyle = ComboBoxStyle.DropDownList;
         _copies.Width = 200;
+        _copies.Font = BrowserVisual.UiSmall;
         _copies.BackColor = Theme.Background;
         _copies.ForeColor = Theme.Text;
         _copies.FlatStyle = FlatStyle.Flat;
@@ -73,6 +77,7 @@ internal sealed class MaterialSlotInspector : Panel
             CopyChanged?.Invoke(this, _copyIndex);
         };
         _copiesLabel.Text = "Copy";
+        _copiesLabel.Font = BrowserVisual.RowSmall;
         _copiesLabel.ForeColor = Theme.Muted;
         _copiesLabel.AutoSize = true;
         _copiesLabel.Margin = new Padding(0, 5, 4, 0);
@@ -87,31 +92,40 @@ internal sealed class MaterialSlotInspector : Panel
         TableLayoutPanel controls = new()
         {
             Dock = DockStyle.Top,
-            Height = 28,
-            ColumnCount = 4,
+            Height = 30,
+            ColumnCount = 2,
             RowCount = 1,
             BackColor = Theme.Surface,
         };
         controls.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         controls.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        controls.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        controls.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         _copies.Dock = DockStyle.Fill;
         _copies.Anchor = AnchorStyles.Left | AnchorStyles.Right;
         controls.Controls.Add(_copiesLabel, 0, 0);
         controls.Controls.Add(_copies, 1, 0);
-        controls.Controls.Add(_fit, 2, 0);
-        controls.Controls.Add(_actual, 3, 0);
+
+        FlowLayoutPanel viewRow = new()
+        {
+            Dock = DockStyle.Top,
+            AutoSize = true,
+            BackColor = Theme.Surface,
+            Padding = new Padding(0, 4, 0, 0),
+        };
+        viewRow.Controls.Add(_fit);
+        viewRow.Controls.Add(_actual);
 
         _open.Text = "Open texture";
         _open.FlatStyle = FlatStyle.Flat;
         _open.BackColor = Theme.Accent;
-        _open.ForeColor = Color.FromArgb(6, 32, 43);
-        _open.Font = new Font("Segoe UI Semibold", 9f);
+        _open.ForeColor = BrowserVisual.PrimaryText;
+        _open.Font = BrowserVisual.UiSemibold;
         _open.AutoSize = true;
+        _open.MinimumSize = new Size(0, 26);
+        _open.MaximumSize = new Size(int.MaxValue, 26);
         _open.Padding = new Padding(10, 3, 10, 3);
         _open.UseVisualStyleBackColor = false;
         _open.FlatAppearance.BorderSize = 0;
+        _open.FlatAppearance.MouseOverBackColor = Color.FromArgb(111, 208, 251);
         _open.Click += (_, _) => OpenTextureRequested?.Invoke(this, EventArgs.Empty);
 
         FlowLayoutPanel actions = new()
@@ -119,16 +133,18 @@ internal sealed class MaterialSlotInspector : Panel
             AutoSize = true,
             Dock = DockStyle.Top,
             BackColor = Theme.Surface,
-            Padding = new Padding(0, 5, 0, 0),
+            Padding = new Padding(0, 8, 0, 0),
         };
         actions.Controls.Add(_open);
 
         _details.Text = "Details";
         _details.FlatStyle = FlatStyle.Flat;
         _details.ForeColor = Theme.Muted;
+        _details.Font = BrowserVisual.RowSmall;
         _details.BackColor = Theme.Surface;
         _details.UseVisualStyleBackColor = false;
         _details.FlatAppearance.BorderSize = 0;
+        _details.FlatAppearance.MouseOverBackColor = BrowserVisual.SurfaceHover;
         _details.AutoSize = true;
         _details.Click += (_, _) => _detailsPanel.Visible = !_detailsPanel.Visible;
 
@@ -141,7 +157,7 @@ internal sealed class MaterialSlotInspector : Panel
         {
             Dock = DockStyle.Fill,
             ColumnCount = 1,
-            RowCount = 9,
+            RowCount = 10,
             BackColor = Theme.Surface,
         };
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
@@ -153,15 +169,17 @@ internal sealed class MaterialSlotInspector : Panel
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         layout.Controls.Add(_type, 0, 0);
         layout.Controls.Add(_title, 0, 1);
         layout.Controls.Add(_subtitle, 0, 2);
         layout.Controls.Add(_context, 0, 3);
         layout.Controls.Add(_preview, 0, 4);
         layout.Controls.Add(controls, 0, 5);
-        layout.Controls.Add(actions, 0, 6);
-        layout.Controls.Add(_details, 0, 7);
-        layout.Controls.Add(_detailsPanel, 0, 8);
+        layout.Controls.Add(viewRow, 0, 6);
+        layout.Controls.Add(actions, 0, 7);
+        layout.Controls.Add(_details, 0, 8);
+        layout.Controls.Add(_detailsPanel, 0, 9);
         Controls.Add(layout);
         ShowEmpty();
     }
@@ -291,31 +309,31 @@ internal sealed class MaterialSlotInspector : Panel
             Dock = DockStyle.Top,
             AutoSize = true,
             ColumnCount = 2,
-            RowCount = 6,
+            RowCount = 7,
             BackColor = Theme.Surface,
             Padding = new Padding(0, 4, 0, 0),
         };
-        facts.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 110));
+        facts.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 96));
         facts.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         AddFact(facts, 0, "Material", $"0x{data.Head.NameHash:X16}");
         AddFact(facts, 1, "Code", data.Code);
         AddFact(facts, 2, "Binding", slot.Role.Binding);
         AddFact(facts, 3, "Archive", occurrence.ArchiveName);
-        AddFact(facts, 4, "Body", occurrence.BodyArchiveName);
-        AddFact(facts, 5, "Mips", occurrence.Head.MipCount.ToString(CultureInfo.InvariantCulture));
+        AddFact(facts, 4, "Data", occurrence.BodyArchiveName);
+        AddFact(facts, 5, "Offset", occurrence.BodyOffset.ToString("N0", CultureInfo.InvariantCulture));
+        AddFact(facts, 6, "Mips", occurrence.Head.MipCount.ToString(CultureInfo.InvariantCulture));
         _detailsPanel.Controls.Add(facts);
     }
 
-    private static string ArchiveLabel(TextureOccurrence occurrence) =>
-        occurrence.IsExternal
-            ? $"{occurrence.ArchiveName} → {occurrence.BodyArchiveName}"
-            : occurrence.ArchiveName;
+    private static string ArchiveLabel(TextureOccurrence occurrence) => occurrence.ArchiveName;
 
     private static void AddFact(TableLayoutPanel table, int row, string name, string value)
-    {        table.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+    {
+        table.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         table.Controls.Add(new Label
         {
             Text = name,
+            Font = BrowserVisual.RowSmall,
             ForeColor = Theme.Muted,
             AutoSize = true,
             Margin = new Padding(0, 1, 6, 1),
@@ -323,6 +341,7 @@ internal sealed class MaterialSlotInspector : Panel
         table.Controls.Add(new Label
         {
             Text = value,
+            Font = BrowserVisual.UiSmall,
             ForeColor = Theme.Text,
             AutoSize = true,
             Margin = new Padding(0, 1, 0, 1),
@@ -334,11 +353,16 @@ internal sealed class MaterialSlotInspector : Panel
         button.FlatStyle = FlatStyle.Flat;
         button.BackColor = Theme.Surface;
         button.ForeColor = Theme.Muted;
+        button.Font = BrowserVisual.RowSmall;
         button.UseVisualStyleBackColor = false;
         button.FlatAppearance.BorderSize = 1;
-        button.FlatAppearance.BorderColor = Theme.Border;
-        button.Height = 23;
+        button.FlatAppearance.BorderColor = BrowserVisual.BorderStrong;
+        button.FlatAppearance.MouseOverBackColor = BrowserVisual.SurfaceHover;
+        button.Height = 24;
+        button.MinimumSize = new Size(0, 24);
+        button.MaximumSize = new Size(int.MaxValue, 24);
         button.AutoSize = true;
-        button.Margin = new Padding(4, 1, 0, 0);
+        button.Padding = new Padding(5, 2, 5, 2);
+        button.Margin = new Padding(4, 0, 0, 0);
     }
 }

@@ -14,12 +14,10 @@ internal sealed record MaterialUseRow(MaterialTextureUse Use, int Slot)
 
 internal sealed class MaterialChooserView : Panel
 {
-    private readonly Label _summary = new();
-    private readonly Label _source = new();
     private readonly Label _selected = new();
     private readonly Button _open = new();
     private readonly DataGridView _grid = new();
-    private readonly Font _monoFont = new("Consolas", 9f);
+    private readonly Font _monoFont = new("Consolas", 8.625f);
     private IReadOnlyList<MaterialUseRow> _rows = Array.Empty<MaterialUseRow>();
     private int _selectedIndex = -1;
     private bool _suppress;
@@ -29,45 +27,35 @@ internal sealed class MaterialChooserView : Panel
         BackColor = Theme.Background;
         Padding = new Padding(0);
 
-        _summary.AutoEllipsis = true;
-        _summary.Font = new Font("Segoe UI Semibold", 9.5f);
-        _summary.ForeColor = Theme.Text;
-        _summary.Dock = DockStyle.Top;
-        _summary.Height = 22;
-        _summary.Padding = new Padding(0, 2, 0, 0);
-
-        _source.AutoEllipsis = true;
-        _source.ForeColor = Theme.Muted;
-        _source.Dock = DockStyle.Top;
-        _source.Height = 20;
-
         _selected.AutoEllipsis = true;
-        _selected.ForeColor = Theme.Muted;
+        _selected.Font = BrowserVisual.RowSmall;
+        _selected.ForeColor = BrowserVisual.Faint;
         _selected.Dock = DockStyle.Bottom;
-        _selected.Height = 22;
-        _selected.Padding = new Padding(0, 3, 0, 0);
+        _selected.Height = 20;
+        _selected.Padding = new Padding(0, 2, 0, 0);
 
         _open.Text = "Open material";
         _open.FlatStyle = FlatStyle.Flat;
         _open.BackColor = Theme.Accent;
-        _open.ForeColor = Color.FromArgb(6, 32, 43);
-        _open.Font = new Font("Segoe UI Semibold", 9f);
+        _open.ForeColor = BrowserVisual.PrimaryText;
+        _open.Font = BrowserVisual.UiSemibold;
         _open.AutoSize = false;
-        _open.Width = 112;
+        _open.Width = 120;
         _open.Height = 26;
         _open.UseVisualStyleBackColor = false;
         _open.FlatAppearance.BorderSize = 0;
+        _open.FlatAppearance.MouseOverBackColor = Color.FromArgb(111, 208, 251);
         _open.Enabled = false;
         _open.Click += (_, _) => OpenSelected();
 
         FlowLayoutPanel bar = new()
         {
             Dock = DockStyle.Top,
-            Height = 32,
+            Height = 38,
             FlowDirection = FlowDirection.LeftToRight,
             WrapContents = false,
             BackColor = Theme.Background,
-            Padding = new Padding(0, 2, 0, 2),
+            Padding = new Padding(0, 4, 0, 4),
         };
         bar.Controls.Add(_open);
 
@@ -75,8 +63,6 @@ internal sealed class MaterialChooserView : Panel
         Controls.Add(_grid);
         Controls.Add(_selected);
         Controls.Add(bar);
-        Controls.Add(_source);
-        Controls.Add(_summary);
     }
 
     public event EventHandler? SelectionChanged;
@@ -88,7 +74,7 @@ internal sealed class MaterialChooserView : Panel
 
     public int RowCount => _rows.Count;
 
-    public void SetRows(IReadOnlyList<MaterialUseRow> rows, ulong sourceHash, int archiveCount)
+    public void SetRows(IReadOnlyList<MaterialUseRow> rows)
     {
         _rows = rows;
         _suppress = true;
@@ -105,8 +91,6 @@ internal sealed class MaterialChooserView : Panel
                 _grid.Rows[index].Tag = row;
             }
 
-            _summary.Text = $"All archives · {rows.Count:N0} uses in {archiveCount:N0} archives";
-            _source.Text = $"Source texture 0x{sourceHash:X16}";
             _open.Enabled = false;
             _selected.Text = rows.Count == 0 ? "No material uses." : "Select a material occurrence.";
             _selectedIndex = rows.Count == 0 ? -1 : 0;
@@ -176,53 +160,30 @@ internal sealed class MaterialChooserView : Panel
     private void ConfigureGrid()
     {
         _grid.Dock = DockStyle.Fill;
-        _grid.BackgroundColor = Theme.Background;
-        _grid.BorderStyle = BorderStyle.None;
-        _grid.CellBorderStyle = DataGridViewCellBorderStyle.SingleHorizontal;
-        _grid.GridColor = Theme.Border;
-        _grid.RowHeadersVisible = false;
-        _grid.AllowUserToAddRows = false;
-        _grid.AllowUserToDeleteRows = false;
-        _grid.AllowUserToResizeRows = false;
-        _grid.ReadOnly = true;
+        BrowserVisual.StyleQuietGrid(_grid);
         _grid.MultiSelect = false;
         _grid.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
         _grid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
-        _grid.ColumnHeadersHeight = 26;
-        _grid.RowTemplate.Height = 26;
-        _grid.EnableHeadersVisualStyles = false;
-        _grid.ColumnHeadersDefaultCellStyle.BackColor = Theme.GridHeader;
-        _grid.ColumnHeadersDefaultCellStyle.ForeColor = Theme.Muted;
-        _grid.ColumnHeadersDefaultCellStyle.SelectionBackColor = Theme.GridHeader;
-        _grid.ColumnHeadersDefaultCellStyle.SelectionForeColor = Theme.Muted;
-        _grid.DefaultCellStyle.BackColor = Theme.Background;
-        _grid.DefaultCellStyle.ForeColor = Theme.Text;
-        _grid.DefaultCellStyle.SelectionBackColor = Theme.Selection;
-        _grid.DefaultCellStyle.SelectionForeColor = Theme.Text;
-        _grid.AlternatingRowsDefaultCellStyle.BackColor = Theme.GridAlt;
-        _grid.AlternatingRowsDefaultCellStyle.ForeColor = Theme.Text;
-        _grid.AlternatingRowsDefaultCellStyle.SelectionBackColor = Theme.Selection;
-        _grid.AlternatingRowsDefaultCellStyle.SelectionForeColor = Theme.Text;
         _grid.Columns.Add(new DataGridViewTextBoxColumn
         {
-            HeaderText = "Material",
-            FillWeight = 34,
+            HeaderText = "MATERIAL",
+            FillWeight = 40,
             DefaultCellStyle = { Font = _monoFont },
         });
         _grid.Columns.Add(new DataGridViewTextBoxColumn
         {
-            HeaderText = "Code",
-            FillWeight = 22,
+            HeaderText = "CODE",
+            FillWeight = 24,
         });
         _grid.Columns.Add(new DataGridViewTextBoxColumn
         {
-            HeaderText = "Archive",
-            FillWeight = 26,
+            HeaderText = "ARCHIVE",
+            FillWeight = 28,
         });
         _grid.Columns.Add(new DataGridViewTextBoxColumn
         {
-            HeaderText = "Slot",
-            FillWeight = 10,
+            HeaderText = "SLOT",
+            FillWeight = 8,
             DefaultCellStyle = { Alignment = DataGridViewContentAlignment.MiddleRight },
         });
         _grid.SelectionChanged += (_, _) =>

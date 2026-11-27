@@ -34,41 +34,47 @@ internal sealed class AnimationInspector : Panel
     public AnimationInspector()
     {
         BackColor = Theme.Surface;
-        Padding = new Padding(12, 10, 12, 10);
+        Padding = new Padding(14, 13, 14, 10);
 
         _type.Text = "ANIMATION_Z · CLIP";
-        _type.ForeColor = Theme.Muted;
-        _type.Font = new Font("Segoe UI", 8f);
+        _type.ForeColor = BrowserVisual.Faint;
+        _type.Font = BrowserVisual.Section;
         _type.Dock = DockStyle.Top;
-        _type.Height = 16;
+        _type.Height = 15;
 
-        _hash.Font = new Font("Consolas", 10.5f, FontStyle.Bold);
+        _hash.Font = BrowserVisual.MonoStrong;
         _hash.ForeColor = Theme.Text;
         _hash.Dock = DockStyle.Top;
         _hash.Height = 22;
         _hash.AutoEllipsis = true;
 
+        _subtitle.Font = BrowserVisual.UiSmall;
         _subtitle.ForeColor = Theme.Muted;
         _subtitle.Dock = DockStyle.Top;
-        _subtitle.Height = 20;
+        _subtitle.Height = 18;
         _subtitle.AutoEllipsis = true;
 
+        _candidate.Font = BrowserVisual.UiSmall;
         _candidate.ForeColor = Theme.Muted;
         _candidate.Dock = DockStyle.Top;
-        _candidate.Height = 20;
+        _candidate.Height = 18;
         _candidate.AutoEllipsis = true;
 
         _preview.Dock = DockStyle.Fill;
+        BrowserVisual.Frame(_preview);
 
         _play.Text = "Play";
         _play.FlatStyle = FlatStyle.Flat;
         _play.BackColor = Theme.Accent;
-        _play.ForeColor = Color.FromArgb(6, 32, 43);
-        _play.Font = new Font("Segoe UI Semibold", 9f);
+        _play.ForeColor = BrowserVisual.PrimaryText;
+        _play.Font = BrowserVisual.UiSemibold;
         _play.AutoSize = true;
+        _play.MinimumSize = new Size(0, 26);
+        _play.MaximumSize = new Size(int.MaxValue, 26);
         _play.Padding = new Padding(10, 3, 10, 3);
         _play.UseVisualStyleBackColor = false;
         _play.FlatAppearance.BorderSize = 0;
+        _play.FlatAppearance.MouseOverBackColor = Color.FromArgb(111, 208, 251);
         _play.Enabled = false;
         _play.Click += (_, _) => TogglePlay();
 
@@ -77,7 +83,8 @@ internal sealed class AnimationInspector : Panel
         _scrub.TickStyle = TickStyle.None;
         _scrub.AutoSize = false;
         _scrub.Height = 26;
-        _scrub.Width = 160;
+        _scrub.Dock = DockStyle.Fill;
+        _scrub.Margin = new Padding(8, 0, 8, 0);
         _scrub.Enabled = false;
         _scrub.ValueChanged += (_, _) =>
         {
@@ -98,21 +105,27 @@ internal sealed class AnimationInspector : Panel
         };
 
         _frame.Text = "frame -";
+        _frame.Font = BrowserVisual.RowSmall;
         _frame.ForeColor = Theme.Muted;
         _frame.AutoSize = true;
-        _frame.Margin = new Padding(4, 7, 4, 0);
+        _frame.Anchor = AnchorStyles.Right;
+        _frame.Margin = new Padding(0);
 
         _skinLabel.Text = "Preview skin";
+        _skinLabel.Font = BrowserVisual.RowSmall;
         _skinLabel.ForeColor = Theme.Muted;
         _skinLabel.AutoSize = true;
-        _skinLabel.Margin = new Padding(10, 7, 4, 0);
+        _skinLabel.Margin = new Padding(0, 6, 6, 0);
 
         _skin.DropDownStyle = ComboBoxStyle.DropDownList;
         _skin.Width = 210;
+        _skin.Font = BrowserVisual.UiSmall;
         _skin.BackColor = Theme.Background;
         _skin.ForeColor = Theme.Text;
         _skin.FlatStyle = FlatStyle.Flat;
         _skin.Enabled = false;
+        _skin.Dock = DockStyle.Fill;
+        _skin.Anchor = AnchorStyles.Left | AnchorStyles.Right;
         _skin.SelectedIndexChanged += (_, _) =>
         {
             if (_loading || _skin.SelectedIndex < 0 || _skin.SelectedIndex >= _candidates.Count)
@@ -128,35 +141,49 @@ internal sealed class AnimationInspector : Panel
         _large.FlatStyle = FlatStyle.Flat;
         _large.BackColor = Theme.Surface;
         _large.ForeColor = Theme.Muted;
+        _large.Font = BrowserVisual.UiSmall;
         _large.UseVisualStyleBackColor = false;
         _large.FlatAppearance.BorderSize = 1;
-        _large.FlatAppearance.BorderColor = Theme.Border;
+        _large.FlatAppearance.BorderColor = BrowserVisual.BorderStrong;
+        _large.FlatAppearance.MouseOverBackColor = BrowserVisual.SurfaceHover;
         _large.AutoSize = true;
+        _large.MinimumSize = new Size(0, 26);
+        _large.MaximumSize = new Size(int.MaxValue, 26);
         _large.Padding = new Padding(8, 3, 8, 3);
         _large.Enabled = false;
         _large.Click += (_, _) => OpenLargePreview();
 
-        FlowLayoutPanel playRow = new()
+        TableLayoutPanel playRow = new()
         {
             Dock = DockStyle.Top,
-            AutoSize = true,
-            WrapContents = false,
+            Height = 30,
+            ColumnCount = 3,
+            RowCount = 1,
             BackColor = Theme.Surface,
+            Margin = new Padding(0),
+            Padding = new Padding(0, 2, 0, 2),
         };
-        playRow.Controls.Add(_play);
-        playRow.Controls.Add(_scrub);
-        playRow.Controls.Add(_frame);
+        playRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        playRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        playRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        playRow.Controls.Add(_play, 0, 0);
+        playRow.Controls.Add(_scrub, 1, 0);
+        playRow.Controls.Add(_frame, 2, 0);
 
-        FlowLayoutPanel skinRow = new()
+        TableLayoutPanel skinRow = new()
         {
             Dock = DockStyle.Top,
-            AutoSize = true,
-            WrapContents = false,
+            Height = 30,
+            ColumnCount = 2,
+            RowCount = 1,
             BackColor = Theme.Surface,
+            Margin = new Padding(0),
             Padding = new Padding(0, 3, 0, 0),
         };
-        skinRow.Controls.Add(_skinLabel);
-        skinRow.Controls.Add(_skin);
+        skinRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        skinRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        skinRow.Controls.Add(_skinLabel, 0, 0);
+        skinRow.Controls.Add(_skin, 1, 0);
 
         FlowLayoutPanel actions = new()
         {
@@ -164,7 +191,7 @@ internal sealed class AnimationInspector : Panel
             AutoSize = true,
             WrapContents = false,
             BackColor = Theme.Surface,
-            Padding = new Padding(0, 5, 0, 0),
+            Padding = new Padding(0, 8, 0, 0),
         };
         actions.Controls.Add(_large);
 
@@ -297,7 +324,7 @@ internal sealed class AnimationInspector : Panel
             foreach (AnimationSkinCandidate candidate in candidates)
             {
                 _skin.Items.Add(
-                    $"0x{candidate.SkinHash:X16} · {candidate.Matched}/{candidate.AnimationBones} · candidate");
+                    $"0x{candidate.SkinHash:X16} · {candidate.Matched}/{candidate.AnimationBones}");
             }
 
             AnimationData data = ReadData();

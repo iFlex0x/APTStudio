@@ -5,9 +5,8 @@ namespace AptStudio.Desktop.Browser;
 
 internal sealed class MaterialSlotsView : Panel
 {
-    private readonly Label _summary = new();
     private readonly DataGridView _grid = new();
-    private readonly Font _monoFont = new("Consolas", 9f);
+    private readonly Font _monoFont = new("Consolas", 8.625f);
     private MaterialData? _data;
     private int _selectedSlot = -1;
     private bool _suppress;
@@ -15,15 +14,8 @@ internal sealed class MaterialSlotsView : Panel
     public MaterialSlotsView()
     {
         BackColor = Theme.Background;
-        _summary.Dock = DockStyle.Top;
-        _summary.Height = 24;
-        _summary.ForeColor = Theme.Muted;
-        _summary.AutoEllipsis = true;
-        _summary.Padding = new Padding(0, 4, 0, 0);
-
         ConfigureGrid();
         Controls.Add(_grid);
-        Controls.Add(_summary);
     }
 
     public event EventHandler? SelectionChanged;
@@ -35,8 +27,7 @@ internal sealed class MaterialSlotsView : Panel
     public void SetMaterial(
         MaterialData data,
         int sourceSlot,
-        Func<ulong, int> copyCount,
-        string archive)
+        Func<ulong, int> copyCount)
     {
         _data = data;
         _suppress = true;
@@ -54,9 +45,6 @@ internal sealed class MaterialSlotsView : Panel
                 _grid.Rows[index].Tag = slot.Index;
             }
 
-            _summary.Text =
-                $"0x{data.Head.NameHash:X16} · {data.Code} · {archive} · " +
-                $"{data.Slots.Count} filled of {MaterialSlotRoles.Count} slots";
             _selectedSlot = sourceSlot;
             int row = RowForSlot(sourceSlot);
             if (row >= 0)
@@ -127,59 +115,36 @@ internal sealed class MaterialSlotsView : Panel
     private void ConfigureGrid()
     {
         _grid.Dock = DockStyle.Fill;
-        _grid.BackgroundColor = Theme.Background;
-        _grid.BorderStyle = BorderStyle.None;
-        _grid.CellBorderStyle = DataGridViewCellBorderStyle.SingleHorizontal;
-        _grid.GridColor = Theme.Border;
-        _grid.RowHeadersVisible = false;
-        _grid.AllowUserToAddRows = false;
-        _grid.AllowUserToDeleteRows = false;
-        _grid.AllowUserToResizeRows = false;
-        _grid.ReadOnly = true;
+        BrowserVisual.StyleQuietGrid(_grid);
         _grid.MultiSelect = false;
         _grid.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
         _grid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
-        _grid.ColumnHeadersHeight = 26;
-        _grid.RowTemplate.Height = 26;
-        _grid.EnableHeadersVisualStyles = false;
-        _grid.ColumnHeadersDefaultCellStyle.BackColor = Theme.GridHeader;
-        _grid.ColumnHeadersDefaultCellStyle.ForeColor = Theme.Muted;
-        _grid.ColumnHeadersDefaultCellStyle.SelectionBackColor = Theme.GridHeader;
-        _grid.ColumnHeadersDefaultCellStyle.SelectionForeColor = Theme.Muted;
-        _grid.DefaultCellStyle.BackColor = Theme.Background;
-        _grid.DefaultCellStyle.ForeColor = Theme.Text;
-        _grid.DefaultCellStyle.SelectionBackColor = Theme.Selection;
-        _grid.DefaultCellStyle.SelectionForeColor = Theme.Text;
-        _grid.AlternatingRowsDefaultCellStyle.BackColor = Theme.GridAlt;
-        _grid.AlternatingRowsDefaultCellStyle.ForeColor = Theme.Text;
-        _grid.AlternatingRowsDefaultCellStyle.SelectionBackColor = Theme.Selection;
-        _grid.AlternatingRowsDefaultCellStyle.SelectionForeColor = Theme.Text;
         _grid.Columns.Add(new DataGridViewTextBoxColumn
         {
-            HeaderText = "Slot",
-            FillWeight = 10,
+            HeaderText = "SLOT",
+            FillWeight = 8,
             DefaultCellStyle = { Alignment = DataGridViewContentAlignment.MiddleRight },
         });
         _grid.Columns.Add(new DataGridViewTextBoxColumn
         {
-            HeaderText = "Role",
-            FillWeight = 28,
+            HeaderText = "ROLE",
+            FillWeight = 20,
         });
         _grid.Columns.Add(new DataGridViewTextBoxColumn
         {
-            HeaderText = "Binding",
-            FillWeight = 24,
+            HeaderText = "BINDING",
+            FillWeight = 18,
         });
         _grid.Columns.Add(new DataGridViewTextBoxColumn
         {
-            HeaderText = "Texture",
-            FillWeight = 30,
+            HeaderText = "TEXTURE",
+            FillWeight = 42,
             DefaultCellStyle = { Font = _monoFont },
         });
         _grid.Columns.Add(new DataGridViewTextBoxColumn
         {
-            HeaderText = "Copies",
-            FillWeight = 10,
+            HeaderText = "COPIES",
+            FillWeight = 12,
             DefaultCellStyle = { Alignment = DataGridViewContentAlignment.MiddleRight },
         });
         _grid.SelectionChanged += (_, _) =>

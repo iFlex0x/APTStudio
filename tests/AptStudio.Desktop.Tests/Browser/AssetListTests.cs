@@ -61,5 +61,46 @@ public sealed class AssetListTests
         Assert.Equal("a", list.SelectedRow?.Key);
     }
 
+    [Fact]
+    public void SelectAllKeepsPreviewOwner()
+    {
+        using AssetList list = new();
+        list.SetRows([Row("a"), Row("b"), Row("c")], "b");
+
+        list.SelectAll();
+
+        Assert.Equal(3, list.SelectedKeys.Count);
+        Assert.Equal("b", list.SelectedRow?.Key);
+        Assert.Equal("b", list.CurrentKey);
+    }
+
+    [Fact]
+    public void SelectedIndexUpdatesCurrentKey()
+    {
+        using AssetList list = new();
+        list.SetRows([Row("a"), Row("b"), Row("c")], null);
+
+        list.SelectedIndex = 2;
+
+        Assert.Equal("c", list.CurrentKey);
+    }
+
+    [Fact]
+    public void TopIndexScrollsWithoutNativeAutoScroll()
+    {
+        using AssetList list = new();
+        List<AssetRow> rows = new();
+        for (int index = 0; index < 100; index++)
+        {
+            rows.Add(Row($"row-{index}"));
+        }
+
+        list.SetRows(rows, null);
+        list.TopIndex = 10;
+
+        Assert.Equal(10, list.TopIndex);
+        Assert.Equal("row-10", list.Rows[list.TopIndex].Key);
+    }
+
     private static AssetRow Row(string key) => new(key, [key], key);
 }

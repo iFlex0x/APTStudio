@@ -16,6 +16,7 @@ internal sealed class TextureInspector : Panel
     private readonly ComboBox _mip = new();
     private readonly ComboBox _copies = new();
     private readonly Label _copiesLabel = new();
+    private readonly ChannelSegments _channelSegments = new();
     private readonly FlowLayoutPanel _channels = new();
     private readonly FlowLayoutPanel _copyRow = new();
     private readonly FlowLayoutPanel _actions = new();
@@ -27,7 +28,6 @@ internal sealed class TextureInspector : Panel
     private readonly Button _details = new();
     private readonly Panel _detailsPanel = new();
     private readonly LoadGeneration _generation = new();
-    private readonly Dictionary<ChannelView, Button> _channelButtons = new();
     private TextureOccurrence? _occurrence;
     private TextureEntry? _texture;
     private IReadOnlyList<TextureOccurrence> _copyList = Array.Empty<TextureOccurrence>();
@@ -41,32 +41,35 @@ internal sealed class TextureInspector : Panel
     public TextureInspector()
     {
         BackColor = Theme.Surface;
-        Padding = new Padding(12, 10, 12, 10);
+        Padding = new Padding(14, 13, 14, 10);
 
         _type.Text = "BITMAP_Z · TEXTURE";
-        _type.ForeColor = Theme.Muted;
-        _type.Font = new Font("Segoe UI", 8f);
+        _type.ForeColor = BrowserVisual.Faint;
+        _type.Font = BrowserVisual.Section;
         _type.Dock = DockStyle.Top;
-        _type.Height = 16;
+        _type.Height = 15;
 
-        _hash.Font = new Font("Consolas", 10.5f, FontStyle.Bold);
+        _hash.Font = BrowserVisual.MonoStrong;
         _hash.ForeColor = Theme.Text;
         _hash.Dock = DockStyle.Top;
         _hash.Height = 22;
         _hash.AutoEllipsis = true;
 
+        _subtitle.Font = BrowserVisual.UiSmall;
         _subtitle.ForeColor = Theme.Muted;
         _subtitle.Dock = DockStyle.Top;
-        _subtitle.Height = 20;
+        _subtitle.Height = 18;
         _subtitle.AutoEllipsis = true;
 
+        _context.Font = BrowserVisual.UiSmall;
         _context.ForeColor = Theme.Muted;
         _context.Dock = DockStyle.Top;
-        _context.Height = 32;
+        _context.Height = 30;
         _context.AutoEllipsis = true;
         _context.Visible = false;
 
         _preview.Dock = DockStyle.Fill;
+        BrowserVisual.Frame(_preview);
         _preview.ZoomChanged += (_, _) =>
         {
             if (!_suppress)
@@ -110,33 +113,40 @@ internal sealed class TextureInspector : Panel
         };
 
         _copiesLabel.Text = "Copy";
+        _copiesLabel.Font = BrowserVisual.RowSmall;
         _copiesLabel.ForeColor = Theme.Muted;
         _copiesLabel.AutoSize = true;
-        _copiesLabel.Margin = new Padding(8, 5, 2, 0);
+        _copiesLabel.Margin = new Padding(8, 5, 4, 0);
 
-        ConfigureChannelButtons();
+        _channelSegments.SelectedChannelChanged += (_, channel) =>
+        {
+            _channel = channel;
+            _preview.SetChannel(channel);
+            _channelSegments.SelectedChannel = channel;
+            ChannelChanged?.Invoke(this, channel);
+        };
+
         _channels.AutoSize = true;
         _channels.WrapContents = true;
-        _channels.Margin = new Padding(0, 3, 0, 0);
+        _channels.Margin = new Padding(0, 6, 0, 0);
         _channels.Controls.Add(new Label
         {
             Text = "Mip",
+            Font = BrowserVisual.RowSmall,
             ForeColor = Theme.Muted,
             AutoSize = true,
-            Margin = new Padding(0, 5, 4, 0),
+            Margin = new Padding(0, 6, 4, 0),
         });
         _channels.Controls.Add(_mip);
         _channels.Controls.Add(new Label
         {
             Text = "Channel",
+            Font = BrowserVisual.RowSmall,
             ForeColor = Theme.Muted,
             AutoSize = true,
-            Margin = new Padding(10, 5, 4, 0),
+            Margin = new Padding(10, 6, 4, 0),
         });
-        foreach (Button button in _channelButtons.Values)
-        {
-            _channels.Controls.Add(button);
-        }
+        _channels.Controls.Add(_channelSegments);
 
         _fit.Text = "Fit";
         _actual.Text = "1:1";
@@ -156,12 +166,15 @@ internal sealed class TextureInspector : Panel
         _usedBy.Text = "Used by";
         _usedBy.FlatStyle = FlatStyle.Flat;
         _usedBy.BackColor = Theme.Accent;
-        _usedBy.ForeColor = Color.FromArgb(6, 32, 43);
-        _usedBy.Font = new Font("Segoe UI Semibold", 9f);
+        _usedBy.ForeColor = BrowserVisual.PrimaryText;
+        _usedBy.Font = BrowserVisual.UiSemibold;
         _usedBy.AutoSize = true;
-        _usedBy.Padding = new Padding(10, 3, 10, 3);
+        _usedBy.MinimumSize = new Size(0, 26);
+        _usedBy.MaximumSize = new Size(int.MaxValue, 26);
+        _usedBy.Padding = new Padding(8, 3, 8, 3);
         _usedBy.UseVisualStyleBackColor = false;
         _usedBy.FlatAppearance.BorderSize = 0;
+        _usedBy.FlatAppearance.MouseOverBackColor = Color.FromArgb(111, 208, 251);
         _usedBy.Click += (_, _) => UsedByRequested?.Invoke(this, EventArgs.Empty);
 
         _reveal.Text = "Reveal in archive";
@@ -175,7 +188,7 @@ internal sealed class TextureInspector : Panel
 
         _actions.AutoSize = true;
         _actions.WrapContents = true;
-        _actions.Margin = new Padding(0, 6, 0, 0);
+        _actions.Margin = new Padding(0, 8, 0, 0);
         _actions.Controls.Add(_usedBy);
         _actions.Controls.Add(_reveal);
         _actions.Controls.Add(_export);
@@ -183,9 +196,11 @@ internal sealed class TextureInspector : Panel
         _details.Text = "Details";
         _details.FlatStyle = FlatStyle.Flat;
         _details.ForeColor = Theme.Muted;
+        _details.Font = BrowserVisual.RowSmall;
         _details.BackColor = Theme.Surface;
         _details.UseVisualStyleBackColor = false;
         _details.FlatAppearance.BorderSize = 0;
+        _details.FlatAppearance.MouseOverBackColor = BrowserVisual.SurfaceHover;
         _details.AutoSize = true;
         _details.Padding = new Padding(0, 3, 0, 0);
         _details.Click += (_, _) =>
@@ -367,47 +382,9 @@ internal sealed class TextureInspector : Panel
         return header;
     }
 
-    private void ConfigureChannelButtons()
-    {
-        foreach (ChannelView channel in Enum.GetValues<ChannelView>())
-        {
-            Button button = new()
-            {
-                Text = channel switch
-                {
-                    ChannelView.Rgb => "RGB",
-                    ChannelView.Alpha => "A",
-                    ChannelView.Red => "R",
-                    ChannelView.Green => "G",
-                    _ => "B",
-                },
-                Width = channel == ChannelView.Rgb ? 38 : 26,
-                Height = 23,
-                FlatStyle = FlatStyle.Flat,
-                UseVisualStyleBackColor = false,
-                Margin = new Padding(0, 1, 2, 0),
-            };
-            button.FlatAppearance.BorderSize = 1;
-            button.FlatAppearance.BorderColor = Theme.Border;
-            button.Click += (_, _) =>
-            {
-                _channel = channel;
-                _preview.SetChannel(channel);
-                SetChannelButtons();
-                ChannelChanged?.Invoke(this, channel);
-            };
-            _channelButtons[channel] = button;
-        }
-    }
-
     private void SetChannelButtons()
     {
-        foreach ((ChannelView channel, Button button) in _channelButtons)
-        {
-            bool selected = channel == _channel;
-            button.BackColor = selected ? Theme.Selection : Theme.Surface;
-            button.ForeColor = selected ? Theme.Text : Theme.Muted;
-        }
+        _channelSegments.SelectedChannel = _channel;
     }
 
     private async Task DecodeAsync(
@@ -488,9 +465,7 @@ internal sealed class TextureInspector : Panel
     }
 
     private static string Subtitle(TextureOccurrence occurrence, int width, int height) =>
-        $"{occurrence.ArchiveName}" +
-        (occurrence.IsExternal ? $" → {occurrence.BodyArchiveName}" : "") +
-        $" · {width} × {height} · {occurrence.Head.MipCount} mips";
+        $"{occurrence.ArchiveName} · {width} × {height} · {occurrence.Head.MipCount} mips";
 
     private void UpdateDetails(
         TextureOccurrence occurrence,
@@ -506,10 +481,10 @@ internal sealed class TextureInspector : Panel
             BackColor = Theme.Surface,
             Padding = new Padding(0, 4, 0, 0),
         };
-        facts.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 110));
+        facts.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 96));
         facts.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         AddFact(facts, 0, "Archive", occurrence.ArchiveName);
-        AddFact(facts, 1, "Body", occurrence.BodyArchiveName);
+        AddFact(facts, 1, "Data", occurrence.BodyArchiveName);
         AddFact(facts, 2, "Offset", occurrence.BodyOffset.ToString("N0", CultureInfo.InvariantCulture));
         AddFact(facts, 3, "Mips", occurrence.Head.MipCount.ToString(CultureInfo.InvariantCulture));
         AddFact(facts, 4, "Format", occurrence.Head.Format.DisplayName);
@@ -523,6 +498,7 @@ internal sealed class TextureInspector : Panel
         Label label = new()
         {
             Text = name,
+            Font = BrowserVisual.RowSmall,
             ForeColor = Theme.Muted,
             AutoSize = true,
             Margin = new Padding(0, 1, 6, 1),
@@ -530,6 +506,7 @@ internal sealed class TextureInspector : Panel
         Label text = new()
         {
             Text = value,
+            Font = BrowserVisual.UiSmall,
             ForeColor = Theme.Text,
             AutoSize = true,
             Margin = new Padding(0, 1, 0, 1),
@@ -544,7 +521,7 @@ internal sealed class TextureInspector : Panel
         combo.BackColor = Theme.Background;
         combo.ForeColor = Theme.Text;
         combo.FlatStyle = FlatStyle.Flat;
-        combo.Height = 23;
+        combo.Font = BrowserVisual.UiSmall;
     }
 
     private static void StyleSmallButton(Button button)
@@ -552,12 +529,17 @@ internal sealed class TextureInspector : Panel
         button.FlatStyle = FlatStyle.Flat;
         button.BackColor = Theme.Surface;
         button.ForeColor = Theme.Muted;
+        button.Font = BrowserVisual.RowSmall;
         button.UseVisualStyleBackColor = false;
         button.FlatAppearance.BorderSize = 1;
-        button.FlatAppearance.BorderColor = Theme.Border;
-        button.Height = 23;
+        button.FlatAppearance.BorderColor = BrowserVisual.BorderStrong;
+        button.FlatAppearance.MouseOverBackColor = BrowserVisual.SurfaceHover;
+        button.Height = 24;
+        button.MinimumSize = new Size(0, 24);
+        button.MaximumSize = new Size(int.MaxValue, 24);
         button.AutoSize = true;
-        button.Margin = new Padding(2, 1, 2, 0);
+        button.Padding = new Padding(5, 2, 5, 2);
+        button.Margin = new Padding(2, 0, 2, 0);
     }
 
     private static void StyleActionButton(Button button)
@@ -565,11 +547,15 @@ internal sealed class TextureInspector : Panel
         button.FlatStyle = FlatStyle.Flat;
         button.BackColor = Theme.Surface;
         button.ForeColor = Theme.Text;
+        button.Font = BrowserVisual.UiSmall;
         button.UseVisualStyleBackColor = false;
         button.FlatAppearance.BorderSize = 1;
-        button.FlatAppearance.BorderColor = Theme.Border;
+        button.FlatAppearance.BorderColor = BrowserVisual.BorderStrong;
+        button.FlatAppearance.MouseOverBackColor = BrowserVisual.SurfaceHover;
         button.AutoSize = true;
-        button.Padding = new Padding(8, 3, 8, 3);
-        button.Margin = new Padding(0, 0, 4, 4);
+        button.MinimumSize = new Size(0, 26);
+        button.MaximumSize = new Size(int.MaxValue, 26);
+        button.Padding = new Padding(6, 3, 6, 3);
+        button.Margin = new Padding(0, 0, 3, 4);
     }
 }

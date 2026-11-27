@@ -1,3 +1,5 @@
+using System.ComponentModel;
+
 namespace AptStudio.Desktop.Browser;
 
 internal sealed record ArchiveChoice(string Path, int Count)
@@ -9,114 +11,145 @@ internal sealed record ArchiveChoice(string Path, int Count)
     public override string ToString() => Name;
 }
 
-internal sealed record TypeChoice(string Name, int Count, bool Wired)
-{
-    public string Display => Count > 0 ? $"{Name}  {Count:N0}" : Name;
-}
+internal sealed record TypeChoice(string Name, int Count, bool Wired);
 
 internal sealed class ScopePanel : Panel
 {
     private readonly Label _game = new();
     private readonly Label _gameSub = new();
-    private readonly Button _openGame = new();
+    private readonly Label _gameDot = new();
+    private readonly Label _openGame = new();
     private readonly ListBox _archives = new();
     private readonly FlowLayoutPanel _types = new();
-    private readonly Button _legacy = new();
-    private readonly Dictionary<string, Button> _typeButtons = new(StringComparer.Ordinal);
+    private readonly Label _legacy = new();
+    private readonly List<ScopeRow> _typeRows = new();
     private readonly ToolTip _tip = new();
+    private int _hoverIndex = -1;
     private bool _suppress;
 
     public ScopePanel()
     {
         BackColor = Theme.Surface;
-        Padding = new Padding(8);
+        Padding = new Padding(10, 12, 10, 8);
+
+        _gameDot.Text = "●";
+        _gameDot.Font = new Font("Segoe UI", 7f);
+        _gameDot.ForeColor = Theme.Accent;
+        _gameDot.TextAlign = ContentAlignment.MiddleCenter;
+        _gameDot.Dock = DockStyle.Fill;
+        _gameDot.Margin = new Padding(2, 0, 0, 0);
 
         _game.Text = "No game folder";
-        _game.Font = new Font("Segoe UI Semibold", 9.5f);
+        _game.Font = BrowserVisual.Row;
         _game.ForeColor = Theme.Text;
         _game.AutoEllipsis = true;
-        _game.Dock = DockStyle.Top;
-        _game.Height = 22;
+        _game.Dock = DockStyle.Fill;
+        _game.TextAlign = ContentAlignment.MiddleLeft;
+        _game.Margin = new Padding(4, 0, 0, 0);
+
+        TableLayoutPanel gameLine = new()
+        {
+            Dock = DockStyle.Top,
+            Height = 22,
+            ColumnCount = 2,
+            RowCount = 1,
+            BackColor = Theme.Surface,
+            Margin = new Padding(0),
+        };
+        gameLine.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 14));
+        gameLine.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        gameLine.Controls.Add(_gameDot, 0, 0);
+        gameLine.Controls.Add(_game, 1, 0);
 
         _gameSub.Text = "Open a supported game folder.";
-        _gameSub.ForeColor = Theme.Muted;
+        _gameSub.Font = BrowserVisual.RowSmall;
+        _gameSub.ForeColor = BrowserVisual.Faint;
         _gameSub.AutoEllipsis = true;
         _gameSub.Dock = DockStyle.Top;
         _gameSub.Height = 18;
+        _gameSub.Padding = new Padding(18, 0, 0, 0);
+        _gameSub.TextAlign = ContentAlignment.MiddleLeft;
 
-        _openGame.Text = "Open Game Folder";
-        _openGame.FlatStyle = FlatStyle.Flat;
-        _openGame.BackColor = Theme.Surface;
+        _openGame.Text = "Open game folder";
+        _openGame.Font = BrowserVisual.RowSmall;
         _openGame.ForeColor = Theme.Accent;
-        _openGame.UseVisualStyleBackColor = false;
-        _openGame.FlatAppearance.BorderSize = 0;
-        _openGame.FlatAppearance.MouseOverBackColor = Theme.SelectionInactive;
-        _openGame.FlatAppearance.MouseDownBackColor = Theme.Selection;
+        _openGame.BackColor = Theme.Surface;
         _openGame.Dock = DockStyle.Top;
-        _openGame.Height = 26;
-        _openGame.Margin = new Padding(0, 4, 0, 8);
+        _openGame.Height = 24;
+        _openGame.TextAlign = ContentAlignment.MiddleLeft;
+        _openGame.AutoEllipsis = true;
+        _openGame.Cursor = Cursors.Hand;
+        _openGame.MouseEnter += (_, _) => _openGame.ForeColor = Theme.Text;
+        _openGame.MouseLeave += (_, _) => _openGame.ForeColor = Theme.Accent;
         _openGame.Click += (_, _) => OpenGameRequested?.Invoke(this, EventArgs.Empty);
 
         _archives.BorderStyle = BorderStyle.None;
         _archives.BackColor = Theme.Surface;
         _archives.ForeColor = Theme.Text;
+        _archives.Font = BrowserVisual.Row;
         _archives.DrawMode = DrawMode.OwnerDrawFixed;
-        _archives.ItemHeight = 22;
+        _archives.ItemHeight = 28;
         _archives.IntegralHeight = false;
-        _archives.HorizontalScrollbar = true;
+        _archives.HorizontalScrollbar = false;
         _archives.Dock = DockStyle.Fill;
+        _archives.Margin = new Padding(0);
         _archives.DrawItem += OnArchiveDraw;
         _archives.SelectedIndexChanged += OnArchiveSelected;
         _archives.MouseMove += OnArchiveMouseMove;
+        _archives.MouseLeave += (_, _) => SetHover(-1);
 
         _types.AutoScroll = true;
         _types.FlowDirection = FlowDirection.TopDown;
         _types.WrapContents = false;
         _types.Dock = DockStyle.Fill;
         _types.BackColor = Theme.Surface;
-        _types.SizeChanged += (_, _) => ResizeTypeButtons();
+        _types.Margin = new Padding(0);
+        _types.Padding = new Padding(0);
+        _types.SizeChanged += (_, _) => ResizeTypeRows();
 
         _legacy.Text = "Open legacy browser";
-        _legacy.FlatStyle = FlatStyle.Flat;
+        _legacy.Font = BrowserVisual.RowSmall;
+        _legacy.ForeColor = BrowserVisual.Faint;
         _legacy.BackColor = Theme.Surface;
-        _legacy.ForeColor = Theme.Muted;
-        _legacy.UseVisualStyleBackColor = false;
-        _legacy.FlatAppearance.BorderSize = 0;
-        _legacy.FlatAppearance.MouseOverBackColor = Theme.SelectionInactive;
-        _legacy.FlatAppearance.MouseDownBackColor = Theme.Selection;
-        _legacy.Dock = DockStyle.Bottom;
-        _legacy.Height = 26;
-        _legacy.Margin = new Padding(0, 8, 0, 0);
+        _legacy.Dock = DockStyle.Fill;
+        _legacy.TextAlign = ContentAlignment.MiddleLeft;
+        _legacy.AutoEllipsis = true;
+        _legacy.Cursor = Cursors.Hand;
+        _legacy.MouseEnter += (_, _) => _legacy.ForeColor = Theme.Text;
+        _legacy.MouseLeave += (_, _) => _legacy.ForeColor = BrowserVisual.Faint;
         _legacy.Click += (_, _) => LegacyRequested?.Invoke(this, EventArgs.Empty);
 
-        TableLayoutPanel gameBlock = new()
-        {
-            Dock = DockStyle.Top,
-            AutoSize = true,
-            ColumnCount = 1,
-            RowCount = 4,
-            BackColor = Theme.Surface,
-        };
-        gameBlock.Controls.Add(_openGame, 0, 0);
-        gameBlock.Controls.Add(_game, 0, 1);
-        gameBlock.Controls.Add(_gameSub, 0, 2);
-        gameBlock.Controls.Add(new Panel { Dock = DockStyle.Top, Height = 8, BackColor = Theme.Surface }, 0, 3);
+        Label gameLabel = BrowserVisual.CreateSectionLabel("GAME");
+        Label scopeLabel = BrowserVisual.CreateSectionLabel("SCOPE");
+        Label typeLabel = BrowserVisual.CreateSectionLabel("ASSET TYPE");
 
         TableLayoutPanel root = new()
         {
             Dock = DockStyle.Fill,
             ColumnCount = 1,
-            RowCount = 4,
+            RowCount = 10,
             BackColor = Theme.Surface,
         };
         root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        root.RowStyles.Add(new RowStyle(SizeType.Percent, 46));
-        root.RowStyles.Add(new RowStyle(SizeType.Percent, 54));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
-        root.Controls.Add(gameBlock, 0, 0);
-        root.Controls.Add(_archives, 0, 1);
-        root.Controls.Add(_types, 0, 2);
-        root.Controls.Add(_legacy, 0, 3);
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 12));
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        root.RowStyles.Add(new RowStyle(SizeType.Percent, 45));
+        root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        root.RowStyles.Add(new RowStyle(SizeType.Percent, 55));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
+        root.Controls.Add(gameLabel, 0, 0);
+        root.Controls.Add(gameLine, 0, 1);
+        root.Controls.Add(_gameSub, 0, 2);
+        root.Controls.Add(_openGame, 0, 3);
+        root.Controls.Add(new Panel { Dock = DockStyle.Fill, BackColor = Theme.Surface }, 0, 4);
+        root.Controls.Add(scopeLabel, 0, 5);
+        root.Controls.Add(_archives, 0, 6);
+        root.Controls.Add(typeLabel, 0, 7);
+        root.Controls.Add(_types, 0, 8);
+        root.Controls.Add(_legacy, 0, 9);
         Controls.Add(root);
     }
 
@@ -128,10 +161,10 @@ internal sealed class ScopePanel : Panel
 
     public event EventHandler? LegacyRequested;
 
-    public void SetGame(string name, string version)
+    public void SetGame(string name, string sub)
     {
         _game.Text = name;
-        _gameSub.Text = version;
+        _gameSub.Text = sub;
     }
 
     public void SetArchives(IReadOnlyList<ArchiveChoice> archives, string? selectedPath)
@@ -191,31 +224,25 @@ internal sealed class ScopePanel : Panel
         try
         {
             _types.Controls.Clear();
-            _typeButtons.Clear();
+            _typeRows.Clear();
             foreach (TypeChoice type in types)
             {
-                Button button = new()
+                ScopeRow row = new()
                 {
-                    Text = type.Display,
-                    Tag = type.Name,
-                    Width = Math.Max(80, _types.ClientSize.Width - 4),
-                    Height = 26,
+                    Text = type.Name,
+                    Count = type.Count,
+                    ShowCount = type.Count > 0,
+                    Width = RowWidth(),
                     Margin = new Padding(0, 0, 0, 2),
-                    FlatStyle = FlatStyle.Flat,
-                    TextAlign = ContentAlignment.MiddleLeft,
-                    Padding = new Padding(7, 0, 0, 0),
-                    UseVisualStyleBackColor = false,
                 };
-                button.FlatAppearance.BorderSize = 0;
-                button.FlatAppearance.MouseOverBackColor = Theme.SelectionInactive;
-                button.FlatAppearance.MouseDownBackColor = Theme.Selection;
-                button.Click += (_, _) => TypeSelected?.Invoke((string)button.Tag);
-                _types.Controls.Add(button);
-                _typeButtons[type.Name] = button;
+                TypeChoice captured = type;
+                row.Clicked += () => TypeSelected?.Invoke(captured.Name);
+                _types.Controls.Add(row);
+                _typeRows.Add(row);
             }
 
             SetActiveType(active);
-            ResizeTypeButtons();
+            ResizeTypeRows();
         }
         finally
         {
@@ -225,23 +252,30 @@ internal sealed class ScopePanel : Panel
 
     public void SetActiveType(string active)
     {
-        foreach ((string name, Button button) in _typeButtons)
+        for (int index = 0; index < _typeRows.Count; index++)
         {
-            bool selected = name.Equals(active, StringComparison.Ordinal);
-            button.BackColor = selected ? Theme.Selection : Theme.Surface;
-            button.ForeColor = selected ? Theme.Text : Theme.Muted;
+            ScopeRow row = _typeRows[index];
+            row.Active = row.Text.Equals(active, StringComparison.Ordinal);
         }
     }
 
-    private void ResizeTypeButtons()
+    private int RowWidth()
     {
-        int width = Math.Max(
-            80,
-            _types.ClientSize.Width - 4
-                - (_types.VerticalScroll.Visible ? SystemInformation.VerticalScrollBarWidth : 0));
-        foreach (Button button in _typeButtons.Values)
+        int width = _types.ClientSize.Width - 2;
+        if (_types.VerticalScroll.Visible)
         {
-            button.Width = width;
+            width -= SystemInformation.VerticalScrollBarWidth;
+        }
+
+        return Math.Max(80, width);
+    }
+
+    private void ResizeTypeRows()
+    {
+        int width = RowWidth();
+        foreach (ScopeRow row in _typeRows)
+        {
+            row.Width = width;
         }
     }
 
@@ -259,11 +293,23 @@ internal sealed class ScopePanel : Panel
     private void OnArchiveMouseMove(object? sender, MouseEventArgs e)
     {
         int index = _archives.IndexFromPoint(e.Location);
+        SetHover(index);
         if (index >= 0 && index < _archives.Items.Count
             && _archives.Items[index] is ArchiveChoice choice)
         {
             _tip.SetToolTip(_archives, choice.Name);
         }
+    }
+
+    private void SetHover(int index)
+    {
+        if (_hoverIndex == index)
+        {
+            return;
+        }
+
+        _hoverIndex = index;
+        _archives.Invalidate();
     }
 
     protected override void Dispose(bool disposing)
@@ -277,31 +323,177 @@ internal sealed class ScopePanel : Panel
     }
 
     private void OnArchiveDraw(object? sender, DrawItemEventArgs e)
-    {        if (e.Index < 0 || e.Index >= _archives.Items.Count
+    {
+        if (e.Index < 0 || e.Index >= _archives.Items.Count
             || _archives.Items[e.Index] is not ArchiveChoice choice)
         {
             return;
         }
 
         bool selected = (e.State & DrawItemState.Selected) != 0;
-        using SolidBrush background = new(selected ? Theme.Selection : Theme.Surface);
-        e.Graphics.FillRectangle(background, e.Bounds);
+        bool hover = e.Index == _hoverIndex && !selected;
+        Color background = selected
+            ? BrowserVisual.SurfaceRaised
+            : hover ? BrowserVisual.SurfaceHover : Theme.Surface;
+        using SolidBrush brush = new(background);
+        e.Graphics.FillRectangle(brush, e.Bounds);
+
+        if (selected)
+        {
+            using SolidBrush accent = new(Theme.Accent);
+            e.Graphics.FillRectangle(
+                accent, e.Bounds.X, e.Bounds.Y, 2, e.Bounds.Height);
+            using Pen edge = new(BrowserVisual.BorderStrong);
+            e.Graphics.DrawRectangle(
+                edge,
+                e.Bounds.X,
+                e.Bounds.Y,
+                e.Bounds.Width - 1,
+                e.Bounds.Height - 1);
+        }
+
+        int countWidth = choice.Count > 0 ? 52 : 0;
+        int countX = e.Bounds.Right - countWidth - 38;
         TextRenderer.DrawText(
             e.Graphics,
             choice.Name,
-            Font,
-            new Rectangle(e.Bounds.X + 4, e.Bounds.Y, e.Bounds.Width - 70, e.Bounds.Height),
-            selected ? Theme.Text : Theme.Text,
-            TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+            BrowserVisual.Row,
+            new Rectangle(
+                e.Bounds.X + 8,
+                e.Bounds.Y,
+                Math.Max(20, countX - e.Bounds.X - 8),
+                e.Bounds.Height),
+            selected ? Theme.Text : Theme.Muted,
+            TextFormatFlags.Left | TextFormatFlags.VerticalCenter
+                | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
         if (choice.Count > 0)
         {
             TextRenderer.DrawText(
                 e.Graphics,
                 choice.Count.ToString("N0"),
-                Font,
-                new Rectangle(e.Bounds.Right - 64, e.Bounds.Y, 60, e.Bounds.Height),
-                selected ? Theme.Text : Theme.Muted,
+                BrowserVisual.RowSmall,
+                new Rectangle(countX, e.Bounds.Y, countWidth, e.Bounds.Height),
+                selected ? Theme.Muted : BrowserVisual.Faint,
                 TextFormatFlags.Right | TextFormatFlags.VerticalCenter);
         }
+    }
+}
+
+internal sealed class ScopeRow : Control
+{
+    private bool _active;
+    private bool _hover;
+
+    public ScopeRow()
+    {
+        SetStyle(
+            ControlStyles.AllPaintingInWmPaint
+            | ControlStyles.OptimizedDoubleBuffer
+            | ControlStyles.UserPaint
+            | ControlStyles.ResizeRedraw
+            | ControlStyles.Selectable,
+            true);
+        Height = 28;
+        TabStop = true;
+        Cursor = Cursors.Hand;
+        SetStyle(ControlStyles.StandardClick, true);
+    }
+
+    public event Action? Clicked;
+
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public int Count { get; set; }
+
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public bool ShowCount { get; set; }
+
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public bool Active
+    {
+        get => _active;
+        set
+        {
+            if (_active == value)
+            {
+                return;
+            }
+
+            _active = value;
+            Invalidate();
+        }
+    }
+
+    protected override void OnPaint(PaintEventArgs e)
+    {
+        Color background = _active
+            ? BrowserVisual.SurfaceRaised
+            : _hover ? BrowserVisual.SurfaceHover : Theme.Surface;
+        using SolidBrush brush = new(background);
+        e.Graphics.FillRectangle(brush, ClientRectangle);
+
+        if (_active)
+        {
+            using SolidBrush accent = new(Theme.Accent);
+            e.Graphics.FillRectangle(accent, 0, 0, 2, ClientSize.Height);
+            using Pen edge = new(BrowserVisual.BorderStrong);
+            e.Graphics.DrawRectangle(edge, 0, 0, ClientSize.Width - 1, ClientSize.Height - 1);
+        }
+        else if (Focused)
+        {
+            using Pen focus = new(Theme.Accent);
+            e.Graphics.DrawRectangle(focus, 0, 0, ClientSize.Width - 1, ClientSize.Height - 1);
+        }
+
+        int countWidth = ShowCount ? 54 : 0;
+        TextRenderer.DrawText(
+            e.Graphics,
+            Text,
+            BrowserVisual.Row,
+            new Rectangle(8, 0, Math.Max(20, ClientSize.Width - 16 - countWidth), ClientSize.Height),
+            _active ? Theme.Text : Theme.Muted,
+            TextFormatFlags.Left | TextFormatFlags.VerticalCenter
+                | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+        if (ShowCount)
+        {
+            TextRenderer.DrawText(
+                e.Graphics,
+                Count.ToString("N0"),
+                BrowserVisual.RowSmall,
+                new Rectangle(ClientSize.Width - countWidth - 6, 0, countWidth, ClientSize.Height),
+                _active ? Theme.Muted : BrowserVisual.Faint,
+                TextFormatFlags.Right | TextFormatFlags.VerticalCenter);
+        }
+    }
+
+    protected override void OnMouseEnter(EventArgs e)
+    {
+        _hover = true;
+        Invalidate();
+        base.OnMouseEnter(e);
+    }
+
+    protected override void OnMouseLeave(EventArgs e)
+    {
+        _hover = false;
+        Invalidate();
+        base.OnMouseLeave(e);
+    }
+
+    protected override void OnClick(EventArgs e)
+    {
+        Focus();
+        Clicked?.Invoke();
+        base.OnClick(e);
+    }
+
+    protected override void OnKeyDown(KeyEventArgs e)
+    {
+        if (e.KeyCode is Keys.Enter or Keys.Space)
+        {
+            Clicked?.Invoke();
+            e.Handled = true;
+        }
+
+        base.OnKeyDown(e);
     }
 }

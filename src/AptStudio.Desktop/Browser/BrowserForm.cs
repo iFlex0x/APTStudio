@@ -26,6 +26,7 @@ internal sealed class BrowserForm : Form
     private ThumbnailCache _thumbnailCache = null!;
     private IReadOnlyList<TextureOccurrence> _inspectorCopies = Array.Empty<TextureOccurrence>();
     private readonly Label _resultsTitle = new();
+    private readonly Label _resultsCount = new();
     private readonly Label _resultsBody = new();
     private readonly Label _inspectorTitle = new();
     private readonly Label _inspectorBody = new();
@@ -34,12 +35,13 @@ internal sealed class BrowserForm : Form
     private readonly Button _forward = new();
     private readonly Button _scopeButton = new();
     private readonly Button _filterButton = new();
-    private readonly FlowLayoutPanel _textureToolbar = new();
+    private readonly TableLayoutPanel _textureToolbar = new();
     private readonly ComboBox _sortCombo = new();
     private readonly Button _sortDirection = new();
     private readonly Button _exportSelected = new();
     private readonly Label _selectionCount = new();
     private bool _suppressSort;
+    private int _chooserArchiveCount;
     private readonly TextBox _search = new();
     private readonly Label _status = new();
     private readonly System.Windows.Forms.Timer _searchTimer = new() { Interval = 150 };
@@ -53,6 +55,12 @@ internal sealed class BrowserForm : Form
         new("Mips", 48, Right: true, Muted: true),
         new("Format", 56, Muted: true),
         new("Storage", 64, Muted: true),
+    ];
+    private static readonly AssetColumn[] NarrowTextureColumns =
+    [
+        new("Hash", 0, Flexible: true, Mono: true),
+        new("Size", 88, Right: true, Muted: true),
+        new("Mips", 44, Right: true, Muted: true),
     ];
     private static readonly AssetColumn[] AnimationColumns =
     [
@@ -185,9 +193,9 @@ internal sealed class BrowserForm : Form
             RowCount = 3,
             BackColor = Theme.Background,
         };
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 44));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 46));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 26));
 
         root.Controls.Add(BuildTopBar(), 0, 0);
         root.Controls.Add(BuildBody(), 0, 1);
@@ -203,13 +211,13 @@ internal sealed class BrowserForm : Form
             ColumnCount = 6,
             RowCount = 1,
             BackColor = Theme.Surface,
-            Padding = new Padding(8, 0, 8, 0),
+            Padding = new Padding(12, 0, 12, 0),
         };
         bar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         bar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-        bar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 220));
+        bar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         bar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        bar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 180));
+        bar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 220));
         bar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 62));
         bar.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
@@ -217,9 +225,9 @@ internal sealed class BrowserForm : Form
         {
             Text = "APTStudio",
             AutoSize = true,
-            Font = new Font("Segoe UI Semibold", 10f),
+            Font = BrowserVisual.Brand,
             ForeColor = Theme.Text,
-            Margin = new Padding(0, 0, 10, 0),
+            Margin = new Padding(0, 0, 12, 0),
             Anchor = AnchorStyles.Left,
         };
 
@@ -230,32 +238,54 @@ internal sealed class BrowserForm : Form
             Margin = new Padding(0, 0, 8, 0),
             Anchor = AnchorStyles.Left,
         };
-        StyleButton(_back, "Back");
-        StyleButton(_forward, "Forward");
-        _back.Width = 46;
-        _forward.Width = 60;
+        StyleButton(_back, "←");
+        StyleButton(_forward, "→");
+        _back.AutoSize = false;
+        _forward.AutoSize = false;
+        _back.Width = 30;
+        _forward.Width = 30;
         _back.Height = 26;
         _forward.Height = 26;
+        _back.Font = new Font("Segoe UI", 11f);
+        _forward.Font = new Font("Segoe UI", 11f);
+        _back.Padding = new Padding(0);
+        _forward.Padding = new Padding(0);
+        _back.TextAlign = ContentAlignment.MiddleCenter;
+        _forward.TextAlign = ContentAlignment.MiddleCenter;
+        _back.AccessibleName = "Back";
+        _forward.AccessibleName = "Forward";
+        _back.Margin = new Padding(0, 0, 4, 0);
         _back.Enabled = false;
         _forward.Enabled = false;
         nav.Controls.Add(_back);
         nav.Controls.Add(_forward);
 
-        StyleButton(_scopeButton, "Browse: no game");
-        _scopeButton.Width = 212;
-        _scopeButton.Height = 26;
-        _scopeButton.TextAlign = ContentAlignment.MiddleLeft;
+        _scopeButton.Text = "No game";
+        _scopeButton.AutoSize = false;
+        _scopeButton.Width = 96;
+        _scopeButton.Height = 24;
+        _scopeButton.Font = BrowserVisual.RowSmall;
+        _scopeButton.ForeColor = Theme.Muted;
+        _scopeButton.BackColor = Theme.Background;
+        _scopeButton.TextAlign = ContentAlignment.MiddleCenter;
+        _scopeButton.Padding = new Padding(6, 0, 6, 0);
         _scopeButton.AutoEllipsis = true;
-        _scopeButton.Margin = new Padding(0, 0, 8, 0);
+        _scopeButton.FlatAppearance.BorderColor = BrowserVisual.BorderStrong;
+        _scopeButton.FlatAppearance.BorderSize = 1;
+        _scopeButton.FlatAppearance.MouseOverBackColor = BrowserVisual.SurfaceHover;
+        _scopeButton.Margin = new Padding(0, 0, 10, 0);
+        _scopeButton.AccessibleName = "Toggle scope pane";
 
         _crumbs.Dock = DockStyle.Fill;
+        _crumbs.Font = BrowserVisual.RowSmall;
         _crumbs.TextAlign = ContentAlignment.MiddleLeft;
         _crumbs.ForeColor = Theme.Muted;
         _crumbs.AutoEllipsis = true;
-        _crumbs.Margin = new Padding(0, 0, 8, 0);
+        _crumbs.Margin = new Padding(0, 0, 12, 0);
 
-        _search.Width = 172;
+        _search.Width = 206;
         _search.Height = 26;
+        _search.Font = BrowserVisual.Ui;
         _search.PlaceholderText = "hash, dimensions";
         _search.BackColor = Theme.Background;
         _search.ForeColor = Theme.Text;
@@ -265,7 +295,8 @@ internal sealed class BrowserForm : Form
         _search.Enabled = false;
 
         StyleButton(_filterButton, "Filter");
-        _filterButton.Width = 56;
+        _filterButton.AutoSize = false;
+        _filterButton.Width = 54;
         _filterButton.Height = 26;
         _filterButton.Enabled = false;
         _filterButton.Anchor = AnchorStyles.Left;
@@ -283,14 +314,14 @@ internal sealed class BrowserForm : Form
     {
         _outer.Dock = DockStyle.Fill;
         _outer.Orientation = Orientation.Vertical;
-        _outer.SplitterWidth = 4;
+        _outer.SplitterWidth = 2;
         _outer.BackColor = Theme.Border;
         _outer.Panel1.BackColor = Theme.Surface;
         _outer.Panel2.BackColor = Theme.Background;
 
         _inner.Dock = DockStyle.Fill;
         _inner.Orientation = Orientation.Vertical;
-        _inner.SplitterWidth = 4;
+        _inner.SplitterWidth = 2;
         _inner.BackColor = Theme.Border;
         _inner.Panel1.BackColor = Theme.Background;
         _inner.Panel2.BackColor = Theme.Surface;
@@ -299,19 +330,40 @@ internal sealed class BrowserForm : Form
         _outer.Panel1.Controls.Add(_scope);
 
         _results.Dock = DockStyle.Fill;
-        _results.Padding = new Padding(14, 12, 14, 12);
+        _results.Padding = new Padding(14, 12, 14, 0);
         _results.BackColor = Theme.Background;
 
-        _resultsTitle.Dock = DockStyle.Top;
-        _resultsTitle.Height = 26;
-        _resultsTitle.Font = new Font("Segoe UI Semibold", 10f);
+        FlowLayoutPanel titleLine = new()
+        {
+            Dock = DockStyle.Top,
+            Height = 24,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = false,
+            BackColor = Theme.Background,
+            Margin = new Padding(0),
+            Padding = new Padding(0),
+        };
+        _resultsTitle.AutoSize = true;
+        _resultsTitle.Font = BrowserVisual.Title;
         _resultsTitle.ForeColor = Theme.Text;
         _resultsTitle.AutoEllipsis = true;
+        _resultsTitle.TextAlign = ContentAlignment.MiddleLeft;
+        _resultsTitle.Margin = new Padding(0, 0, 10, 0);
+        _resultsCount.AutoSize = true;
+        _resultsCount.Font = BrowserVisual.RowSmall;
+        _resultsCount.ForeColor = Theme.Muted;
+        _resultsCount.TextAlign = ContentAlignment.MiddleLeft;
+        _resultsCount.AutoEllipsis = true;
+        _resultsCount.Margin = new Padding(0, 6, 0, 0);
+        titleLine.Controls.Add(_resultsTitle);
+        titleLine.Controls.Add(_resultsCount);
 
         _resultsBody.Dock = DockStyle.Top;
-        _resultsBody.Height = 80;
+        _resultsBody.Height = 18;
+        _resultsBody.Font = BrowserVisual.RowSmall;
         _resultsBody.ForeColor = Theme.Muted;
         _resultsBody.AutoEllipsis = true;
+        _resultsBody.TextAlign = ContentAlignment.MiddleLeft;
         _resultsBody.Visible = false;
 
         _textureHost.Dock = DockStyle.Fill;
@@ -325,46 +377,68 @@ internal sealed class BrowserForm : Form
         _textureList.ShowThumbnails = true;
 
         _textureToolbar.Dock = DockStyle.Top;
-        _textureToolbar.AutoSize = true;
-        _textureToolbar.WrapContents = true;
+        _textureToolbar.Height = 38;
+        _textureToolbar.ColumnCount = 6;
+        _textureToolbar.RowCount = 1;
         _textureToolbar.BackColor = Theme.Background;
-        _textureToolbar.Padding = new Padding(0, 0, 0, 4);
-        _textureToolbar.Controls.Add(new Label
+        _textureToolbar.Padding = new Padding(0, 6, 0, 4);
+        _textureToolbar.Margin = new Padding(0);
+        _textureToolbar.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        _textureToolbar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        _textureToolbar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        _textureToolbar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        _textureToolbar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        _textureToolbar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        _textureToolbar.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        Label sortLabel = new()
         {
             Text = "Sort",
             ForeColor = Theme.Muted,
+            Font = BrowserVisual.RowSmall,
             AutoSize = true,
-            Margin = new Padding(0, 6, 4, 0),
-        });
+            Anchor = AnchorStyles.Left,
+            Margin = new Padding(0, 0, 5, 0),
+        };
         _sortCombo.DropDownStyle = ComboBoxStyle.DropDownList;
-        _sortCombo.Width = 90;
+        _sortCombo.Width = 124;
+        _sortCombo.Font = BrowserVisual.UiSmall;
         _sortCombo.BackColor = Theme.Background;
         _sortCombo.ForeColor = Theme.Text;
         _sortCombo.FlatStyle = FlatStyle.Flat;
-        _sortCombo.Items.AddRange(["Archive", "Hash", "Size", "Mips"]);
+        _sortCombo.Items.AddRange(["Archive order", "Hash", "Size", "Mips"]);
         _sortCombo.SelectedIndex = 0;
-        _sortCombo.Margin = new Padding(0, 2, 4, 0);
-        _textureToolbar.Controls.Add(_sortCombo);
+        _sortCombo.Anchor = AnchorStyles.Left;
+        _sortCombo.Margin = new Padding(0, 0, 4, 0);
         StyleButton(_sortDirection, "Asc");
-        _sortDirection.Width = 44;
+        _sortDirection.AutoSize = false;
+        _sortDirection.Width = 46;
         _sortDirection.Height = 24;
-        _sortDirection.Margin = new Padding(0, 2, 8, 0);
-        _textureToolbar.Controls.Add(_sortDirection);
+        _sortDirection.Font = BrowserVisual.RowSmall;
+        _sortDirection.Anchor = AnchorStyles.Left;
+        _sortDirection.Margin = new Padding(0, 0, 10, 0);
         StyleButton(_exportSelected, "Export selected");
         _exportSelected.AutoSize = true;
         _exportSelected.Height = 24;
-        _exportSelected.Margin = new Padding(0, 2, 8, 0);
+        _exportSelected.Font = BrowserVisual.RowSmall;
+        _exportSelected.Anchor = AnchorStyles.Left;
+        _exportSelected.Margin = new Padding(0, 0, 8, 0);
         _exportSelected.Enabled = false;
-        _textureToolbar.Controls.Add(_exportSelected);
         _selectionCount.Text = "0 selected";
         _selectionCount.ForeColor = Theme.Muted;
+        _selectionCount.Font = BrowserVisual.RowSmall;
         _selectionCount.AutoSize = true;
-        _selectionCount.Margin = new Padding(0, 6, 0, 0);
-        _textureToolbar.Controls.Add(_selectionCount);
+        _selectionCount.Anchor = AnchorStyles.Right;
+        _selectionCount.Margin = new Padding(0);
+        _selectionCount.TextAlign = ContentAlignment.MiddleRight;
+        _textureToolbar.Controls.Add(sortLabel, 0, 0);
+        _textureToolbar.Controls.Add(_sortCombo, 1, 0);
+        _textureToolbar.Controls.Add(_sortDirection, 2, 0);
+        _textureToolbar.Controls.Add(_exportSelected, 3, 0);
+        _textureToolbar.Controls.Add(new Panel { Dock = DockStyle.Fill, BackColor = Theme.Background }, 4, 0);
+        _textureToolbar.Controls.Add(_selectionCount, 5, 0);
 
         _textureHost.Controls.Add(_textureList);
         _textureHost.Controls.Add(_textureHeader);
-        _textureHost.Controls.Add(_textureToolbar);
 
         _chooser.Dock = DockStyle.Fill;
         _chooser.Visible = false;
@@ -375,8 +449,10 @@ internal sealed class BrowserForm : Form
         _results.Controls.Add(_chooser);
         _results.Controls.Add(_materialSlots);
         _results.Controls.Add(_textureHost);
+        _results.Controls.Add(_textureToolbar);
         _results.Controls.Add(_resultsBody);
-        _results.Controls.Add(_resultsTitle);
+        _results.Controls.Add(titleLine);
+        _textureToolbar.PerformLayout();
 
         ConfigurePanel(_inspector, _inspectorTitle, _inspectorBody);
         _inspector.BackColor = Theme.Surface;
@@ -398,10 +474,11 @@ internal sealed class BrowserForm : Form
     private Control BuildStatus()
     {
         _status.Dock = DockStyle.Fill;
+        _status.Font = BrowserVisual.RowSmall;
         _status.TextAlign = ContentAlignment.MiddleLeft;
-        _status.ForeColor = Theme.Muted;
+        _status.ForeColor = BrowserVisual.Faint;
         _status.BackColor = Theme.Surface;
-        _status.Padding = new Padding(10, 0, 10, 0);
+        _status.Padding = new Padding(14, 0, 14, 0);
         _status.Text = "No game folder selected.";
         return _status;
     }
@@ -409,17 +486,18 @@ internal sealed class BrowserForm : Form
     private static void ConfigurePanel(Panel panel, Label title, Label body)
     {
         panel.Dock = DockStyle.Fill;
-        panel.Padding = new Padding(14, 12, 14, 12);
+        panel.Padding = new Padding(14, 13, 14, 10);
 
         title.Dock = DockStyle.Top;
-        title.Height = 26;
-        title.Font = new Font("Segoe UI Semibold", 10f);
+        title.Height = 24;
+        title.Font = BrowserVisual.Title;
         title.ForeColor = Theme.Text;
         title.AutoEllipsis = true;
         title.Text = "";
 
         body.Dock = DockStyle.Top;
-        body.Height = 80;
+        body.Height = 60;
+        body.Font = BrowserVisual.UiSmall;
         body.ForeColor = Theme.Muted;
         body.AutoEllipsis = true;
         body.Text = "";
@@ -434,10 +512,12 @@ internal sealed class BrowserForm : Form
         button.FlatStyle = FlatStyle.Flat;
         button.BackColor = Theme.Surface;
         button.ForeColor = Theme.Text;
+        button.Font = BrowserVisual.Ui;
         button.UseVisualStyleBackColor = false;
-        button.FlatAppearance.BorderSize = 0;
-        button.FlatAppearance.MouseOverBackColor = Theme.SelectionInactive;
-        button.FlatAppearance.MouseDownBackColor = Theme.Selection;
+        button.FlatAppearance.BorderSize = 1;
+        button.FlatAppearance.BorderColor = BrowserVisual.BorderStrong;
+        button.FlatAppearance.MouseOverBackColor = BrowserVisual.SurfaceHover;
+        button.FlatAppearance.MouseDownBackColor = BrowserVisual.AccentDim;
         button.Margin = new Padding(0, 0, 4, 0);
     }
 
@@ -599,7 +679,7 @@ internal sealed class BrowserForm : Form
         _loading = true;
         _profile = profile;
         Text = $"APTStudio - {profile.Kind}";
-        _scope.SetGame(profile.Kind.ToString(), profile.Root);
+        _scope.SetGame(profile.Kind.ToString(), "read-only");
         _status.Text = "Scanning archives...";
         Stopwatch watch = Stopwatch.StartNew();
         IProgress<CatalogProgress> progress = new Progress<CatalogProgress>(item =>
@@ -952,23 +1032,27 @@ internal sealed class BrowserForm : Form
         if (_navigation is null)
         {
             _resultsTitle.Text = "No game folder";
+            _resultsCount.Text = "";
             _resultsBody.Text = "Open a supported game folder to start.";
+            _resultsBody.Visible = true;
+            _resultsBody.Height = 18;
             _inspectorTitle.Text = "";
             _inspectorBody.Text = "";
             _back.Enabled = false;
             _forward.Enabled = false;
-            _scopeButton.Text = "Browse: no game";
+            _scopeButton.Text = "No game";
             _crumbs.Text = "";
+            _textureToolbar.Visible = false;
             return;
         }
 
         BrowserState state = _navigation.State;
         _scope.SelectArchive(state.ArchivePath);
         _scope.SetActiveType(TypeName(state));
-        _scopeButton.Text = ScopeLabel(state);
+        _scopeButton.Text = _navigation.IsChooserOpen ? "All archives" : ScopeChip(state);
         _back.Enabled = _navigation.CanBack;
         _forward.Enabled = _navigation.CanForward;
-        _crumbs.Text = _navigation.IsChooserOpen ? "Textures / Materials" : Crumbs(state);
+        _crumbs.Text = _navigation.IsChooserOpen ? ChooserCrumbs(state) : Crumbs(state);
         if (_search.Text != state.Query)
         {
             _search.Text = state.Query;
@@ -987,7 +1071,7 @@ internal sealed class BrowserForm : Form
         if (_navigation.IsChooserOpen)
         {
             _textureHost.Visible = false;
-            _resultsBody.Visible = false;
+            _textureToolbar.Visible = false;
             _chooser.Visible = true;
             _materialSlots.Visible = false;
             _slotInspector.Visible = false;
@@ -996,6 +1080,12 @@ internal sealed class BrowserForm : Form
             _inspectorTitle.Visible = false;
             _inspectorBody.Visible = false;
             _resultsTitle.Text = "Materials";
+            _resultsCount.Text = $"{_chooser.RowCount:N0}";
+            _resultsBody.Text =
+                $"All archives · {_chooser.RowCount:N0} uses in {_chooserArchiveCount:N0} archives · " +
+                "select an occurrence to open";
+            _resultsBody.Visible = true;
+            _resultsBody.Height = 18;
             _filterButton.Enabled = false;
             _search.Enabled = false;
             RenderInspector();
@@ -1011,7 +1101,9 @@ internal sealed class BrowserForm : Form
         UpdateFilterButton(state.Filter);
         _textureHost.Visible = state.View == BrowserView.Textures
             || state.View == BrowserView.Animations;
-        _resultsBody.Visible = state.View == BrowserView.Placeholder;
+        _textureToolbar.Visible = state.View is BrowserView.Textures or BrowserView.Animations;
+        _resultsBody.Visible = true;
+        _resultsBody.Height = labelView ? 44 : 18;
 
         switch (state.View)
         {
@@ -1019,24 +1111,46 @@ internal sealed class BrowserForm : Form
                 _resultsTitle.Text = "Textures";
                 SetListMode(false);
                 RenderTextureList(state);
+                _resultsCount.Text = $"{_textureList.Rows.Count:N0}";
+                _resultsBody.Text =
+                    $"{Path.GetFileName(state.ArchivePath)} · {_textureList.Rows.Count:N0} of " +
+                    $"{ArchiveCount(state.ArchivePath):N0} textures · {SortLabel(state)}";
                 break;
             case BrowserView.Animations:
                 _resultsTitle.Text = "Animations";
                 SetListMode(true);
                 RenderAnimationList(state);
+                _resultsCount.Text = $"{_textureList.Rows.Count:N0}";
+                string clipNoun = _textureList.Rows.Count == 1 ? "clip" : "clips";
+                _resultsBody.Text =
+                    $"{Path.GetFileName(state.ArchivePath)} · {_textureList.Rows.Count:N0} " +
+                    $"{clipNoun} · hash order";
                 break;
             case BrowserView.Material:
                 _resultsTitle.Text = "Material";
                 ShowMaterialSlots(state);
                 RenderSlotInspector();
+                _resultsCount.Text =
+                    $"{MaterialFor(state)?.Slots.Count ?? 0:N0} of {MaterialSlotRoles.Count} slots";
+                _resultsBody.Text = state.Material is { } material
+                    ? $"0x{material.Hash:X16} · {material.Code} · {material.ArchiveName} · " +
+                        $"{MaterialFor(state)?.Slots.Count ?? 0:N0} filled of " +
+                        $"{MaterialSlotRoles.Count} slots"
+                    : "";
                 break;
             case BrowserView.LinkedTexture:
                 _resultsTitle.Text = "Material";
                 ShowMaterialSlots(state);
                 RenderInspector();
+                _resultsCount.Text = "";
+                _resultsBody.Text = state.Material is { } linkedMaterial
+                    ? $"0x{linkedMaterial.Hash:X16} · {linkedMaterial.Code} · " +
+                        $"{linkedMaterial.ArchiveName} · slot {state.MaterialSlot}"
+                    : "";
                 break;
             default:
                 _resultsTitle.Text = state.PlaceholderName;
+                _resultsCount.Text = "";
                 _resultsBody.Text =
                     "This view moves in a later slice.\n" +
                     "Use Open legacy browser in the scope pane for the current view.";
@@ -1108,7 +1222,10 @@ internal sealed class BrowserForm : Form
 
     private void SetListMode(bool animations)
     {
-        IReadOnlyList<AssetColumn> columns = animations ? AnimationColumns : TextureColumns;
+        bool narrow = ClientSize.Width < BrowserLayout.CollapseWidth;
+        IReadOnlyList<AssetColumn> columns = animations
+            ? AnimationColumns
+            : narrow ? NarrowTextureColumns : TextureColumns;
         _textureHeader.Columns = columns;
         _textureList.Columns = columns;
         _textureHeader.ShowThumbnails = !animations;
@@ -1398,18 +1515,15 @@ internal sealed class BrowserForm : Form
         }
 
         bool linked = state.View == BrowserView.LinkedTexture;
-        string? context = null;
+        string? context = occurrence.IsExternal ? $"Data in {occurrence.BodyArchiveName}" : null;
         if (linked && state.Material is { } material)
         {
             bool local = _inspectorCopies.Any(copy => copy.ArchiveName.Equals(
                 material.ArchiveName, StringComparison.OrdinalIgnoreCase));
-            context = local
+            string link = local
                 ? $"Linked from {material.ArchiveName} slot {state.MaterialSlot}"
                 : $"No {material.ArchiveName} copy; showing {occurrence.ArchiveName}";
-            if (occurrence.IsExternal)
-            {
-                context += $" (body {occurrence.BodyArchiveName})";
-            }
+            context = context is null ? link : $"{link} · {context}";
         }
 
         _textureInspector.SetTexture(
@@ -1651,7 +1765,8 @@ internal sealed class BrowserForm : Form
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .Count();
         _navigation.OpenChooser();
-        _chooser.SetRows(rows, source.Hash, archiveCount);
+        _chooserArchiveCount = archiveCount;
+        _chooser.SetRows(rows);
         RenderState();
         _chooser.FocusList();
     }
@@ -1826,8 +1941,7 @@ internal sealed class BrowserForm : Form
         _materialSlots.SetMaterial(
             data,
             state.MaterialSlot,
-            hash => counts.GetValueOrDefault(hash),
-            state.Material?.ArchiveName ?? "");
+            hash => counts.GetValueOrDefault(hash));
     }
 
     private void RenderSlotInspector()
@@ -1885,7 +1999,7 @@ internal sealed class BrowserForm : Form
                 : $"No {material.ArchiveName} copy; showing {occurrence.ArchiveName}";
         if (occurrence.IsExternal)
         {
-            context += $" (body {occurrence.BodyArchiveName})";
+            context += $" · Data in {occurrence.BodyArchiveName}";
         }
         _slotInspector.SetSlot(
             data,
@@ -2014,7 +2128,7 @@ internal sealed class BrowserForm : Form
         if (state.View == BrowserView.LinkedTexture && state.LinkedTexture is { } linked)
         {
             string link = linked.IsExternal
-                ? $"{linked.ArchiveName} → {linked.BodyArchiveName}"
+                ? $"{linked.ArchiveName} · data {linked.BodyArchiveName}"
                 : linked.ArchiveName;
             _status.Text = $"{state.Material?.ArchiveName ?? "Material"} · linked {link}";
             return;
@@ -2046,23 +2160,62 @@ internal sealed class BrowserForm : Form
         _ => "Textures",
     };
 
-    private static string ScopeLabel(BrowserState state)
+    private static string ScopeChip(BrowserState state) =>
+        Path.GetFileName(state.ArchivePath);
+
+    private static string SortLabel(BrowserState state)
     {
-        string archive = Path.GetFileName(state.ArchivePath);
-        return $"Browse: {archive} / {TypeName(state)}";
+        string sort = state.Sort switch
+        {
+            TextureSort.Hash => "hash order",
+            TextureSort.Size => "size order",
+            TextureSort.Mips => "mip order",
+            _ => "archive order",
+        };
+        return state.SortDescending ? $"{sort}, descending" : sort;
     }
 
-    private static string Crumbs(BrowserState state) => state.View switch
+    private string Crumbs(BrowserState state)
     {
-        BrowserView.Textures => "Textures",
-        BrowserView.Animations => "Animations",
-        BrowserView.Material => "Material",
-        BrowserView.LinkedTexture => "Material / Linked texture",
-        _ => state.PlaceholderName,
-    };
+        string archive = Path.GetFileName(state.ArchivePath);
+        bool compact = ClientSize.Width < BrowserLayout.CollapseWidth;
+        return state.View switch
+        {
+            BrowserView.Textures => $"{archive} / Textures",
+            BrowserView.Animations => $"{archive} / Animations",
+            BrowserView.Material => state.Material is { } material
+                ? compact
+                    ? $"{archive} / 0x{material.Hash:X16}"
+                    : $"{archive} / Textures / 0x{material.Hash:X16} / Materials"
+                : $"{archive} / Materials",
+            BrowserView.LinkedTexture => state.LinkedTexture is { } linked
+                ? compact
+                    ? $"{archive} / {linked.ArchiveName}"
+                        + (linked.IsExternal ? $" / {linked.BodyArchiveName}" : "")
+                    : $"{archive} / Textures / Materials / {linked.ArchiveName} occurrence"
+                        + (linked.IsExternal ? $" / data {linked.BodyArchiveName}" : "")
+                : $"{archive} / Textures / Materials",
+            _ => $"{archive} / {state.PlaceholderName}",
+        };
+    }
+
+    private string ChooserCrumbs(BrowserState state)
+    {
+        string archive = Path.GetFileName(state.ArchivePath);
+        if (ClientSize.Width < BrowserLayout.CollapseWidth)
+        {
+            return $"{archive} / Materials (all archives)";
+        }
+
+        string source = state.Texture is { } texture
+            ? $"0x{texture.Hash:X16}"
+            : "Source";
+        return $"{archive} / Textures / {source} / Materials (all archives)";
+    }
 
     private void OnResize()
     {
+        bool wasNarrow = _lastNarrow;
         bool narrow = BrowserLayout.ShouldCollapseSidebar(ClientSize.Width);
         if (narrow && !_lastNarrow)
         {
@@ -2075,6 +2228,10 @@ internal sealed class BrowserForm : Form
 
         _lastNarrow = narrow;
         ApplyScopeVisibility();
+        if (wasNarrow != narrow && _navigation is not null)
+        {
+            RenderState();
+        }
     }
 
     private void ToggleScope()
@@ -2086,7 +2243,9 @@ internal sealed class BrowserForm : Form
     private void ApplyScopeVisibility()
     {
         _outer.Panel1Collapsed = !_scopeOpen;
-        _scopeButton.Text = _navigation is null ? "Browse: no game" : ScopeLabel(_navigation.State);
+        _scopeButton.Text = _navigation is null
+            ? "No game"
+            : _navigation.IsChooserOpen ? "All archives" : ScopeChip(_navigation.State);
         _scopeButton.Enabled = true;
     }
 

@@ -6,17 +6,24 @@ namespace AptStudio.Desktop.Browser;
 internal sealed class AssetList : ScrollableControl
 {
     private const int ThumbnailColumnWidth = 38;
-    private const int RowPadding = 8;
+    private const int RowPadding = 14;
     private const int CellGap = 8;
 
-    private readonly Font _monoFont = new("Consolas", 9f);
+    private readonly Font _monoFont = new("Consolas", 8.625f);
     private readonly HashSet<string> _selectedKeys = new(StringComparer.Ordinal);
     private IReadOnlyList<AssetRow> _rows = Array.Empty<AssetRow>();
     private IReadOnlyList<AssetColumn> _columns = Array.Empty<AssetColumn>();
     private int _selectedIndex = -1;
     private int _anchorIndex = -1;
+    private string? _currentKey;
     private bool _showThumbnails = true;
     private bool _allowMultiSelect = true;
+    private int _scrollY;
+    private bool _draggingScroll;
+    private int _dragStartY;
+    private int _dragStartScroll;
+
+    private const int ScrollBarWidth = 10;
 
     public AssetList()
     {
@@ -30,8 +37,8 @@ internal sealed class AssetList : ScrollableControl
         BackColor = Theme.Background;
         ForeColor = Theme.Text;
         TabStop = true;
-        AutoScroll = true;
-        RowHeight = 48;
+        AutoScroll = false;
+        RowHeight = 52;
     }
 
     public event EventHandler? SelectionChanged;
@@ -85,6 +92,22 @@ internal sealed class AssetList : ScrollableControl
         .Where(row => _selectedKeys.Contains(row.Key))
         .ToList();
 
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public string? CurrentKey
+    {
+        get => _currentKey;
+        set
+        {
+            if (_currentKey == value)
+            {
+                return;
+            }
+
+            _currentKey = value;
+            Invalidate();
+        }
+    }
+
     public int RowHeight { get; }
 
     public IReadOnlyList<AssetRow> Rows => _rows;
@@ -115,6 +138,7 @@ internal sealed class AssetList : ScrollableControl
 
             _selectedIndex = next;
             _anchorIndex = next;
+            _currentKey = key;
             Invalidate();
             SelectionChanged?.Invoke(this, EventArgs.Empty);
             EnsureVisible(next);
@@ -124,15 +148,26 @@ internal sealed class AssetList : ScrollableControl
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public int TopIndex
     {
-        get => IsHandleCreated ? Math.Max(0, -AutoScrollPosition.Y / RowHeight) : 0;
+        get => _scrollY / RowHeight;
         set
         {
-            if (IsHandleCreated)
-            {
-                AutoScrollPosition = new Point(0, Math.Max(0, value) * RowHeight);
-                Invalidate();
-            }
+            ScrollTo(Math.Max(0, value) * RowHeight);
+            Invalidate();
         }
+    }
+
+    private int MaxScrollY => Math.Max(0, _rows.Count * RowHeight - ClientSize.Height);
+
+    private void ScrollTo(int y)
+    {
+        int clamped = Math.Clamp(y, 0, MaxScrollY);
+        if (clamped == _scrollY)
+        {
+            return;
+        }
+
+        _scrollY = clamped;
+        Invalidate();
     }
 
     public void SetRows(
@@ -141,7 +176,7 @@ internal sealed class AssetList : ScrollableControl
         IReadOnlyCollection<string>? keepKeys = null)
     {
         _rows = rows ?? Array.Empty<AssetRow>();
-        AutoScrollMinSize = new Size(0, _rows.Count * RowHeight);
+        _scrollY = Math.Clamp(_scrollY, 0, MaxScrollY);
 
         Dictionary<string, int> indexByKey = new(StringComparer.Ordinal);
         for (int index = 0; index < _rows.Count; index++)
@@ -184,6 +219,9 @@ internal sealed class AssetList : ScrollableControl
 
         _selectedIndex = anchor;
         _anchorIndex = anchor;
+        _currentKey = keepKey is not null && indexByKey.ContainsKey(keepKey)
+            ? keepKey
+            : anchor >= 0 ? _rows[anchor].Key : null;
         Invalidate();
     }
 
@@ -223,11 +261,13 @@ internal sealed class AssetList : ScrollableControl
         {
             _selectedIndex = -1;
             _anchorIndex = -1;
+            _currentKey = null;
         }
         else
         {
             _selectedIndex = index;
             _anchorIndex = index;
+            _currentKey = key;
         }
 
         Invalidate();
@@ -247,8 +287,13 @@ internal sealed class AssetList : ScrollableControl
             _selectedKeys.Add(row.Key);
         }
 
-        _selectedIndex = _rows.Count > 0 ? 0 : -1;
+        if (_selectedIndex < 0 || _selectedIndex >= _rows.Count)
+        {
+            _selectedIndex = _rows.Count > 0 ? 0 : -1;
+        }
+
         _anchorIndex = _selectedIndex;
+        _currentKey = _selectedIndex >= 0 ? _rows[_selectedIndex].Key : null;
         Invalidate();
         SelectionChanged?.Invoke(this, EventArgs.Empty);
         EnsureVisible(_selectedIndex);
@@ -271,6 +316,7 @@ internal sealed class AssetList : ScrollableControl
 
         _selectedIndex = next;
         _anchorIndex = anchor;
+        _currentKey = next >= 0 && next < _rows.Count ? _rows[next].Key : null;
         Invalidate();
         SelectionChanged?.Invoke(this, EventArgs.Empty);
         EnsureVisible(next);
@@ -288,6 +334,7 @@ internal sealed class AssetList : ScrollableControl
                     _selectedKeys.Add(key);
                     _selectedIndex = index;
                     _anchorIndex = index;
+                    _currentKey = key;
                     Invalidate();
                     return;
                 }
@@ -296,6 +343,7 @@ internal sealed class AssetList : ScrollableControl
 
         _selectedIndex = -1;
         _anchorIndex = -1;
+        _currentKey = null;
         Invalidate();
     }
 
@@ -309,21 +357,21 @@ internal sealed class AssetList : ScrollableControl
 
     public void EnsureVisible(int index)
     {
-        if (!IsHandleCreated || index < 0)
+        if (index < 0)
         {
             return;
         }
 
-        int top = -AutoScrollPosition.Y;
+        int top = _scrollY;
         int rowTop = index * RowHeight;
         int rowBottom = rowTop + RowHeight;
         if (rowTop < top)
         {
-            AutoScrollPosition = new Point(0, rowTop);
+            ScrollTo(rowTop);
         }
         else if (rowBottom > top + ClientSize.Height)
         {
-            AutoScrollPosition = new Point(0, rowBottom - ClientSize.Height);
+            ScrollTo(rowBottom - ClientSize.Height);
         }
     }
 
@@ -370,32 +418,43 @@ internal sealed class AssetList : ScrollableControl
             return;
         }
 
-        int scroll = AutoScrollPosition.Y;
+        int scroll = -_scrollY;
         int first = Math.Max(0, (-scroll) / RowHeight);
         int last = Math.Min(_rows.Count - 1, (-scroll + ClientSize.Height) / RowHeight);
         int x0 = RowPadding + (_showThumbnails ? ThumbnailColumnWidth : 0);
         int[] widths = MeasureColumns(_columns, Math.Max(0, ClientSize.Width - x0 - RowPadding));
 
-        using Pen border = new(Theme.Border);
+        using Pen rowLine = new(BrowserVisual.RowBorder);
+        using Pen thumbBorder = new(BrowserVisual.BorderStrong);
         for (int index = first; index <= last; index++)
         {
             AssetRow row = _rows[index];
             int y = index * RowHeight + scroll;
             Rectangle bounds = new(0, y, ClientSize.Width, RowHeight);
             bool selected = _selectedKeys.Contains(row.Key) || index == _selectedIndex;
-            using SolidBrush background = new(
-                selected ? Theme.Selection : index % 2 == 0 ? Theme.Background : Theme.GridAlt);
+            bool current = string.Equals(_currentKey, row.Key, StringComparison.Ordinal)
+                || (_currentKey is null && index == _selectedIndex);
+            using SolidBrush background = new(selected ? Theme.Selection : Theme.Background);
             e.Graphics.FillRectangle(background, bounds);
+
+            if (current)
+            {
+                using SolidBrush accent = new(Theme.Accent);
+                e.Graphics.FillRectangle(accent, 0, y, 3, RowHeight);
+            }
 
             if (_showThumbnails)
             {
+                int thumbY = y + (RowHeight - BrowserVisual.ThumbnailSize) / 2;
+                Rectangle thumb = new(
+                    RowPadding, thumbY, BrowserVisual.ThumbnailSize, BrowserVisual.ThumbnailSize);
                 Bitmap? thumbnail = ThumbnailProvider?.Invoke(row);
                 if (thumbnail is not null)
                 {
-                    e.Graphics.DrawImage(
-                        thumbnail,
-                        new Rectangle(RowPadding, y + (RowHeight - 32) / 2, 32, 32));
+                    e.Graphics.DrawImage(thumbnail, thumb);
                 }
+
+                e.Graphics.DrawRectangle(thumbBorder, thumb);
 
                 if (ThumbnailRequested is not null)
                 {
@@ -422,7 +481,7 @@ internal sealed class AssetList : ScrollableControl
                 x += width + CellGap;
             }
 
-            e.Graphics.DrawLine(border, 0, y + RowHeight - 1, ClientSize.Width, y + RowHeight - 1);
+            e.Graphics.DrawLine(rowLine, 0, y + RowHeight - 1, ClientSize.Width, y + RowHeight - 1);
         }
 
         if (Focused && _selectedIndex >= first && _selectedIndex <= last)
@@ -432,7 +491,35 @@ internal sealed class AssetList : ScrollableControl
             e.Graphics.DrawRectangle(focus, 0, y, ClientSize.Width - 1, RowHeight - 1);
         }
 
+        PaintScrollBar(e.Graphics);
         base.OnPaint(e);
+    }
+
+    private void PaintScrollBar(Graphics graphics)
+    {
+        if (MaxScrollY <= 0)
+        {
+            return;
+        }
+
+        Rectangle track = new(
+            ClientSize.Width - ScrollBarWidth, 0, ScrollBarWidth, ClientSize.Height);
+        using SolidBrush background = new(Theme.Background);
+        graphics.FillRectangle(background, track);
+        Rectangle thumb = ScrollThumb();
+        using SolidBrush brush = new(BrowserVisual.BorderStrong);
+        graphics.FillRectangle(brush, thumb);
+    }
+
+    private Rectangle ScrollThumb()
+    {
+        int track = ClientSize.Height;
+        long total = (long)_rows.Count * RowHeight;
+        int height = Math.Max(28, (int)(track * ClientSize.Height / Math.Max(1L, total)));
+        int span = Math.Max(0, track - height);
+        int y = MaxScrollY == 0 ? 0 : (int)((long)span * _scrollY / MaxScrollY);
+        return new Rectangle(
+            ClientSize.Width - ScrollBarWidth + 2, y, ScrollBarWidth - 4, height);
     }
 
     protected override void OnKeyDown(KeyEventArgs e)
@@ -502,6 +589,25 @@ internal sealed class AssetList : ScrollableControl
     protected override void OnMouseDown(MouseEventArgs e)
     {
         Focus();
+        if (e.Button == MouseButtons.Left
+            && MaxScrollY > 0
+            && e.X >= ClientSize.Width - ScrollBarWidth)
+        {
+            Rectangle thumb = ScrollThumb();
+            if (!thumb.Contains(e.Location))
+            {
+                int span = Math.Max(1, ClientSize.Height - thumb.Height);
+                int target = (e.Y - thumb.Height / 2) * MaxScrollY / span;
+                ScrollTo(target);
+            }
+
+            _draggingScroll = true;
+            _dragStartY = e.Y;
+            _dragStartScroll = _scrollY;
+            Capture = true;
+            return;
+        }
+
         int index = HitTest(e.Y);
         if (index >= 0)
         {
@@ -527,9 +633,35 @@ internal sealed class AssetList : ScrollableControl
         base.OnMouseDown(e);
     }
 
+    protected override void OnMouseMove(MouseEventArgs e)
+    {
+        if (_draggingScroll)
+        {
+            Rectangle thumb = ScrollThumb();
+            int span = Math.Max(1, ClientSize.Height - thumb.Height);
+            ScrollTo(_dragStartScroll + (e.Y - _dragStartY) * MaxScrollY / span);
+        }
+
+        base.OnMouseMove(e);
+    }
+
+    protected override void OnMouseUp(MouseEventArgs e)
+    {
+        if (_draggingScroll)
+        {
+            _draggingScroll = false;
+            Capture = false;
+            return;
+        }
+
+        base.OnMouseUp(e);
+    }
+
     protected override void OnMouseDoubleClick(MouseEventArgs e)
     {
-        if (e.Button == MouseButtons.Left && SelectAt(e.Y) == _selectedIndex)
+        if (e.Button == MouseButtons.Left
+            && (MaxScrollY <= 0 || e.X < ClientSize.Width - ScrollBarWidth)
+            && SelectAt(e.Y) == _selectedIndex)
         {
             ActivateSelected();
         }
@@ -537,16 +669,22 @@ internal sealed class AssetList : ScrollableControl
         base.OnMouseDoubleClick(e);
     }
 
-    protected override void OnScroll(ScrollEventArgs se)
-    {
-        base.OnScroll(se);
-        Invalidate();
-    }
-
     protected override void OnMouseWheel(MouseEventArgs e)
     {
+        if (MaxScrollY > 0)
+        {
+            int lines = SystemInformation.MouseWheelScrollLines;
+            int step = lines < 0 ? Math.Max(1, ClientSize.Height / RowHeight) : Math.Max(1, lines);
+            ScrollTo(_scrollY - Math.Sign(e.Delta) * step * RowHeight);
+        }
+
         base.OnMouseWheel(e);
-        Invalidate();
+    }
+
+    protected override void OnResize(EventArgs e)
+    {
+        _scrollY = Math.Clamp(_scrollY, 0, MaxScrollY);
+        base.OnResize(e);
     }
 
     private int SelectAt(int y)
@@ -562,7 +700,7 @@ internal sealed class AssetList : ScrollableControl
 
     private int HitTest(int y)
     {
-        int index = (y - AutoScrollPosition.Y) / RowHeight;
+        int index = (y + _scrollY) / RowHeight;
         return index >= 0 && index < _rows.Count ? index : -1;
     }
 
@@ -580,7 +718,7 @@ internal sealed class AssetList : ScrollableControl
 internal sealed class AssetListHeader : Control
 {
     private const int ThumbnailColumnWidth = 38;
-    private const int RowPadding = 8;
+    private const int RowPadding = 14;
     private const int CellGap = 8;
 
     private IReadOnlyList<AssetColumn> _columns = Array.Empty<AssetColumn>();
@@ -594,9 +732,9 @@ internal sealed class AssetListHeader : Control
             | ControlStyles.UserPaint
             | ControlStyles.ResizeRedraw,
             true);
-        BackColor = Theme.GridHeader;
-        ForeColor = Theme.Muted;
-        Height = 26;
+        BackColor = Theme.Surface;
+        ForeColor = BrowserVisual.Faint;
+        Height = 30;
     }
 
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
@@ -623,12 +761,11 @@ internal sealed class AssetListHeader : Control
 
     protected override void OnPaint(PaintEventArgs e)
     {
-        e.Graphics.Clear(Theme.GridHeader);
+        e.Graphics.Clear(Theme.Surface);
         int x0 = RowPadding + (_showThumbnails ? ThumbnailColumnWidth : 0);
         int[] widths = AssetList.MeasureColumns(
             _columns,
             Math.Max(0, ClientSize.Width - x0 - RowPadding));
-        using Font font = new("Segoe UI", 8.25f);
         int x = x0;
         for (int index = 0; index < _columns.Count; index++)
         {
@@ -636,17 +773,17 @@ internal sealed class AssetListHeader : Control
             Rectangle bounds = new(x, 0, widths[index], ClientSize.Height);
             TextRenderer.DrawText(
                 e.Graphics,
-                column.Header,
-                font,
+                column.Header.ToUpperInvariant(),
+                BrowserVisual.Section,
                 bounds,
-                Theme.Muted,
+                BrowserVisual.Faint,
                 TextFormatFlags.VerticalCenter
                     | TextFormatFlags.EndEllipsis
                     | (column.Right ? TextFormatFlags.Right : TextFormatFlags.Left));
             x += widths[index] + CellGap;
         }
 
-        using Pen border = new(Theme.Border);
+        using Pen border = new(BrowserVisual.RowBorder);
         e.Graphics.DrawLine(border, 0, ClientSize.Height - 1, ClientSize.Width, ClientSize.Height - 1);
         base.OnPaint(e);
     }

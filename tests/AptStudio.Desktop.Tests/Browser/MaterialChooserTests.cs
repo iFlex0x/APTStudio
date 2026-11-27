@@ -14,9 +14,7 @@ public sealed class MaterialChooserTests
         MaterialTextureUse use = new(entry, "CODE_EYE", [0, 13]);
         using MaterialChooserView view = new();
         view.SetRows(
-            [new MaterialUseRow(use, 0), new MaterialUseRow(use, 13)],
-            0x1111,
-            1);
+            [new MaterialUseRow(use, 0), new MaterialUseRow(use, 13)]);
         MaterialUseRow? opened = null;
         view.OpenRequested += (_, row) => opened = row;
 
