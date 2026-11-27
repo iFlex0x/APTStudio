@@ -8,6 +8,7 @@ internal sealed class SkeletonView : Panel
 {
     private readonly Label _title = new();
     private readonly Label _subtitle = new();
+    private readonly Button _usedBy = new();
     private readonly DataGridView _bones = new();
     private readonly SkeletonCanvas _canvas = new();
     private readonly SplitContainer _split = new();
@@ -23,8 +24,37 @@ internal sealed class SkeletonView : Panel
         _title.ForeColor = Theme.Text;
         _title.TextAlign = ContentAlignment.MiddleLeft;
         _title.Padding = new Padding(8, 0, 8, 0);
-        _title.Dock = DockStyle.Top;
-        _title.Height = 23;
+        _title.Dock = DockStyle.Fill;
+
+        _usedBy.Text = "Used by";
+        _usedBy.FlatStyle = FlatStyle.Flat;
+        _usedBy.BackColor = Theme.Surface;
+        _usedBy.ForeColor = Theme.Accent;
+        _usedBy.Font = new Font("Segoe UI Semibold", 8f);
+        _usedBy.AutoSize = true;
+        _usedBy.MinimumSize = new Size(0, 22);
+        _usedBy.Padding = new Padding(8, 1, 8, 1);
+        _usedBy.Margin = new Padding(0, 0, 8, 0);
+        _usedBy.UseVisualStyleBackColor = false;
+        _usedBy.FlatAppearance.BorderSize = 1;
+        _usedBy.FlatAppearance.BorderColor = Theme.Border;
+        _usedBy.Visible = false;
+        _usedBy.Click += (_, _) => UsedByRequested?.Invoke(this, EventArgs.Empty);
+
+        TableLayoutPanel titleRow = new()
+        {
+            Dock = DockStyle.Top,
+            Height = 23,
+            ColumnCount = 2,
+            RowCount = 1,
+            BackColor = Theme.Background,
+            Margin = new Padding(0),
+            Padding = new Padding(0),
+        };
+        titleRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        titleRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        titleRow.Controls.Add(_title, 0, 0);
+        titleRow.Controls.Add(_usedBy, 1, 0);
 
         _subtitle.AutoEllipsis = true;
         _subtitle.ForeColor = Theme.Muted;
@@ -35,7 +65,7 @@ internal sealed class SkeletonView : Panel
 
         Panel header = new() { Dock = DockStyle.Top, BackColor = Theme.Background, Height = 43 };
         header.Controls.Add(_subtitle);
-        header.Controls.Add(_title);
+        header.Controls.Add(titleRow);
 
         ConfigureBones();
         _bones.CurrentCellChanged += (_, _) => _canvas.Highlight(SelectedBone);
@@ -63,10 +93,34 @@ internal sealed class SkeletonView : Panel
         }
     }
 
+    public event EventHandler? UsedByRequested;
+
+    public void SetUsedBy(int count)
+    {
+        if (count < 0)
+        {
+            _usedBy.Text = "Used by...";
+            _usedBy.Enabled = false;
+            _usedBy.Visible = true;
+            return;
+        }
+
+        if (count == 0)
+        {
+            _usedBy.Visible = false;
+            return;
+        }
+
+        _usedBy.Text = $"Used by {count:N0}";
+        _usedBy.Enabled = true;
+        _usedBy.Visible = true;
+    }
+
     public void SetSkeleton(string title, string subtitle, SkeletonData data)
     {
         _title.Text = title;
         _subtitle.Text = subtitle;
+        _usedBy.Visible = false;
         _bones.Rows.Clear();
         foreach (SkeletonBone bone in data.Bones)
         {
@@ -93,6 +147,7 @@ internal sealed class SkeletonView : Panel
     {
         _title.Text = "";
         _subtitle.Text = "";
+        _usedBy.Visible = false;
         _bones.Rows.Clear();
         _canvas.SetBones(Array.Empty<SkeletonBone>(), 0);
     }
@@ -101,6 +156,7 @@ internal sealed class SkeletonView : Panel
     {
         _title.Text = title;
         _subtitle.Text = subtitle;
+        _usedBy.Visible = false;
         _bones.Rows.Clear();
         _canvas.SetBones(Array.Empty<SkeletonBone>(), 0);
     }

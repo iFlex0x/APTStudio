@@ -390,6 +390,54 @@ public sealed class BrowserNavigationTests
     }
 
     [Fact]
+    public void DirectSkeletonUsedBySkinBackTwiceRestoresSkeletonAndList()
+    {
+        SkeletonOccurrence skeleton = new(
+            0xC81A1F5B0C7D7DBB,
+            @"C:\game\DATAS\LEVELS\GENERIC_KISSING_COUPLE_01_HUG.DPC",
+            294282);
+        SkinOccurrence skin = new(
+            0x84316AA817823056,
+            @"C:\game\DATAS\LEVELS\GENERIC_KISSING_COUPLE_01_HUG.DPC",
+            @"C:\game\DATAS\LEVELS\GENERIC_KISSING_COUPLE_01_HUG.DPC",
+            61207488);
+        BrowserNavigation navigation = new(new BrowserState(
+            BrowserView.Skeletons,
+            @"C:\game\DATAS\LEVELS\GENERIC_KISSING_COUPLE_01_HUG.DPC",
+            "",
+            TextureFilter.All,
+            null,
+            1,
+            0,
+            ChannelView.Rgb,
+            true,
+            1f,
+            PointF.Empty,
+            null,
+            0,
+            null,
+            null));
+
+        navigation.SetSkeletonListSelection(skeleton, 1);
+        navigation.OpenSkeleton(skeleton);
+        Assert.Equal(BrowserView.Skeleton, navigation.State.View);
+
+        navigation.OpenSkin(skin, 0);
+        Assert.Equal(BrowserView.Skin, navigation.State.View);
+        Assert.Null(navigation.State.Mesh);
+
+        navigation.Back();
+        Assert.Equal(BrowserView.Skeleton, navigation.State.View);
+        Assert.Equal(skeleton, navigation.State.Skeleton);
+
+        navigation.Back();
+        Assert.Equal(BrowserView.Skeletons, navigation.State.View);
+        Assert.Equal(skeleton, navigation.State.Skeleton);
+        Assert.Equal(1, navigation.State.ListIndex);
+        Assert.False(navigation.CanBack);
+    }
+
+    [Fact]
     public void DirectMaterialTextureBackTwiceRestoresSlotAndList()
     {
         MaterialOccurrence material = new(
