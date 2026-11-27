@@ -169,6 +169,12 @@ internal sealed class AudioView : Panel
 
     public AudioEntry? Entry => _entry;
 
+    public int SessionId { get; private set; }
+
+    public bool IsPlaying => _player.IsPlaying;
+
+    public TimeSpan Position => _player.Position;
+
     private double Duration => _entry?.DurationSeconds ?? 0;
 
     public void SetAudio(AudioEntry entry)
@@ -204,6 +210,7 @@ internal sealed class AudioView : Panel
     {
         try
         {
+            SessionId++;
             _player.Play(ogg);
             _play.Text = "Stop";
             _play.Enabled = true;

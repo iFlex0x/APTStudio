@@ -1,4 +1,5 @@
 using AptStudio.Core.Assets;
+using AptStudio.Core.Audio;
 
 namespace AptStudio.Desktop.Browser;
 
@@ -21,4 +22,8 @@ internal static class BrowserKeys
 
     public static string Skin(SkinOccurrence occurrence) =>
         $"{occurrence.ArchivePath}|{occurrence.BodyOffset}|{occurrence.Hash:X16}";
+
+    public static string Audio(AudioEntry entry) =>
+        $"{entry.PackPath}|{entry.Offset}|{entry.Size}|{entry.BankId}|" +
+        $"{entry.Id:X8}|{entry.LanguageId}";
 }

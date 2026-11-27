@@ -1,4 +1,5 @@
 using System.Drawing;
+using AptStudio.Core.Audio;
 using AptStudio.Core.Textures;
 
 namespace AptStudio.Desktop.Browser;
@@ -12,7 +13,20 @@ internal enum BrowserView
     Meshes,
     Skin,
     Skeleton,
+    Audio,
     Placeholder,
+}
+
+internal enum AudioSort
+{
+    Pack,
+    Id,
+    Name,
+    Length,
+    Channels,
+    Rate,
+    Language,
+    Bank,
 }
 
 internal enum TextureSort
@@ -138,4 +152,9 @@ internal sealed record BrowserState(
     bool MeshWireframe = false,
     SkinOccurrence? Skin = null,
     int SkinPart = 0,
-    SkeletonOccurrence? Skeleton = null);
+    SkeletonOccurrence? Skeleton = null,
+    AudioEntry? Audio = null,
+    string? AudioPack = null,
+    string? AudioLanguage = null,
+    AudioSort AudioSort = AudioSort.Pack,
+    bool AudioSortDescending = false);

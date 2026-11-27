@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Numerics;
 using AptStudio.Core.Assets;
+using AptStudio.Core.Audio;
 using AptStudio.Core.Games;
 using AptStudio.Core.Links;
 using AptStudio.Core.Materials;
@@ -31,6 +32,7 @@ internal sealed class BrowserForm : Form
     private readonly MeshSkinChooserView _meshSkins = new();
     private readonly SkinView _skinView = new();
     private readonly SkeletonView _skeletonView = new();
+    private readonly AudioView _audioView = new();
     private ThumbnailCache _thumbnailCache = null!;
     private IReadOnlyList<TextureOccurrence> _inspectorCopies = Array.Empty<TextureOccurrence>();
     private readonly Label _resultsTitle = new();
@@ -67,6 +69,16 @@ internal sealed class BrowserForm : Form
         new Dictionary<ulong, AssetEntry>();
     private IReadOnlyDictionary<string, int> _meshCounts =
         new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+    private IReadOnlyList<AudioEntry> _audio = Array.Empty<AudioEntry>();
+    private bool _audioLoaded;
+    private bool _audioLoading;
+    private CancellationTokenSource? _audioCancel;
+    private CancellationTokenSource? _audioListCancel;
+    private int _audioListVersion;
+    private bool _audioListBuilding;
+    private bool _audioBusy;
+    private byte[]? _audioOgg;
+    private string? _audioOggKey;
     private readonly TextBox _search = new();
     private readonly Label _status = new();
     private readonly System.Windows.Forms.Timer _searchTimer = new() { Interval = 150 };
@@ -96,6 +108,24 @@ internal sealed class BrowserForm : Form
     [
         new("Hash", 160, Mono: true),
         new("Archive", 0, Flexible: true, Muted: true, MiddleEllipsis: true),
+    ];
+    private static readonly AssetColumn[] AudioColumns =
+    [
+        new("Pack", 140, Muted: true, MiddleEllipsis: true),
+        new("Id", 92, Mono: true),
+        new("Name", 0, Flexible: true, MiddleEllipsis: true),
+        new("Language", 90, Muted: true),
+        new("Length", 72, Right: true, Muted: true),
+        new("Ch", 42, Right: true, Muted: true),
+        new("Rate", 64, Right: true, Muted: true),
+        new("Bank", 76, Right: true, Muted: true),
+    ];
+    private static readonly AssetColumn[] NarrowAudioColumns =
+    [
+        new("Pack", 92, Muted: true, MiddleEllipsis: true),
+        new("Id", 82, Mono: true),
+        new("Name", 0, Flexible: true, MiddleEllipsis: true),
+        new("Language", 64, Muted: true),
     ];
     private CancellationTokenSource? _loadCancel;
     private CancellationTokenSource? _listCancel;
@@ -159,6 +189,7 @@ internal sealed class BrowserForm : Form
         WireTextureList();
         WireInspector();
         WireMeshViews();
+        WireAudio();
         _back.Click += (_, _) => Back();
         _forward.Click += (_, _) => Forward();
         _scopeButton.Click += (_, _) => ToggleScope();
@@ -171,14 +202,33 @@ internal sealed class BrowserForm : Form
                 return;
             }
 
-            TextureSort sort = _sortCombo.SelectedIndex switch
+            if (_navigation.State.View == BrowserView.Audio)
             {
-                1 => TextureSort.Hash,
-                2 => TextureSort.Size,
-                3 => TextureSort.Mips,
-                _ => TextureSort.Archive,
-            };
-            _navigation.SetSort(sort, _navigation.State.SortDescending);
+                AudioSort sort = _sortCombo.SelectedIndex switch
+                {
+                    1 => AudioSort.Id,
+                    2 => AudioSort.Name,
+                    3 => AudioSort.Length,
+                    4 => AudioSort.Channels,
+                    5 => AudioSort.Rate,
+                    6 => AudioSort.Language,
+                    7 => AudioSort.Bank,
+                    _ => AudioSort.Pack,
+                };
+                _navigation.SetAudioSort(sort, _navigation.State.AudioSortDescending);
+            }
+            else
+            {
+                TextureSort sort = _sortCombo.SelectedIndex switch
+                {
+                    1 => TextureSort.Hash,
+                    2 => TextureSort.Size,
+                    3 => TextureSort.Mips,
+                    _ => TextureSort.Archive,
+                };
+                _navigation.SetSort(sort, _navigation.State.SortDescending);
+            }
+
             RenderState();
         };
         _sortDirection.Click += (_, _) =>
@@ -188,7 +238,19 @@ internal sealed class BrowserForm : Form
                 return;
             }
 
-            _navigation.SetSort(_navigation.State.Sort, !_navigation.State.SortDescending);
+            if (_navigation.State.View == BrowserView.Audio)
+            {
+                _navigation.SetAudioSort(
+                    _navigation.State.AudioSort,
+                    !_navigation.State.AudioSortDescending);
+            }
+            else
+            {
+                _navigation.SetSort(
+                    _navigation.State.Sort,
+                    !_navigation.State.SortDescending);
+            }
+
             RenderState();
         };
         _exportSelected.Click += async (_, _) => await ExportSelectedAsync();
@@ -209,6 +271,8 @@ internal sealed class BrowserForm : Form
             _meshCancel?.Cancel();
             _skinCancel?.Cancel();
             _skeletonDecodeCancel?.Cancel();
+            _audioCancel?.Cancel();
+            _audioListCancel?.Cancel();
             SaveLayout();
         };
     }
@@ -517,10 +581,13 @@ internal sealed class BrowserForm : Form
         _animationInspector.Visible = false;
         _meshInspector.Dock = DockStyle.Fill;
         _meshInspector.Visible = false;
+        _audioView.Dock = DockStyle.Fill;
+        _audioView.Visible = false;
         _inspector.Controls.Add(_textureInspector);
         _inspector.Controls.Add(_slotInspector);
         _inspector.Controls.Add(_animationInspector);
         _inspector.Controls.Add(_meshInspector);
+        _inspector.Controls.Add(_audioView);
         _inner.Panel1.Controls.Add(_results);
         _inner.Panel2.Controls.Add(_inspector);
         _outer.Panel2.Controls.Add(_inner);
@@ -618,6 +685,10 @@ internal sealed class BrowserForm : Form
         {
             OnMeshSelected();
         }
+        else if (_navigation.State.View == BrowserView.Audio)
+        {
+            OnAudioSelected();
+        }
         else
         {
             OnTextureSelected();
@@ -691,6 +762,12 @@ internal sealed class BrowserForm : Form
             }
         };
         _skinView.SetActionsVisible(openMesh: false, pose: false);
+    }
+
+    private void WireAudio()
+    {
+        _audioView.PlayRequested += () => _ = PlayAudioAsync();
+        _audioView.ExportRequested += () => _ = ExportAudioAsync();
     }
 
     private void UpdateMeshViewState()
@@ -772,6 +849,19 @@ internal sealed class BrowserForm : Form
         _skinView.Reset();
         _skeletonView.Reset();
         _meshSkins.SetRows([]);
+        _audioCancel?.Cancel();
+        _audioCancel = null;
+        _audio = Array.Empty<AudioEntry>();
+        _audioLoaded = false;
+        _audioLoading = false;
+        _audioListCancel?.Cancel();
+        _audioListCancel = null;
+        _audioListVersion++;
+        _audioListBuilding = false;
+        _audioBusy = false;
+        _audioOgg = null;
+        _audioOggKey = null;
+        _audioView.Reset();
         _materials = null;
         _materialTextures = null;
         _materialLoading = false;
@@ -964,6 +1054,7 @@ internal sealed class BrowserForm : Form
         int textures = ArchiveCount(archivePath);
         int animations = _animationCounts.GetValueOrDefault(archivePath);
         int meshes = _meshCounts.GetValueOrDefault(archivePath);
+        int audio = _audioLoaded ? _audio.Count : 0;
         return
         [
             new TypeChoice("Textures", textures, true),
@@ -972,7 +1063,7 @@ internal sealed class BrowserForm : Form
             new TypeChoice("Meshes", meshes, true),
             new TypeChoice("Skins", 0, false),
             new TypeChoice("Skeletons", 0, false),
-            new TypeChoice("Audio", 0, false),
+            new TypeChoice("Audio", audio, true),
         ];
     }
 
@@ -1024,6 +1115,7 @@ internal sealed class BrowserForm : Form
             "Textures" => BrowserView.Textures,
             "Animations" => BrowserView.Animations,
             "Meshes" => BrowserView.Meshes,
+            "Audio" => BrowserView.Audio,
             _ => BrowserView.Placeholder,
         };
         string archive = _navigation.State.ArchivePath;
@@ -1093,7 +1185,18 @@ internal sealed class BrowserForm : Form
 
     private void OnFilterRequested()
     {
-        if (_navigation is null || _navigation.State.View != BrowserView.Textures)
+        if (_navigation is null)
+        {
+            return;
+        }
+
+        if (_navigation.State.View == BrowserView.Audio)
+        {
+            ShowAudioFilterMenu(_navigation.State);
+            return;
+        }
+
+        if (_navigation.State.View != BrowserView.Textures)
         {
             return;
         }
@@ -1252,12 +1355,25 @@ internal sealed class BrowserForm : Form
             _listVersion++;
         }
 
+        if (state.View != BrowserView.Audio && _audioListBuilding)
+        {
+            _audioListCancel?.Cancel();
+            _audioListBuilding = false;
+            _audioListVersion++;
+        }
+
         _scope.SelectArchive(state.ArchivePath);
         _scope.SetActiveType(TypeName(state));
         _scopeButton.Text = _navigation.IsChooserOpen ? "All archives" : ScopeChip(state);
         _back.Enabled = _navigation.CanBack || _meshSkinsOpen;
         _forward.Enabled = _navigation.CanForward;
         _crumbs.Text = _navigation.IsChooserOpen ? ChooserCrumbs(state) : Crumbs(state);
+        _search.PlaceholderText = state.View switch
+        {
+            BrowserView.Audio => "pack, language, id",
+            BrowserView.Textures => "hash, dimensions",
+            _ => "hash, archive",
+        };
         if (_search.Text != state.Query)
         {
             _search.Text = state.Query;
@@ -1269,6 +1385,7 @@ internal sealed class BrowserForm : Form
         _slotInspector.Visible = state.View == BrowserView.Material;
         _animationInspector.Visible = state.View == BrowserView.Animations;
         _meshInspector.Visible = state.View == BrowserView.Meshes;
+        _audioView.Visible = state.View == BrowserView.Audio;
         _materialSlots.Visible = state.View == BrowserView.Material
             || state.View == BrowserView.LinkedTexture;
         _skinView.Visible = state.View == BrowserView.Skin;
@@ -1276,6 +1393,10 @@ internal sealed class BrowserForm : Form
         _meshSkins.Visible = false;
         _inner.Panel2Collapsed = detailView;
         _titleLine.Visible = !detailView;
+        if (state.View != BrowserView.Audio && _audioView.Entry is not null)
+        {
+            _audioView.Reset();
+        }
         bool labelView = state.View == BrowserView.Placeholder;
         _inspectorTitle.Visible = labelView;
         _inspectorBody.Visible = labelView;
@@ -1309,12 +1430,21 @@ internal sealed class BrowserForm : Form
 
         _chooser.Visible = false;
         _search.Enabled = state.View is BrowserView.Textures
-            or BrowserView.Animations or BrowserView.Meshes;
-        _filterButton.Enabled = state.View == BrowserView.Textures;
-        UpdateFilterButton(state.Filter);
+            or BrowserView.Animations or BrowserView.Meshes or BrowserView.Audio;
+        _filterButton.Enabled = state.View == BrowserView.Textures
+            || (state.View == BrowserView.Audio && _audioLoaded);
+        if (state.View == BrowserView.Audio)
+        {
+            UpdateAudioFilterButton(state);
+        }
+        else
+        {
+            UpdateFilterButton(state.Filter);
+        }
+
         _textureHost.Visible = state.View is BrowserView.Textures
-            or BrowserView.Animations or BrowserView.Meshes;
-        _textureToolbar.Visible = state.View == BrowserView.Textures;
+            or BrowserView.Animations or BrowserView.Meshes or BrowserView.Audio;
+        _textureToolbar.Visible = state.View is BrowserView.Textures or BrowserView.Audio;
         _resultsBody.Visible = !detailView;
         _resultsBody.Height = labelView ? 44 : 18;
 
@@ -1366,6 +1496,30 @@ internal sealed class BrowserForm : Form
                 _skeletonView.Visible = true;
                 _ = RenderSkeletonAsync(state);
                 break;
+            case BrowserView.Audio:
+                _resultsTitle.Text = "Audio";
+                SetListMode(BrowserView.Audio);
+                if (!_audioLoaded)
+                {
+                    _textureHost.Visible = true;
+                    _textureToolbar.Visible = false;
+                    _resultsCount.Text = "";
+                    _resultsBody.Text = "SOUNDBANKS · scanning...";
+                    _audioView.Reset();
+                    _ = LoadAudioAsync();
+                    break;
+                }
+
+                _textureToolbar.Visible = true;
+                if (state.Audio is { } current
+                    && (_audioView.Entry is null
+                        || BrowserKeys.Audio(_audioView.Entry) != BrowserKeys.Audio(current)))
+                {
+                    _audioView.SetAudio(current);
+                }
+
+                StartAudioList(state);
+                break;
             case BrowserView.Material:
                 _resultsTitle.Text = "Material";
                 ShowMaterialSlots(state);
@@ -1399,7 +1553,7 @@ internal sealed class BrowserForm : Form
                 break;
         }
 
-        if (!_loading && !_listBuilding)
+        if (!_loading && !_listBuilding && !_audioListBuilding && !_audioLoading)
         {
             UpdateStatus();
         }
@@ -1567,16 +1721,20 @@ internal sealed class BrowserForm : Form
         {
             BrowserView.Animations => AnimationColumns,
             BrowserView.Meshes => MeshColumns,
+            BrowserView.Audio => narrow ? NarrowAudioColumns : AudioColumns,
             _ => narrow ? NarrowTextureColumns : TextureColumns,
         };
         bool textures = view == BrowserView.Textures;
+        bool audio = view == BrowserView.Audio;
         _textureHeader.Columns = columns;
         _textureList.Columns = columns;
         _textureHeader.ShowThumbnails = textures;
         _textureList.ShowThumbnails = textures;
-        _textureToolbar.Visible = textures;
+        _textureToolbar.Visible = textures || audio;
+        _exportSelected.Visible = textures;
+        _selectionCount.Visible = textures;
         _textureList.AllowMultiSelect = textures;
-        if (textures && _navigation is not null)
+        if ((textures || audio) && _navigation is not null)
         {
             SyncSortControls(_navigation.State);
         }
@@ -1584,17 +1742,38 @@ internal sealed class BrowserForm : Form
 
     private void SyncSortControls(BrowserState state)
     {
+        bool audio = state.View == BrowserView.Audio;
+        string[] items = audio
+            ? ["Pack", "Id", "Name", "Length", "Channels", "Rate", "Language", "Bank"]
+            : ["Archive order", "Hash", "Size", "Mips"];
         _suppressSort = true;
         try
         {
-            _sortCombo.SelectedIndex = state.Sort switch
+            bool same = _sortCombo.Items.Count == items.Length;
+            for (int index = 0; same && index < items.Length; index++)
             {
-                TextureSort.Hash => 1,
-                TextureSort.Size => 2,
-                TextureSort.Mips => 3,
-                _ => 0,
-            };
-            _sortDirection.Text = state.SortDescending ? "Desc" : "Asc";
+                same = string.Equals(
+                    _sortCombo.Items[index]?.ToString(), items[index], StringComparison.Ordinal);
+            }
+
+            if (!same)
+            {
+                _sortCombo.Items.Clear();
+                _sortCombo.Items.AddRange(items);
+            }
+
+            _sortCombo.SelectedIndex = audio
+                ? (int)state.AudioSort
+                : state.Sort switch
+                {
+                    TextureSort.Hash => 1,
+                    TextureSort.Size => 2,
+                    TextureSort.Mips => 3,
+                    _ => 0,
+                };
+            _sortDirection.Text = (audio ? state.AudioSortDescending : state.SortDescending)
+                ? "Desc"
+                : "Asc";
         }
         finally
         {
@@ -2450,6 +2629,438 @@ internal sealed class BrowserForm : Form
         entry.BodyArchivePath,
         entry.Row.BodyOffset);
 
+    private async Task LoadAudioAsync()
+    {
+        if (_profile is null || _audioLoaded || _audioLoading)
+        {
+            return;
+        }
+
+        _audioLoading = true;
+        _audioCancel?.Cancel();
+        CancellationTokenSource cancel = new();
+        _audioCancel = cancel;
+        _status.Text = "Scanning SOUNDBANKS...";
+        try
+        {
+            Progress<CatalogProgress> progress = new(value =>
+            {
+                if (!IsDisposed && cancel == _audioCancel)
+                {
+                    _status.Text =
+                        $"Scanning SOUNDBANKS {Path.GetFileName(value.ArchivePath)} " +
+                        $"{value.Index}/{value.Total}";
+                }
+            });
+            AudioCatalog catalog = await Task.Run(
+                () => AudioCatalog.Load(_profile, progress, cancel.Token),
+                cancel.Token);
+            if (IsDisposed || cancel != _audioCancel)
+            {
+                return;
+            }
+
+            _audio = catalog.Entries;
+            _audioLoaded = true;
+            _status.Text =
+                $"{_audio.Count:N0} audio media · {catalog.Archives.Count:N0} packs · " +
+                $"{catalog.Previews:N0} previews skipped · {catalog.Failures.Count:N0} failed";
+            if (_navigation is not null)
+            {
+                _scope.SetTypes(
+                    BuildTypes(_navigation.State.ArchivePath),
+                    TypeName(_navigation.State));
+                if (_navigation.State.View == BrowserView.Audio)
+                {
+                    RenderState();
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex) when (ex is InvalidDataException or IOException
+            or UnauthorizedAccessException)
+        {
+            if (!IsDisposed && cancel == _audioCancel)
+            {
+                _status.Text = ex.Message;
+                _resultsBody.Text = ex.Message;
+            }
+        }
+        finally
+        {
+            if (cancel == _audioCancel)
+            {
+                _audioLoading = false;
+            }
+        }
+    }
+
+    private void StartAudioList(BrowserState state)
+    {
+        _audioListCancel?.Cancel();
+        CancellationTokenSource cancel = new();
+        _audioListCancel = cancel;
+        int version = ++_audioListVersion;
+        _audioListBuilding = true;
+        _resultsCount.Text = "";
+        _resultsBody.Text = $"SOUNDBANKS · {AudioFilterLabel(state)} · filtering...";
+        _status.Text = "Filtering audio...";
+        IProgress<int> progress = new Progress<int>(count =>
+        {
+            if (IsDisposed || !_audioListBuilding
+                || version != _audioListVersion || cancel != _audioListCancel)
+            {
+                return;
+            }
+
+            _resultsCount.Text = $"{count:N0}+";
+            _resultsBody.Text =
+                $"SOUNDBANKS · {AudioFilterLabel(state)} · filtering... " +
+                $"{count:N0} matches";
+            _status.Text = $"Filtering audio... {count:N0} matches";
+        });
+        _ = BuildAudioListAsync(state, cancel, version, progress);
+    }
+
+    private async Task BuildAudioListAsync(
+        BrowserState state,
+        CancellationTokenSource cancel,
+        int version,
+        IProgress<int> progress)
+    {
+        try
+        {
+            List<AssetRow> rows = await Task.Run(
+                () => AudioListBuilder.Build(
+                    _audio,
+                    state.AudioPack,
+                    state.AudioLanguage,
+                    state.Query,
+                    state.AudioSort,
+                    state.AudioSortDescending,
+                    cancel.Token,
+                    progress),
+                cancel.Token);
+            if (IsDisposed || version != _audioListVersion || cancel != _audioListCancel)
+            {
+                return;
+            }
+
+            _audioListBuilding = false;
+            ApplyAudioRows(rows);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
+            or InvalidDataException)
+        {
+            if (!IsDisposed && version == _audioListVersion && cancel == _audioListCancel)
+            {
+                _audioListBuilding = false;
+                _status.Text = ex.Message;
+            }
+        }
+        finally
+        {
+            if (ReferenceEquals(_audioListCancel, cancel))
+            {
+                _audioListCancel = null;
+            }
+
+            cancel.Dispose();
+        }
+    }
+
+    private void ApplyAudioRows(IReadOnlyList<AssetRow> rows)
+    {
+        if (_navigation is null || _navigation.State.View != BrowserView.Audio)
+        {
+            return;
+        }
+
+        BrowserState current = _navigation.State;
+        string? keep = current.Audio is null ? null : BrowserKeys.Audio(current.Audio);
+        _textureList.SetRows(rows, keep);
+        bool keepFound = keep is not null
+            && _textureList.SelectedRow?.Key.Equals(keep, StringComparison.Ordinal) == true;
+        if (current.Audio is not null && !keepFound)
+        {
+            _audioView.Reset();
+            _navigation.ClearAudio();
+        }
+        else if (current.Audio is null)
+        {
+            if (rows.Count > 0)
+            {
+                _textureList.SelectedIndex = 0;
+                OnAudioSelected();
+            }
+            else
+            {
+                _audioView.Reset();
+            }
+        }
+        else if (_audioView.Entry is null)
+        {
+            _audioView.SetAudio(current.Audio);
+        }
+
+        _textureList.TopIndex = current.ListIndex;
+        _textureList.EnsureVisible(_textureList.SelectedIndex);
+        _resultsCount.Text = $"{rows.Count:N0}";
+        _resultsBody.Text =
+            $"SOUNDBANKS · {AudioFilterLabel(current)} · " +
+            $"{rows.Count:N0} of {_audio.Count:N0} media · " +
+            AudioText.SortLabel(current.AudioSort, current.AudioSortDescending);
+        BrowserTiming.Write(
+            $"audio list session {_audioView.SessionId} playing {_audioView.IsPlaying} " +
+            $"pos {_audioView.Position.TotalSeconds:F2} keep={(keep ?? "none")} " +
+            $"found={keepFound} rows={rows.Count}");
+        UpdateStatus();
+    }
+
+    private void OnAudioSelected()
+    {
+        if (_navigation is null
+            || _navigation.State.View != BrowserView.Audio
+            || _textureList.SelectedRow?.Tag is not AudioEntry entry)
+        {
+            return;
+        }
+
+        _navigation.SelectAudio(entry, _textureList.TopIndex);
+        if (_audioView.Entry is null
+            || BrowserKeys.Audio(_audioView.Entry) != BrowserKeys.Audio(entry))
+        {
+            _audioView.SetAudio(entry);
+        }
+
+        UpdateStatus();
+    }
+
+    private async Task PlayAudioAsync()
+    {
+        if (_navigation?.State.Audio is not { } media || _audioBusy)
+        {
+            return;
+        }
+
+        string key = BrowserKeys.Audio(media);
+        _audioBusy = true;
+        _audioView.SetBusy("Converting...");
+        try
+        {
+            byte[] ogg;
+            if (_audioOgg is not null && _audioOggKey == key)
+            {
+                ogg = _audioOgg;
+            }
+            else
+            {
+                ogg = await Task.Run(() => ConvertAudio(media));
+            }
+
+            if (IsDisposed)
+            {
+                return;
+            }
+
+            if (_navigation?.State.Audio is not { } current
+                || BrowserKeys.Audio(current) != key)
+            {
+                _audioView.SetStatus("Ready");
+                return;
+            }
+
+            _audioOgg = ogg;
+            _audioOggKey = key;
+            _audioView.StartPlayback(ogg);
+            BrowserTiming.Write(
+                $"audio play session {_audioView.SessionId} {key}");
+        }
+        catch (Exception ex) when (ex is InvalidDataException or IOException
+            or UnauthorizedAccessException)
+        {
+            if (!IsDisposed)
+            {
+                _audioView.ShowError(ex.Message);
+            }
+        }
+        finally
+        {
+            _audioBusy = false;
+        }
+    }
+
+    private async Task ExportAudioAsync()
+    {
+        if (_navigation?.State.Audio is not { } media || _audioBusy)
+        {
+            return;
+        }
+
+        string key = BrowserKeys.Audio(media);
+        using SaveFileDialog dialog = new()
+        {
+            Filter = "Ogg Vorbis (*.ogg)|*.ogg",
+            FileName = AudioText.ExportName(media),
+            Title = "Export audio",
+            AddExtension = true,
+            DefaultExt = "ogg",
+            InitialDirectory = Environment.GetFolderPath(
+                Environment.SpecialFolder.MyPictures),
+        };
+        if (dialog.ShowDialog(this) != DialogResult.OK)
+        {
+            return;
+        }
+
+        string full = Path.GetFullPath(dialog.FileName);
+        if (_profile is not null
+            && GameFolderGuard.IsInside(_profile.Root, Path.GetDirectoryName(full)!))
+        {
+            _status.Text = "Refusing to write inside the game folder.";
+            return;
+        }
+
+        _audioBusy = true;
+        _audioView.SetBusy("Exporting...");
+        try
+        {
+            byte[] ogg = _audioOgg is not null && _audioOggKey == key
+                ? _audioOgg
+                : await Task.Run(() => ConvertAudio(media));
+            string? directory = Path.GetDirectoryName(full);
+            if (!string.IsNullOrEmpty(directory))
+            {
+                Directory.CreateDirectory(directory);
+            }
+
+            string temp = full + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            try
+            {
+                File.WriteAllBytes(temp, ogg);
+                File.Move(temp, full, overwrite: true);
+            }
+            finally
+            {
+                if (File.Exists(temp))
+                {
+                    File.Delete(temp);
+                }
+            }
+
+            _status.Text = $"Exported {Path.GetFileName(full)}";
+            _audioView.SetStatus($"Exported {Path.GetFileName(full)}");
+        }
+        catch (Exception ex) when (ex is InvalidDataException or IOException
+            or UnauthorizedAccessException)
+        {
+            if (!IsDisposed)
+            {
+                _status.Text = ex.Message;
+                _audioView.ShowError(ex.Message);
+            }
+        }
+        finally
+        {
+            _audioBusy = false;
+        }
+    }
+
+    private static byte[] ConvertAudio(AudioEntry media)
+    {
+        byte[] wem = new byte[(int)media.Size];
+        using (FileStream stream = new(
+            media.PackPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+        {
+            stream.Seek(media.Offset, SeekOrigin.Begin);
+            stream.ReadExactly(wem);
+        }
+
+        return WemConverter.ToOgg(wem);
+    }
+
+    private void UpdateAudioFilterButton(BrowserState state)
+    {
+        int active = (state.AudioPack is null ? 0 : 1)
+            + (state.AudioLanguage is null ? 0 : 1);
+        _filterButton.Text = active == 0 ? "Filter" : $"Filter ({active})";
+    }
+
+    private void ShowAudioFilterMenu(BrowserState state)
+    {
+        ContextMenuStrip menu = new()
+        {
+            Renderer = new DarkToolStripRenderer(),
+            BackColor = Theme.Surface,
+            ForeColor = Theme.Text,
+            ShowImageMargin = false,
+            MinimumSize = new Size(220, 0),
+        };
+
+        void Add(ToolStripItemCollection items, string text, bool check, Action action)
+        {
+            ToolStripMenuItem item = new(text)
+            {
+                Checked = check,
+                ForeColor = Theme.Text,
+            };
+            item.Click += (_, _) =>
+            {
+                menu.Close();
+                action();
+            };
+            items.Add(item);
+        }
+
+        ToolStripMenuItem pack = new("Pack") { ForeColor = Theme.Text };
+        Add(pack.DropDownItems, "All packs", state.AudioPack is null,
+            () => ApplyAudioFilter(null, state.AudioLanguage));
+        foreach (string name in _audio
+            .Select(entry => entry.PackName)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(name => name, StringComparer.OrdinalIgnoreCase))
+        {
+            Add(pack.DropDownItems, name, state.AudioPack == name,
+                () => ApplyAudioFilter(name, state.AudioLanguage));
+        }
+
+        ToolStripMenuItem language = new("Language") { ForeColor = Theme.Text };
+        Add(language.DropDownItems, "All languages", state.AudioLanguage is null,
+            () => ApplyAudioFilter(state.AudioPack, null));
+        foreach (string name in _audio
+            .Select(entry => entry.Language)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(name => name, StringComparer.OrdinalIgnoreCase))
+        {
+            Add(language.DropDownItems, name, state.AudioLanguage == name,
+                () => ApplyAudioFilter(state.AudioPack, name));
+        }
+
+        menu.Items.Add(pack);
+        menu.Items.Add(language);
+        menu.Items.Add(new ToolStripSeparator());
+        Add(menu.Items, "Clear filters", state.AudioPack is null && state.AudioLanguage is null,
+            () => ApplyAudioFilter(null, null));
+        menu.Show(_filterButton, new Point(_filterButton.Width - 220, _filterButton.Height));
+    }
+
+    private void ApplyAudioFilter(string? pack, string? language)
+    {
+        if (_navigation is null)
+        {
+            return;
+        }
+
+        _navigation.SetAudioFilter(pack, language);
+        _navigation.SetListIndex(0);
+        RenderState();
+    }
+
     private void RenderInspector()
     {
         if (_navigation is null)
@@ -3102,6 +3713,15 @@ internal sealed class BrowserForm : Form
             return;
         }
 
+        if (state.View == BrowserView.Audio)
+        {
+            _status.Text =
+                $"SOUNDBANKS · {AudioFilterLabel(state)} · " +
+                $"{_textureList.Rows.Count:N0} of {_audio.Count:N0} media · " +
+                AudioText.SortLabel(state.AudioSort, state.AudioSortDescending);
+            return;
+        }
+
         if (state.View is BrowserView.Skin or BrowserView.Skeleton)
         {
             return;
@@ -3141,6 +3761,7 @@ internal sealed class BrowserForm : Form
         BrowserView.Textures => "Textures",
         BrowserView.Animations => "Animations",
         BrowserView.Meshes or BrowserView.Skin or BrowserView.Skeleton => "Meshes",
+        BrowserView.Audio => "Audio",
         BrowserView.Placeholder => state.PlaceholderName,
         _ => "Textures",
     };
@@ -3148,7 +3769,25 @@ internal sealed class BrowserForm : Form
     private static string ScopeName(string archivePath) =>
         string.IsNullOrEmpty(archivePath) ? "All archives" : Path.GetFileName(archivePath);
 
-    private static string ScopeChip(BrowserState state) => ScopeName(state.ArchivePath);
+    private static string ScopeChip(BrowserState state) =>
+        state.View == BrowserView.Audio ? "SOUNDBANKS" : ScopeName(state.ArchivePath);
+
+    private static string AudioFilterLabel(BrowserState state)
+    {
+        if (state.AudioPack is null && state.AudioLanguage is null)
+        {
+            return "all packs and languages";
+        }
+
+        if (state.AudioPack is null)
+        {
+            return $"language {state.AudioLanguage}";
+        }
+
+        return state.AudioLanguage is null
+            ? $"pack {state.AudioPack}"
+            : $"{state.AudioPack} · {state.AudioLanguage}";
+    }
 
     private static string SortLabel(BrowserState state)
     {
@@ -3177,6 +3816,7 @@ internal sealed class BrowserForm : Form
             BrowserView.Skeleton => state.Skeleton is { } skeleton
                 ? $"{archive} / Meshes / Skeleton 0x{skeleton.Hash:X16}"
                 : $"{archive} / Meshes / Skeleton",
+            BrowserView.Audio => "SOUNDBANKS / Audio",
             BrowserView.Material => state.Material is { } material
                 ? compact
                     ? $"{archive} / 0x{material.Hash:X16}"

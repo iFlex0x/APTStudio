@@ -1,4 +1,5 @@
 using System.Drawing;
+using AptStudio.Core.Audio;
 
 namespace AptStudio.Desktop.Browser;
 
@@ -117,6 +118,32 @@ internal sealed class BrowserNavigation
             View = BrowserView.Skeleton,
             Skeleton = skeleton,
         };
+    }
+
+    public void SelectAudio(AudioEntry audio, int listIndex)
+    {
+        ArgumentNullException.ThrowIfNull(audio);
+        State = State with
+        {
+            View = BrowserView.Audio,
+            Audio = audio,
+            ListIndex = listIndex,
+        };
+    }
+
+    public void ClearAudio()
+    {
+        State = State with { Audio = null };
+    }
+
+    public void SetAudioFilter(string? pack, string? language)
+    {
+        State = State with { AudioPack = pack, AudioLanguage = language };
+    }
+
+    public void SetAudioSort(AudioSort sort, bool descending)
+    {
+        State = State with { AudioSort = sort, AudioSortDescending = descending };
     }
 
     public void SetSort(TextureSort sort, bool descending)

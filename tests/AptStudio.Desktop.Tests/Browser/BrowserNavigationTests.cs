@@ -1,4 +1,5 @@
 using System.Drawing;
+using AptStudio.Core.Audio;
 using AptStudio.Core.Textures;
 using AptStudio.Desktop.Browser;
 
@@ -207,6 +208,42 @@ public sealed class BrowserNavigationTests
         Assert.True(navigation.State.SortDescending);
         Assert.Equal(Eye, navigation.State.Texture);
         Assert.False(navigation.CanBack);
+    }
+
+    [Fact]
+    public void AudioOccurrenceSurvivesFilterAndSort()
+    {
+        AudioEntry entry = new(
+            @"C:\game\SOUNDBANKS\VO_MEDIA.PC.PCK",
+            "VO_MEDIA.PC.PCK",
+            0,
+            0x1EEAB9D4,
+            2497360640,
+            576565,
+            4,
+            "french(france)",
+            new WemInfo(0xFFFF, 1, 48000, 2720160, null),
+            null);
+        BrowserNavigation navigation = new(TextureState());
+
+        navigation.SelectAudio(entry, 37);
+        navigation.SetAudioFilter("VO_MEDIA.PC.PCK", "french(france)");
+        navigation.SetAudioSort(AudioSort.Length, true);
+
+        Assert.Same(entry, navigation.State.Audio);
+        Assert.Equal(BrowserView.Audio, navigation.State.View);
+        Assert.Equal(37, navigation.State.ListIndex);
+        Assert.Equal("VO_MEDIA.PC.PCK", navigation.State.AudioPack);
+        Assert.Equal("french(france)", navigation.State.AudioLanguage);
+        Assert.Equal(AudioSort.Length, navigation.State.AudioSort);
+        Assert.True(navigation.State.AudioSortDescending);
+        Assert.NotEqual(
+            BrowserKeys.Audio(entry),
+            BrowserKeys.Audio(entry with { LanguageId = 1 }));
+
+        navigation.ClearAudio();
+
+        Assert.Null(navigation.State.Audio);
     }
 
     [Fact]
