@@ -468,13 +468,24 @@ internal sealed class AssetList : ScrollableControl
                 AssetColumn definition = _columns[column];
                 int width = widths[column];
                 Rectangle cell = new(x, y, width, RowHeight);
+                Font font = definition.Mono ? _monoFont : Font;
+                string text = row.Cells[column];
                 TextFormatFlags flags = TextFormatFlags.VerticalCenter
-                    | TextFormatFlags.EndEllipsis
-                    | (definition.Right ? TextFormatFlags.Right : TextFormatFlags.Left);
+                    | (definition.Right ? TextFormatFlags.Right : TextFormatFlags.Left)
+                    | TextFormatFlags.NoPrefix;
+                if (definition.MiddleEllipsis)
+                {
+                    text = BrowserVisual.EllipsizeMiddle(text, font, Math.Max(20, width - 8));
+                }
+                else
+                {
+                    flags |= TextFormatFlags.EndEllipsis;
+                }
+
                 TextRenderer.DrawText(
                     e.Graphics,
-                    row.Cells[column],
-                    definition.Mono ? _monoFont : Font,
+                    text,
+                    font,
                     cell,
                     selected ? Theme.Text : definition.Muted ? Theme.Muted : Theme.Text,
                     flags);

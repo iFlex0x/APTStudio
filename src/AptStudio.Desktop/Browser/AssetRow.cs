@@ -8,4 +8,5 @@ internal sealed record AssetColumn(
     bool Flexible = false,
     bool Right = false,
     bool Mono = false,
-    bool Muted = false);
+    bool Muted = false,
+    bool MiddleEllipsis = false);

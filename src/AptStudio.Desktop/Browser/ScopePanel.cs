@@ -4,7 +4,9 @@ namespace AptStudio.Desktop.Browser;
 
 internal sealed record ArchiveChoice(string Path, int Count)
 {
-    public string Name => System.IO.Path.GetFileName(Path);
+    public string Name => string.IsNullOrEmpty(Path)
+        ? "All archives"
+        : System.IO.Path.GetFileName(Path);
 
     public string Display => Count > 0 ? $"{Name}  {Count:N0}" : Name;
 
@@ -371,8 +373,8 @@ internal sealed class ScopePanel : Panel
                 e.Bounds.Height - 1);
         }
 
-        int countWidth = choice.Count > 0 ? 44 : 0;
-        int countX = e.Bounds.Right - countWidth - 12;
+        int countWidth = choice.Count >= 100_000 ? 56 : choice.Count > 0 ? 44 : 0;
+        int countX = e.Bounds.Right - countWidth - 24;
         int nameWidth = Math.Max(20, countX - e.Bounds.X - 8);
         TextRenderer.DrawText(
             e.Graphics,

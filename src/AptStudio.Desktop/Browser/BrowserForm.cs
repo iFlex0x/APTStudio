@@ -50,7 +50,8 @@ internal sealed class BrowserForm : Form
     private readonly bool _saveSettings;
     private static readonly AssetColumn[] TextureColumns =
     [
-        new("Hash", 0, Flexible: true, Mono: true),
+        new("Hash", 160, Mono: true),
+        new("Archive", 0, Flexible: true, Muted: true, MiddleEllipsis: true),
         new("Size", 92, Right: true, Muted: true),
         new("Mips", 48, Right: true, Muted: true),
         new("Format", 56, Muted: true),
@@ -58,9 +59,8 @@ internal sealed class BrowserForm : Form
     ];
     private static readonly AssetColumn[] NarrowTextureColumns =
     [
-        new("Hash", 0, Flexible: true, Mono: true),
-        new("Size", 88, Right: true, Muted: true),
-        new("Mips", 44, Right: true, Muted: true),
+        new("Hash", 150, Mono: true),
+        new("Archive", 0, Flexible: true, Muted: true, MiddleEllipsis: true),
     ];
     private static readonly AssetColumn[] AnimationColumns =
     [
@@ -68,9 +68,14 @@ internal sealed class BrowserForm : Form
         new("Occurrences", 90, Right: true, Muted: true),
     ];
     private CancellationTokenSource? _loadCancel;
+    private CancellationTokenSource? _listCancel;
+    private int _listVersion;
+    private bool _listBuilding;
     private BrowserNavigation? _navigation;
     private IReadOnlyList<AssetEntry> _assets = Array.Empty<AssetEntry>();
     private IReadOnlyList<ArchiveChoice> _archives = Array.Empty<ArchiveChoice>();
+    private int _totalTextureCount;
+    private string _lastArchive = "";
     private IReadOnlyDictionary<string, int> _animationCounts =
         new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
     private IReadOnlyDictionary<ulong, int> _animationOccurrences =
@@ -166,6 +171,7 @@ internal sealed class BrowserForm : Form
         FormClosing += (_, _) =>
         {
             _loadCancel?.Cancel();
+            _listCancel?.Cancel();
             _materialCancel?.Cancel();
             SaveLayout();
         };
@@ -662,6 +668,10 @@ internal sealed class BrowserForm : Form
         _materialCancel?.Cancel();
         _materialCancel?.Dispose();
         _materialCancel = null;
+        _listCancel?.Cancel();
+        _listCancel = null;
+        _listVersion++;
+        _listBuilding = false;
         _materials = null;
         _materialTextures = null;
         _materialLoading = false;
@@ -725,12 +735,18 @@ internal sealed class BrowserForm : Form
                 }
             }
 
-            _archives = catalog.Archives
+            _totalTextureCount = textureCounts.Values.Sum();
+            ArchiveChoice[] archiveRows = catalog.Archives
                 .Select(archive => new ArchiveChoice(
                     archive.Path,
                     textureCounts.GetValueOrDefault(archive.Path)))
                 .OrderBy(archive => archive.Name, StringComparer.OrdinalIgnoreCase)
                 .ToArray();
+            _archives =
+            [
+                new ArchiveChoice("", _totalTextureCount),
+                .. archiveRows,
+            ];
             _animationCounts = _assets
                 .Where(entry => entry.ClassHash == AssetClass.Animation)
                 .GroupBy(entry => entry.ArchivePath, StringComparer.OrdinalIgnoreCase)
@@ -741,6 +757,7 @@ internal sealed class BrowserForm : Form
                 .ToDictionary(group => group.Key, group => group.Count());
 
             string selected = ChooseInitialArchive();
+            _lastArchive = selected;
             _navigation = new BrowserNavigation(new BrowserState(
                 BrowserView.Textures,
                 selected,
@@ -763,10 +780,10 @@ internal sealed class BrowserForm : Form
             _search.Enabled = true;
             _filterButton.Enabled = true;
             RenderState();
-            _status.Text =
-                $"{Path.GetFileName(selected)} · {_textureList.Rows.Count:N0} shown of " +
-                $"{ArchiveCount(selected):N0} texture rows · {catalog.Archives.Count:N0} archives · " +
-                $"{watch.ElapsedMilliseconds:N0} ms";
+            _status.Text = $"{ScopeName(selected)} · loading textures...";
+            BrowserTiming.Write(
+                $"catalog {watch.ElapsedMilliseconds}ms {catalog.Archives.Count} archives " +
+                $"{_assets.Count} rows");
             if (_saveSettings)
             {
                 Settings.SaveLastGameRoot(profile.Root);
@@ -787,6 +804,10 @@ internal sealed class BrowserForm : Form
             if (cancel == _loadCancel)
             {
                 _loading = false;
+                if (!_listBuilding)
+                {
+                    UpdateStatus();
+                }
             }
         }
     }
@@ -801,8 +822,8 @@ internal sealed class BrowserForm : Form
             return greece.Path;
         }
 
-        return _archives.FirstOrDefault(archive => archive.Count > 0)?.Path
-            ?? _archives.FirstOrDefault()?.Path
+        return _archives.FirstOrDefault(archive => archive.Count > 0 && archive.Path.Length > 0)?.Path
+            ?? _archives.FirstOrDefault(archive => archive.Path.Length > 0)?.Path
             ?? "";
     }
 
@@ -841,7 +862,20 @@ internal sealed class BrowserForm : Form
         BrowserView view = state.View == BrowserView.Placeholder
             ? BrowserView.Placeholder
             : state.View == BrowserView.Animations ? BrowserView.Animations : BrowserView.Textures;
-        _navigation.SwitchScope(archivePath, view, state.PlaceholderName);
+        if (archivePath.Length == 0)
+        {
+            view = BrowserView.Textures;
+        }
+
+        if (archivePath.Length > 0)
+        {
+            _lastArchive = archivePath;
+        }
+
+        _navigation.SwitchScope(
+            archivePath,
+            view,
+            view == BrowserView.Placeholder ? state.PlaceholderName : "");
         _scope.SetTypes(BuildTypes(archivePath), TypeName(_navigation.State));
         RenderState();
     }
@@ -859,10 +893,27 @@ internal sealed class BrowserForm : Form
             "Animations" => BrowserView.Animations,
             _ => BrowserView.Placeholder,
         };
+        string archive = _navigation.State.ArchivePath;
+        if (name != "Textures" && string.IsNullOrEmpty(archive))
+        {
+            archive = _lastArchive.Length > 0 ? _lastArchive : ChooseInitialArchive();
+            if (archive.Length == 0)
+            {
+                return;
+            }
+        }
+
+        if (view == _navigation.State.View
+            && archive.Equals(_navigation.State.ArchivePath, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
         _navigation.SwitchScope(
-            _navigation.State.ArchivePath,
+            archive,
             view,
             view == BrowserView.Placeholder ? name : "");
+        _scope.SetTypes(BuildTypes(archive), TypeName(_navigation.State));
         RenderState();
     }
 
@@ -909,10 +960,13 @@ internal sealed class BrowserForm : Form
         }
 
         BrowserState state = _navigation.State;
+        bool allArchives = string.IsNullOrEmpty(state.ArchivePath);
         List<AssetEntry> textures = _assets
             .Where(entry => entry.IsBitmap
                 && entry.Bitmap is not null
-                && entry.ArchivePath.Equals(state.ArchivePath, StringComparison.OrdinalIgnoreCase))
+                && (allArchives
+                    || entry.ArchivePath.Equals(
+                        state.ArchivePath, StringComparison.OrdinalIgnoreCase)))
             .ToList();
         if (textures.Count == 0)
         {
@@ -1047,6 +1101,18 @@ internal sealed class BrowserForm : Form
         }
 
         BrowserState state = _navigation.State;
+        if (!string.IsNullOrEmpty(state.ArchivePath))
+        {
+            _lastArchive = state.ArchivePath;
+        }
+
+        if (state.View != BrowserView.Textures && _listBuilding)
+        {
+            _listCancel?.Cancel();
+            _listBuilding = false;
+            _listVersion++;
+        }
+
         _scope.SelectArchive(state.ArchivePath);
         _scope.SetActiveType(TypeName(state));
         _scopeButton.Text = _navigation.IsChooserOpen ? "All archives" : ScopeChip(state);
@@ -1090,8 +1156,8 @@ internal sealed class BrowserForm : Form
             _search.Enabled = false;
             RenderInspector();
             _status.Text =
-                $"{Path.GetFileName(state.ArchivePath)} · {_chooser.RowCount:N0} material uses · " +
-                "all archives";
+                $"{state.Texture?.ArchiveName ?? ScopeName(state.ArchivePath)} · " +
+                $"{_chooser.RowCount:N0} material uses · all archives";
             return;
         }
 
@@ -1110,11 +1176,7 @@ internal sealed class BrowserForm : Form
             case BrowserView.Textures:
                 _resultsTitle.Text = "Textures";
                 SetListMode(false);
-                RenderTextureList(state);
-                _resultsCount.Text = $"{_textureList.Rows.Count:N0}";
-                _resultsBody.Text =
-                    $"{Path.GetFileName(state.ArchivePath)} · {_textureList.Rows.Count:N0} of " +
-                    $"{ArchiveCount(state.ArchivePath):N0} textures · {SortLabel(state)}";
+                StartTextureList(state);
                 break;
             case BrowserView.Animations:
                 _resultsTitle.Text = "Animations";
@@ -1123,7 +1185,7 @@ internal sealed class BrowserForm : Form
                 _resultsCount.Text = $"{_textureList.Rows.Count:N0}";
                 string clipNoun = _textureList.Rows.Count == 1 ? "clip" : "clips";
                 _resultsBody.Text =
-                    $"{Path.GetFileName(state.ArchivePath)} · {_textureList.Rows.Count:N0} " +
+                    $"{ScopeName(state.ArchivePath)} · {_textureList.Rows.Count:N0} " +
                     $"{clipNoun} · hash order";
                 break;
             case BrowserView.Material:
@@ -1159,16 +1221,105 @@ internal sealed class BrowserForm : Form
                 break;
         }
 
-        if (!_loading)
+        if (!_loading && !_listBuilding)
         {
             UpdateStatus();
         }
     }
 
-    private void RenderTextureList(BrowserState state)
+    private void StartTextureList(BrowserState state)
     {
-        IReadOnlyList<AssetRow> rows = BuildTextureRows(state);
-        string? keep = state.Texture is null ? null : OccurrenceKey(state.Texture);
+        _listCancel?.Cancel();
+        CancellationTokenSource cancel = new();
+        _listCancel = cancel;
+        int version = ++_listVersion;
+        _listBuilding = true;
+        Stopwatch watch = Stopwatch.StartNew();
+        long firstMs = -1;
+        _resultsCount.Text = "";
+        _resultsBody.Text = $"{ScopeName(state.ArchivePath)} · searching...";
+        _status.Text = "Searching textures...";
+        BrowserTiming.Write(
+            $"start v{version} archive='{state.ArchivePath}' query='{state.Query}' " +
+            $"sort={state.Sort} desc={state.SortDescending}");
+        IProgress<int> progress = new Progress<int>(count =>
+        {
+            if (IsDisposed || !_listBuilding
+                || version != _listVersion || cancel != _listCancel)
+            {
+                return;
+            }
+
+            if (firstMs < 0)
+            {
+                firstMs = watch.ElapsedMilliseconds;
+                BrowserTiming.Write($"first v{version} {firstMs}ms {count} matches");
+            }
+
+            _resultsCount.Text = $"{count:N0}+";
+            _resultsBody.Text =
+                $"{ScopeName(state.ArchivePath)} · searching... {count:N0} matches";
+            _status.Text = $"Searching... {count:N0} matches";
+        });
+        _ = BuildTextureListAsync(state, cancel, version, watch, progress);
+    }
+
+    private async Task BuildTextureListAsync(
+        BrowserState state,
+        CancellationTokenSource cancel,
+        int version,
+        Stopwatch watch,
+        IProgress<int> progress)
+    {
+        try
+        {
+            List<AssetRow> rows = await Task.Run(
+                () => TextureListBuilder.Build(_assets, state, cancel.Token, progress),
+                cancel.Token);
+            if (IsDisposed || version != _listVersion || cancel != _listCancel)
+            {
+                BrowserTiming.Write($"discard v{version}");
+                return;
+            }
+
+            long settled = watch.ElapsedMilliseconds;
+            BrowserTiming.Write($"settled v{version} {settled}ms {rows.Count} rows");
+            _listBuilding = false;
+            ApplyTextureRows(rows);
+        }
+        catch (OperationCanceledException)
+        {
+            BrowserTiming.Write($"canceled v{version}");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
+            or InvalidDataException)
+        {
+            if (!IsDisposed && version == _listVersion && cancel == _listCancel)
+            {
+                _listBuilding = false;
+                _status.Text = ex.Message;
+            }
+        }
+        finally
+        {
+            if (ReferenceEquals(_listCancel, cancel))
+            {
+                _listCancel = null;
+            }
+
+            cancel.Dispose();
+        }
+    }
+
+    private void ApplyTextureRows(IReadOnlyList<AssetRow> rows)
+    {
+        if (_navigation is null || _navigation.State.View != BrowserView.Textures)
+        {
+            return;
+        }
+
+        BrowserState current = _navigation.State;
+        string? keep = current.Texture is null ? null : BrowserKeys.Texture(current.Texture);
         IReadOnlyCollection<string> selectedKeys = _textureList.SelectedKeys.ToArray();
         _textureList.SetRows(rows, keep, selectedKeys);
         bool keepFound = keep is not null
@@ -1197,7 +1348,7 @@ internal sealed class BrowserForm : Form
             }
         }
 
-        _textureList.TopIndex = state.ListIndex;
+        _textureList.TopIndex = current.ListIndex;
         _textureList.EnsureVisible(_textureList.SelectedIndex);
         if (rows.Count == 0)
         {
@@ -1209,6 +1360,17 @@ internal sealed class BrowserForm : Form
         }
 
         UpdateSelectionCount();
+        _resultsCount.Text = $"{rows.Count:N0}";
+        _resultsBody.Text =
+            $"{ScopeName(current.ArchivePath)} · {rows.Count:N0} of " +
+            $"{ArchiveCount(current.ArchivePath):N0} textures · {SortLabel(current)}";
+        BrowserTiming.Write(
+            $"apply v{_listVersion} selected={_textureList.SelectedKeys.Count} " +
+            $"keep={(keep is null ? "none" : keep)}");
+        if (!_loading)
+        {
+            UpdateStatus();
+        }
     }
 
     private void UpdateSelectionCount()
@@ -1382,98 +1544,6 @@ internal sealed class BrowserForm : Form
     private static string AnimationKey(AnimationOccurrence animation) =>
         $"{animation.BodyArchivePath}|{animation.BodyOffset}|{animation.Hash:X16}";
 
-    private IReadOnlyList<AssetRow> BuildTextureRows(BrowserState state)
-    {
-        List<AssetRow> rows = new();
-        if (_assets.Count == 0)
-        {
-            return rows;
-        }
-
-        string query = state.Query.Trim();
-        string needle = query.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
-            ? query[2..]
-            : query;
-        HashSet<(ulong Name, long Offset)> seen = new();
-        foreach (AssetEntry entry in _assets)
-        {
-            if (!entry.IsBitmap || entry.Bitmap is null)
-            {
-                continue;
-            }
-
-            if (!entry.ArchivePath.Equals(state.ArchivePath, StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            if (!seen.Add((entry.NameHash, entry.Row.BodyOffset)))
-            {
-                continue;
-            }
-
-            BitmapHead head = entry.Bitmap;
-            if (!state.Filter.Matches(head))
-            {
-                continue;
-            }
-
-            if (needle.Length > 0 && !Matches(entry, needle))
-            {
-                continue;
-            }
-
-            rows.Add(new AssetRow(
-                OccurrenceKey(entry),
-                [
-                    $"0x{entry.NameHash:X16}",
-                    $"{head.Width} × {head.Height}",
-                    head.MipCount.ToString(CultureInfo.InvariantCulture),
-                    head.Format.DisplayName,
-                    head.Storage.ToString(),
-                ],
-                entry));
-        }
-
-        rows.Sort((left, right) =>
-        {
-            AssetEntry a = (AssetEntry)left.Tag!;
-            AssetEntry b = (AssetEntry)right.Tag!;
-            int order = state.Sort switch
-            {
-                TextureSort.Hash => a.NameHash.CompareTo(b.NameHash),
-                TextureSort.Size => ((long)a.Bitmap!.Width * a.Bitmap.Height)
-                    .CompareTo((long)b.Bitmap!.Width * b.Bitmap.Height),
-                TextureSort.Mips => a.Bitmap!.MipCount.CompareTo(b.Bitmap!.MipCount),
-                _ => a.Row.BodyOffset.CompareTo(b.Row.BodyOffset),
-            };
-            if (order == 0)
-            {
-                order = a.NameHash.CompareTo(b.NameHash);
-            }
-
-            if (order == 0)
-            {
-                order = a.Row.BodyOffset.CompareTo(b.Row.BodyOffset);
-            }
-
-            return state.SortDescending ? -order : order;
-        });
-        return rows;
-    }
-
-    private static bool Matches(AssetEntry entry, string needle)
-    {
-        BitmapHead head = entry.Bitmap!;
-        return entry.NameHash.ToString("X16", CultureInfo.InvariantCulture)
-                .Contains(needle, StringComparison.OrdinalIgnoreCase)
-            || entry.ArchivePath.Contains(needle, StringComparison.OrdinalIgnoreCase)
-            || $"{head.Width}x{head.Height}".Contains(needle, StringComparison.OrdinalIgnoreCase)
-            || $"{head.Width} × {head.Height}".Contains(needle, StringComparison.OrdinalIgnoreCase)
-            || head.Format.DisplayName.Contains(needle, StringComparison.OrdinalIgnoreCase)
-            || head.Storage.ToString().Contains(needle, StringComparison.OrdinalIgnoreCase);
-    }
-
     private void RenderInspector()
     {
         if (_navigation is null)
@@ -1507,7 +1577,7 @@ internal sealed class BrowserForm : Form
         int copyIndex = 0;
         for (int index = 0; index < _inspectorCopies.Count; index++)
         {
-            if (OccurrenceKey(_inspectorCopies[index]) == OccurrenceKey(occurrence))
+            if (BrowserKeys.Texture(_inspectorCopies[index]) == BrowserKeys.Texture(occurrence))
             {
                 copyIndex = index;
                 break;
@@ -1556,7 +1626,7 @@ internal sealed class BrowserForm : Form
         HashSet<string> keys = new(StringComparer.Ordinal);
         void Add(TextureOccurrence occurrence)
         {
-            if (keys.Add(OccurrenceKey(occurrence)))
+            if (keys.Add(BrowserKeys.Texture(occurrence)))
             {
                 copies.Add(occurrence);
             }
@@ -1736,7 +1806,7 @@ internal sealed class BrowserForm : Form
             ? current.Texture
             : current.LinkedTexture;
         if (currentSource is null
-            || OccurrenceKey(currentSource) != OccurrenceKey(source)
+            || BrowserKeys.Texture(currentSource) != BrowserKeys.Texture(source)
             || _materialTextures is null
             || !_materialTextures.ByTexture.TryGetValue(source.Hash, out IReadOnlyList<MaterialTextureUse>? uses)
             || uses.Count == 0)
@@ -2065,7 +2135,7 @@ internal sealed class BrowserForm : Form
             }
 
             TextureOccurrence occurrence = ToOccurrence(entry);
-            if (keys.Add(OccurrenceKey(occurrence)))
+            if (keys.Add(BrowserKeys.Texture(occurrence)))
             {
                 copies.Add(occurrence);
             }
@@ -2094,17 +2164,18 @@ internal sealed class BrowserForm : Form
 
     private void UpdateStatus()
     {
-        if (_navigation is null || _loading)
+        if (_navigation is null || _loading || _listBuilding)
         {
             return;
         }
 
         BrowserState state = _navigation.State;
+        int archiveCount = _archives.Count(archive => archive.Path.Length > 0);
         if (state.View == BrowserView.Textures)
         {
             _status.Text =
-                $"{Path.GetFileName(state.ArchivePath)} · {_textureList.Rows.Count:N0} of " +
-                $"{ArchiveCount(state.ArchivePath):N0} textures · {_archives.Count:N0} archives";
+                $"{ScopeName(state.ArchivePath)} · {_textureList.Rows.Count:N0} of " +
+                $"{ArchiveCount(state.ArchivePath):N0} textures · {archiveCount:N0} archives";
             return;
         }
 
@@ -2112,8 +2183,8 @@ internal sealed class BrowserForm : Form
         {
             string noun = _textureList.Rows.Count == 1 ? "clip" : "clips";
             _status.Text =
-                $"{Path.GetFileName(state.ArchivePath)} · {_textureList.Rows.Count:N0} {noun} · " +
-                $"{_archives.Count:N0} archives";
+                $"{ScopeName(state.ArchivePath)} · {_textureList.Rows.Count:N0} {noun} · " +
+                $"{archiveCount:N0} archives";
             return;
         }
 
@@ -2135,15 +2206,9 @@ internal sealed class BrowserForm : Form
         }
 
         _status.Text =
-            $"{Path.GetFileName(state.ArchivePath)} · {TypeName(state)} · " +
-            $"{ArchiveCount(state.ArchivePath):N0} rows · {_archives.Count:N0} archives";
+            $"{ScopeName(state.ArchivePath)} · {TypeName(state)} · " +
+            $"{ArchiveCount(state.ArchivePath):N0} rows · {archiveCount:N0} archives";
     }
-
-    private static string OccurrenceKey(AssetEntry entry) =>
-        $"{entry.ArchivePath}|{entry.Row.BodyOffset}|{entry.NameHash:X16}";
-
-    private static string OccurrenceKey(TextureOccurrence occurrence) =>
-        $"{occurrence.ArchivePath}|{occurrence.BodyOffset}|{occurrence.Hash:X16}";
 
     private static TextureOccurrence ToOccurrence(AssetEntry entry) => new(
         entry.NameHash,
@@ -2160,8 +2225,10 @@ internal sealed class BrowserForm : Form
         _ => "Textures",
     };
 
-    private static string ScopeChip(BrowserState state) =>
-        Path.GetFileName(state.ArchivePath);
+    private static string ScopeName(string archivePath) =>
+        string.IsNullOrEmpty(archivePath) ? "All archives" : Path.GetFileName(archivePath);
+
+    private static string ScopeChip(BrowserState state) => ScopeName(state.ArchivePath);
 
     private static string SortLabel(BrowserState state)
     {
@@ -2177,7 +2244,7 @@ internal sealed class BrowserForm : Form
 
     private string Crumbs(BrowserState state)
     {
-        string archive = Path.GetFileName(state.ArchivePath);
+        string archive = ScopeName(state.ArchivePath);
         bool compact = ClientSize.Width < BrowserLayout.CollapseWidth;
         return state.View switch
         {
@@ -2201,7 +2268,7 @@ internal sealed class BrowserForm : Form
 
     private string ChooserCrumbs(BrowserState state)
     {
-        string archive = Path.GetFileName(state.ArchivePath);
+        string archive = ScopeName(state.ArchivePath);
         if (ClientSize.Width < BrowserLayout.CollapseWidth)
         {
             return $"{archive} / Materials (all archives)";
