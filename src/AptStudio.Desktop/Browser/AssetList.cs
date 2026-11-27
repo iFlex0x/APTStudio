@@ -22,6 +22,10 @@ internal sealed class AssetList : ScrollableControl
     private bool _draggingScroll;
     private int _dragStartY;
     private int _dragStartScroll;
+    private int _rowsVersion;
+    private int _visibleRowsVersion = -1;
+    private int _visibleFirst = -1;
+    private int _visibleLast = -1;
 
     private const int ScrollBarWidth = 10;
 
@@ -47,6 +51,8 @@ internal sealed class AssetList : ScrollableControl
 
     public event Action<AssetRow>? ThumbnailRequested;
 
+    public event Action<IReadOnlyList<AssetRow>>? VisibleRowsChanged;
+
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public Func<AssetRow, Bitmap?>? ThumbnailProvider { get; set; }
 
@@ -68,6 +74,7 @@ internal sealed class AssetList : ScrollableControl
         set
         {
             _showThumbnails = value;
+            _visibleRowsVersion = -1;
             Invalidate();
         }
     }
@@ -176,6 +183,7 @@ internal sealed class AssetList : ScrollableControl
         IReadOnlyCollection<string>? keepKeys = null)
     {
         _rows = rows ?? Array.Empty<AssetRow>();
+        _rowsVersion++;
         _scrollY = Math.Clamp(_scrollY, 0, MaxScrollY);
 
         Dictionary<string, int> indexByKey = new(StringComparer.Ordinal);
@@ -222,6 +230,13 @@ internal sealed class AssetList : ScrollableControl
         _currentKey = keepKey is not null && indexByKey.ContainsKey(keepKey)
             ? keepKey
             : anchor >= 0 ? _rows[anchor].Key : null;
+        if (_rows.Count == 0 && _showThumbnails)
+        {
+            _visibleRowsVersion = _rowsVersion;
+            _visibleFirst = -1;
+            _visibleLast = -1;
+            VisibleRowsChanged?.Invoke(Array.Empty<AssetRow>());
+        }
         Invalidate();
     }
 
@@ -421,6 +436,18 @@ internal sealed class AssetList : ScrollableControl
         int scroll = -_scrollY;
         int first = Math.Max(0, (-scroll) / RowHeight);
         int last = Math.Min(_rows.Count - 1, (-scroll + ClientSize.Height) / RowHeight);
+        if (_showThumbnails
+            && (_rowsVersion != _visibleRowsVersion
+                || first != _visibleFirst
+                || last != _visibleLast))
+        {
+            _visibleRowsVersion = _rowsVersion;
+            _visibleFirst = first;
+            _visibleLast = last;
+            VisibleRowsChanged?.Invoke(
+                _rows.Skip(first).Take(last - first + 1).ToArray());
+        }
+
         int x0 = RowPadding + (_showThumbnails ? ThumbnailColumnWidth : 0);
         int[] widths = MeasureColumns(_columns, Math.Max(0, ClientSize.Width - x0 - RowPadding));
 

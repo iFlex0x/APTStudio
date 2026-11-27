@@ -34,6 +34,7 @@ internal sealed class BrowserForm : Form
     private readonly SkeletonView _skeletonView = new();
     private readonly AudioView _audioView = new();
     private ThumbnailCache _thumbnailCache = null!;
+    private MeshThumbnailCache _meshThumbnails = null!;
     private IReadOnlyList<TextureOccurrence> _inspectorCopies = Array.Empty<TextureOccurrence>();
     private readonly Label _resultsTitle = new();
     private readonly Label _resultsCount = new();
@@ -282,6 +283,7 @@ internal sealed class BrowserForm : Form
         if (disposing)
         {
             _thumbnailCache?.Dispose();
+            _meshThumbnails?.Dispose();
             _loadCancel?.Dispose();
             _materialCancel?.Dispose();
             _searchTimer.Dispose();
@@ -655,18 +657,53 @@ internal sealed class BrowserForm : Form
     private void WireTextureList()
     {
         _thumbnailCache = new ThumbnailCache();
+        _meshThumbnails = new MeshThumbnailCache();
         _textureList.ThumbnailProvider = row =>
-            row.Tag is AssetEntry entry && entry.IsPreviewable && entry.Texture is { } texture
+        {
+            if (row.Tag is not AssetEntry entry)
+            {
+                return _thumbnailCache.Placeholder;
+            }
+
+            if (entry.ClassHash == AssetClass.Mesh)
+            {
+                return _meshThumbnails.GetCached(entry);
+            }
+
+            return entry.IsPreviewable && entry.Texture is { } texture
                 ? _thumbnailCache.GetCached(texture)
                 : _thumbnailCache.Placeholder;
+        };
         _textureList.ThumbnailRequested += row =>
         {
-            if (row.Tag is AssetEntry entry && entry.IsPreviewable && entry.Texture is { } texture)
+            if (row.Tag is AssetEntry entry
+                && entry.ClassHash != AssetClass.Mesh
+                && entry.IsPreviewable
+                && entry.Texture is { } texture)
             {
                 _thumbnailCache.Request(texture);
             }
         };
+        _textureList.VisibleRowsChanged += rows =>
+        {
+            if (_navigation?.State.View != BrowserView.Meshes)
+            {
+                return;
+            }
+
+            List<AssetEntry> entries = new(rows.Count);
+            foreach (AssetRow row in rows)
+            {
+                if (row.Tag is AssetEntry { ClassHash: AssetClass.Mesh } entry)
+                {
+                    entries.Add(entry);
+                }
+            }
+
+            _meshThumbnails.SetVisible(entries);
+        };
         _thumbnailCache.ThumbnailReady += (_, _) => _textureList.Invalidate();
+        _meshThumbnails.ThumbnailReady += (_, _) => _textureList.Invalidate();
         _textureList.SelectionChanged += (_, _) => OnListSelected();
     }
 
@@ -1725,11 +1762,17 @@ internal sealed class BrowserForm : Form
             _ => narrow ? NarrowTextureColumns : TextureColumns,
         };
         bool textures = view == BrowserView.Textures;
+        bool meshes = view == BrowserView.Meshes;
         bool audio = view == BrowserView.Audio;
         _textureHeader.Columns = columns;
         _textureList.Columns = columns;
-        _textureHeader.ShowThumbnails = textures;
-        _textureList.ShowThumbnails = textures;
+        _textureHeader.ShowThumbnails = textures || meshes;
+        _textureList.ShowThumbnails = textures || meshes;
+        if (!meshes)
+        {
+            _meshThumbnails?.SetVisible(Array.Empty<AssetEntry>());
+        }
+
         _textureToolbar.Visible = textures || audio;
         _exportSelected.Visible = textures;
         _selectionCount.Visible = textures;
