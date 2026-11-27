@@ -33,6 +33,7 @@ internal sealed class MaterialSummaryCache
 {
     private readonly Dictionary<string, IReadOnlyList<MaterialRow>> _rows =
         new(StringComparer.OrdinalIgnoreCase);
+    private IReadOnlyList<MaterialRow>? _allRows;
 
     public int Generation { get; private set; }
 
@@ -40,8 +41,8 @@ internal sealed class MaterialSummaryCache
 
     public IReadOnlyList<MaterialRow>? GetRows(string archivePath)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(archivePath);
-        return _rows.GetValueOrDefault(archivePath);
+        ArgumentNullException.ThrowIfNull(archivePath);
+        return archivePath.Length == 0 ? _allRows : _rows.GetValueOrDefault(archivePath);
     }
 
     public bool TryStore(int generation, string archivePath, MaterialListResult result)
@@ -58,6 +59,18 @@ internal sealed class MaterialSummaryCache
         return true;
     }
 
+    public bool TryStoreAll(int generation, IReadOnlyList<MaterialRow> rows)
+    {
+        ArgumentNullException.ThrowIfNull(rows);
+        if (generation != Generation)
+        {
+            return false;
+        }
+
+        _allRows = rows;
+        return true;
+    }
+
     public void AddDecodes(int count)
     {
         if (count > 0)
@@ -70,6 +83,7 @@ internal sealed class MaterialSummaryCache
     {
         Generation++;
         _rows.Clear();
+        _allRows = null;
         DecodeCount = 0;
     }
 }

@@ -115,8 +115,9 @@ internal sealed class BrowserForm : Form
     ];
     private static readonly AssetColumn[] AnimationColumns =
     [
-        new("Hash", 0, Flexible: true, Mono: true),
-        new("Occurrences", 90, Right: true, Muted: true),
+        new("Hash", 140, Mono: true),
+        new("Archive", 0, Flexible: true, Muted: true, MiddleEllipsis: true),
+        new("Occurrences", 64, Right: true, Muted: true),
     ];
     private static readonly AssetColumn[] MeshColumns =
     [
@@ -159,6 +160,14 @@ internal sealed class BrowserForm : Form
         new("Language", 64, Muted: true),
     ];
     private CancellationTokenSource? _loadCancel;
+    private CancellationTokenSource? _allRowsCancel;
+    private int _allRowsVersion;
+    private bool _allRowsBuilding;
+    private BrowserView _allRowsView;
+    private string _allRowsQuery = "";
+    private IReadOnlyList<AssetRow>? _allRowsCache;
+    private BrowserView _allRowsCacheView;
+    private string _allRowsCacheQuery = "";
     private CancellationTokenSource? _listCancel;
     private int _listVersion;
     private bool _listBuilding;
@@ -306,6 +315,7 @@ internal sealed class BrowserForm : Form
         {
             _loadCancel?.Cancel();
             _listCancel?.Cancel();
+            _allRowsCancel?.Cancel();
             _materialCancel?.Cancel();
             _materialCatalogCancel?.Cancel();
             _materialListCancel?.Cancel();
@@ -328,6 +338,7 @@ internal sealed class BrowserForm : Form
             _thumbnailCache?.Dispose();
             _meshThumbnails?.Dispose();
             _loadCancel?.Dispose();
+            _allRowsCancel?.Dispose();
             _materialCancel?.Dispose();
             _materialCatalogCancel?.Dispose();
             _materialListCancel?.Dispose();
@@ -825,6 +836,7 @@ internal sealed class BrowserForm : Form
             {
                 _navigation.SetSkinListSelection(
                     ToSkin(entry), _textureList.TopIndex);
+                _navigation.SetListScroll(_textureList.ScrollOffset);
             }
 
             UpdateOpenSkinEnabled();
@@ -836,6 +848,7 @@ internal sealed class BrowserForm : Form
             {
                 _navigation.SetSkeletonListSelection(
                     ToSkeleton(skeleton), _textureList.TopIndex);
+                _navigation.SetListScroll(_textureList.ScrollOffset);
             }
 
             UpdateOpenSkeletonEnabled();
@@ -998,6 +1011,13 @@ internal sealed class BrowserForm : Form
         _listCancel = null;
         _listVersion++;
         _listBuilding = false;
+        _allRowsCancel?.Cancel();
+        _allRowsCancel?.Dispose();
+        _allRowsCancel = null;
+        _allRowsVersion++;
+        _allRowsBuilding = false;
+        _allRowsCache = null;
+        _allRowsCacheQuery = "";
         _skinLinksCancel?.Cancel();
         _skinLinksCancel = null;
         _skinLinks = null;
@@ -1264,10 +1284,17 @@ internal sealed class BrowserForm : Form
 
     private IReadOnlyList<TypeChoice> BuildTypes(string archivePath)
     {
+        bool allArchives = archivePath.Length == 0;
         int textures = ArchiveCount(archivePath);
-        int animations = _animationCounts.GetValueOrDefault(archivePath);
-        int meshes = _meshCounts.GetValueOrDefault(archivePath);
-        int skins = _skinCounts.GetValueOrDefault(archivePath);
+        int animations = allArchives
+            ? _animationCounts.Values.Sum()
+            : _animationCounts.GetValueOrDefault(archivePath);
+        int meshes = allArchives
+            ? _meshCounts.Values.Sum()
+            : _meshCounts.GetValueOrDefault(archivePath);
+        int skins = allArchives
+            ? _skinCounts.Values.Sum()
+            : _skinCounts.GetValueOrDefault(archivePath);
         int skeletons = SkeletonCount(archivePath);
         int materials = MaterialCount(archivePath);
         int audio = _audioLoaded ? _audio.Count : 0;
@@ -1298,6 +1325,9 @@ internal sealed class BrowserForm : Form
         return _materials.Archives.FirstOrDefault(archive =>
             archive.Path.Equals(archivePath, StringComparison.OrdinalIgnoreCase))?.Count ?? 0;
     }
+
+    private bool HasMaterialRows(string archivePath) =>
+        _materialCache.GetRows(archivePath) is not null;
 
     private int SkeletonCount(string archivePath)
     {
@@ -1359,10 +1389,6 @@ internal sealed class BrowserForm : Form
                 : BrowserView.Textures,
             _ => BrowserView.Textures,
         };
-        if (archivePath.Length == 0)
-        {
-            view = BrowserView.Textures;
-        }
 
         if (archivePath.Length > 0)
         {
@@ -1370,7 +1396,7 @@ internal sealed class BrowserForm : Form
         }
 
         if (view == BrowserView.Materials
-            && _materialCache.GetRows(archivePath) is null)
+            && !HasMaterialRows(archivePath))
         {
             _materialEntryWatch = Stopwatch.StartNew();
             BrowserTiming.Write($"materials-first start archive='{archivePath}'");
@@ -1409,15 +1435,6 @@ internal sealed class BrowserForm : Form
             _ => BrowserView.Placeholder,
         };
         string archive = _navigation.State.ArchivePath;
-        if (name != "Textures" && string.IsNullOrEmpty(archive))
-        {
-            archive = _lastArchive.Length > 0 ? _lastArchive : ChooseInitialArchive();
-            if (archive.Length == 0)
-            {
-                return;
-            }
-        }
-
         if (view == _navigation.State.View
             && archive.Equals(_navigation.State.ArchivePath, StringComparison.OrdinalIgnoreCase))
         {
@@ -1425,7 +1442,7 @@ internal sealed class BrowserForm : Form
         }
 
         if (view == BrowserView.Materials
-            && _materialCache.GetRows(archive) is null)
+            && !HasMaterialRows(archive))
         {
             _materialEntryWatch = Stopwatch.StartNew();
             BrowserTiming.Write($"materials-first start archive='{archive}'");
@@ -1489,7 +1506,7 @@ internal sealed class BrowserForm : Form
         _navigation.SetListIndex(0);
         _navigation.SetListScroll(0);
         if (_navigation.State.View == BrowserView.Materials
-            && _materialCache.GetRows(_navigation.State.ArchivePath) is not null)
+            && HasMaterialRows(_navigation.State.ArchivePath))
         {
             _materialFilterWatch = Stopwatch.StartNew();
         }
@@ -1660,6 +1677,16 @@ internal sealed class BrowserForm : Form
         if (state.View != BrowserView.SkinPose && _poseView is not null)
         {
             ClearPoseView();
+        }
+
+        if (_allRowsBuilding
+            && (state.ArchivePath.Length > 0
+                || state.View is not (BrowserView.Animations or BrowserView.Meshes
+                    or BrowserView.Skins or BrowserView.Skeletons)))
+        {
+            _allRowsCancel?.Cancel();
+            _allRowsBuilding = false;
+            _allRowsVersion++;
         }
 
         if (!string.IsNullOrEmpty(state.ArchivePath))
@@ -1946,7 +1973,7 @@ internal sealed class BrowserForm : Form
         }
 
         if (!_loading && !_listBuilding && !_audioListBuilding && !_audioLoading
-            && !_materialListBuilding)
+            && !_materialListBuilding && !_allRowsBuilding)
         {
             UpdateStatus();
         }
@@ -2185,6 +2212,11 @@ internal sealed class BrowserForm : Form
 
     private void RenderAnimationList(BrowserState state)
     {
+        if (TryRenderAllRows(state))
+        {
+            return;
+        }
+
         IReadOnlyList<AssetRow> rows = BuildAnimationRows(state);
         string? keep = state.Animation is null ? null : AnimationKey(state.Animation);
         _textureList.SetRows(rows, keep);
@@ -2199,8 +2231,16 @@ internal sealed class BrowserForm : Form
             }
         }
 
-        _textureList.TopIndex = state.ListIndex;
-        _textureList.EnsureVisible(_textureList.SelectedIndex);
+        if (state.Animation is null)
+        {
+            _textureList.TopIndex = state.ListIndex;
+            _textureList.EnsureVisible(_textureList.SelectedIndex);
+        }
+        else
+        {
+            _textureList.ScrollOffset = state.ListScroll;
+        }
+
         if (rows.Count == 0)
         {
             _animationInspector.ShowEmpty();
@@ -2211,49 +2251,230 @@ internal sealed class BrowserForm : Form
         }
     }
 
-    private IReadOnlyList<AssetRow> BuildAnimationRows(BrowserState state)
+    private IReadOnlyList<AssetRow> BuildAnimationRows(BrowserState state) =>
+        AssetListBuilder.Animations(
+            _assets, _animationOccurrences, state.ArchivePath, state.Query);
+
+    private IReadOnlyList<AssetRow> BuildMeshRows(BrowserState state) =>
+        AssetListBuilder.Meshes(_assets, state.ArchivePath, state.Query);
+
+    private IReadOnlyList<AssetRow> BuildSkinRows(BrowserState state) =>
+        AssetListBuilder.Skins(_assets, state.ArchivePath, state.Query);
+
+    private IReadOnlyList<AssetRow> BuildSkeletonRows(BrowserState state) =>
+        _skeletonCatalog is null
+            ? Array.Empty<AssetRow>()
+            : AssetListBuilder.Skeletons(
+                _skeletonCatalog.Entries, state.ArchivePath, state.Query);
+
+    private bool TryRenderAllRows(BrowserState state)
     {
-        List<AssetRow> rows = new();
-        HashSet<(string ArchivePath, long Offset)> seen = new();
-        string query = state.Query.Trim();
-        string needle = query.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
-            ? query[2..]
-            : query;
-        foreach (AssetEntry entry in _assets)
+        if (state.ArchivePath.Length != 0
+            || state.View is not (BrowserView.Animations or BrowserView.Meshes
+                or BrowserView.Skins or BrowserView.Skeletons))
         {
-            if (entry.ClassHash != AssetClass.Animation
-                || !entry.ArchivePath.Equals(state.ArchivePath, StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            if (!seen.Add((entry.BodyArchivePath, entry.Row.BodyOffset)))
-            {
-                continue;
-            }
-
-            if (needle.Length > 0
-                && !entry.NameHash.ToString("X16", CultureInfo.InvariantCulture)
-                    .Contains(needle, StringComparison.OrdinalIgnoreCase)
-                && !entry.ArchivePath.Contains(needle, StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            rows.Add(new AssetRow(
-                AnimationKey(entry),
-                [
-                    $"0x{entry.NameHash:X16}",
-                    _animationOccurrences.GetValueOrDefault(entry.NameHash)
-                        .ToString("N0", CultureInfo.InvariantCulture),
-                ],
-                entry));
+            return false;
         }
 
-        rows.Sort((left, right) => ((AssetEntry)left.Tag!).NameHash
-            .CompareTo(((AssetEntry)right.Tag!).NameHash));
-        return rows;
+        if (state.View == BrowserView.Skeletons && _skeletonCatalog is null)
+        {
+            return false;
+        }
+
+        string query = state.Query;
+        if (_allRowsCache is not null
+            && _allRowsCacheView == state.View
+            && _allRowsCacheQuery.Equals(query, StringComparison.Ordinal))
+        {
+            ApplyAllRows(state, _allRowsCache);
+            return true;
+        }
+
+        if (_allRowsBuilding
+            && _allRowsView == state.View
+            && _allRowsQuery.Equals(query, StringComparison.Ordinal))
+        {
+            _resultsCount.Text = "";
+            _resultsBody.Text = "All archives · searching...";
+            _status.Text = "Searching...";
+            return true;
+        }
+
+        StartAllRows(state);
+        return true;
     }
+
+    private void StartAllRows(BrowserState state)
+    {
+        _allRowsCancel?.Cancel();
+        _allRowsCancel?.Dispose();
+        CancellationTokenSource cancel = new();
+        _allRowsCancel = cancel;
+        int version = ++_allRowsVersion;
+        _allRowsBuilding = true;
+        _allRowsView = state.View;
+        _allRowsQuery = state.Query;
+        _allRowsCache = null;
+        _resultsCount.Text = "";
+        _resultsBody.Text = "All archives · searching...";
+        _status.Text = "Searching...";
+        BrowserTiming.Write($"all-rows start view={state.View} query='{state.Query}'");
+        _ = BuildAllRowsAsync(state, cancel, version);
+    }
+
+    private async Task BuildAllRowsAsync(
+        BrowserState state,
+        CancellationTokenSource cancel,
+        int version)
+    {
+        BrowserView view = state.View;
+        string query = state.Query;
+        IReadOnlyList<AssetEntry> assets = _assets;
+        IReadOnlyDictionary<ulong, int> occurrences = _animationOccurrences;
+        IReadOnlyList<SkeletonEntry> skeletons =
+            _skeletonCatalog?.Entries ?? Array.Empty<SkeletonEntry>();
+        try
+        {
+            IReadOnlyList<AssetRow> rows = await Task.Run(
+                () => view switch
+                {
+                    BrowserView.Animations => AssetListBuilder.Animations(
+                        assets, occurrences, "", query, cancel.Token),
+                    BrowserView.Meshes => AssetListBuilder.Meshes(
+                        assets, "", query, cancel.Token),
+                    BrowserView.Skins => AssetListBuilder.Skins(
+                        assets, "", query, cancel.Token),
+                    _ => AssetListBuilder.Skeletons(
+                        skeletons, "", query, cancel.Token),
+                },
+                cancel.Token);
+            if (IsDisposed || cancel != _allRowsCancel || version != _allRowsVersion
+                || _navigation?.State.View != view
+                || _navigation.State.ArchivePath.Length != 0
+                || !_navigation.State.Query.Equals(query, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            _allRowsBuilding = false;
+            _allRowsCache = rows;
+            _allRowsCacheView = view;
+            _allRowsCacheQuery = query;
+            ApplyAllRows(_navigation.State, rows);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        finally
+        {
+            if (cancel == _allRowsCancel)
+            {
+                _allRowsBuilding = false;
+            }
+        }
+    }
+
+    private void ApplyAllRows(BrowserState state, IReadOnlyList<AssetRow> rows)
+    {
+        _textureHost.Visible = true;
+        _textureToolbar.Visible = false;
+        _meshSkins.Visible = false;
+        string? keep = state.View switch
+        {
+            BrowserView.Animations => state.Animation is null
+                ? null
+                : AnimationKey(state.Animation),
+            BrowserView.Meshes => state.Mesh is null ? null : BrowserKeys.Mesh(state.Mesh),
+            BrowserView.Skins => state.Skin is null ? null : BrowserKeys.Skin(state.Skin),
+            _ => state.Skeleton is null ? null : BrowserKeys.Skeleton(state.Skeleton),
+        };
+        _textureList.SetRows(rows, keep);
+        bool keepFound = keep is not null
+            && _textureList.SelectedRow?.Key.Equals(keep, StringComparison.Ordinal) == true;
+        if (!keepFound)
+        {
+            if (state.View is BrowserView.Animations or BrowserView.Meshes)
+            {
+                _textureList.SelectedIndex = rows.Count > 0 ? 0 : -1;
+                if (rows.Count > 0)
+                {
+                    if (state.View == BrowserView.Animations)
+                    {
+                        OnAnimationSelected();
+                    }
+                    else
+                    {
+                        OnMeshSelected();
+                    }
+                }
+            }
+            else
+            {
+                _textureList.SelectedIndex = -1;
+            }
+        }
+
+        bool restoring = keep is not null;
+        if (restoring)
+        {
+            _textureList.ScrollOffset = state.ListScroll;
+        }
+        else
+        {
+            _textureList.TopIndex = state.ListIndex;
+            if (_textureList.SelectedIndex >= 0)
+            {
+                _textureList.EnsureVisible(_textureList.SelectedIndex);
+            }
+        }
+
+        _resultsCount.Text = $"{rows.Count:N0}";
+        _resultsBody.Text =
+            $"All archives · {rows.Count:N0} {AllRowsNoun(state.View)} · hash order";
+        _status.Text = $"All archives · {rows.Count:N0} {AllRowsNoun(state.View)}";
+        BrowserTiming.Write(
+            $"all-rows applied view={state.View} query='{state.Query}' rows={rows.Count:N0}");
+        if (state.View == BrowserView.Animations)
+        {
+            if (rows.Count == 0)
+            {
+                _animationInspector.ShowEmpty();
+            }
+            else
+            {
+                RenderAnimation();
+            }
+        }
+        else if (state.View == BrowserView.Meshes)
+        {
+            if (rows.Count == 0)
+            {
+                _meshInspector.ShowEmpty();
+            }
+            else if (keepFound)
+            {
+                _ = RenderMeshInspectorAsync(state);
+            }
+        }
+        else if (state.View == BrowserView.Skins)
+        {
+            _openSkin.Visible = true;
+            UpdateOpenSkinEnabled();
+        }
+        else
+        {
+            _openSkeleton.Visible = true;
+            UpdateOpenSkeletonEnabled();
+        }
+    }
+
+    private static string AllRowsNoun(BrowserView view) => view switch
+    {
+        BrowserView.Animations => "animations",
+        BrowserView.Meshes => "meshes",
+        BrowserView.Skins => "skins",
+        _ => "skeletons",
+    };
 
     private void OnAnimationSelected()
     {
@@ -2265,6 +2486,7 @@ internal sealed class BrowserForm : Form
         }
 
         _navigation.SetAnimation(ToAnimation(entry), _textureList.TopIndex);
+        _navigation.SetListScroll(_textureList.ScrollOffset);
         RenderAnimation();
         UpdateStatus();
     }
@@ -2302,76 +2524,22 @@ internal sealed class BrowserForm : Form
         entry.Row.BodyOffset);
 
     private static string AnimationKey(AssetEntry entry) =>
-        $"{entry.BodyArchivePath}|{entry.Row.BodyOffset}|{entry.NameHash:X16}";
+        $"{entry.ArchivePath}|{entry.BodyArchivePath}|{entry.Row.BodyOffset}|{entry.NameHash:X16}";
 
     private static string AnimationKey(AnimationOccurrence animation) =>
-        $"{animation.BodyArchivePath}|{animation.BodyOffset}|{animation.Hash:X16}";
-
-    private IReadOnlyList<AssetRow> BuildMeshRows(BrowserState state)
-    {
-        List<AssetRow> rows = new();
-        bool allArchives = string.IsNullOrEmpty(state.ArchivePath);
-        string query = state.Query.Trim();
-        string needle = query.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
-            ? query[2..]
-            : query;
-        HashSet<string> seen = new(StringComparer.Ordinal);
-        foreach (AssetEntry entry in _assets)
-        {
-            if (entry.ClassHash != AssetClass.Mesh)
-            {
-                continue;
-            }
-
-            if (!allArchives
-                && !entry.ArchivePath.Equals(state.ArchivePath, StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            if (!seen.Add(BrowserKeys.Mesh(entry)))
-            {
-                continue;
-            }
-
-            if (needle.Length > 0
-                && !entry.NameHash.ToString("X16", CultureInfo.InvariantCulture)
-                    .Contains(needle, StringComparison.OrdinalIgnoreCase)
-                && !entry.ArchivePath.Contains(needle, StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            rows.Add(new AssetRow(
-                BrowserKeys.Mesh(entry),
-                [
-                    $"0x{entry.NameHash:X16}",
-                    Path.GetFileName(entry.ArchivePath),
-                ],
-                entry));
-        }
-
-        rows.Sort((left, right) =>
-        {
-            AssetEntry a = (AssetEntry)left.Tag!;
-            AssetEntry b = (AssetEntry)right.Tag!;
-            int order = a.NameHash.CompareTo(b.NameHash);
-            if (order == 0)
-            {
-                order = string.Compare(
-                    a.ArchivePath, b.ArchivePath, StringComparison.OrdinalIgnoreCase);
-            }
-
-            return order == 0 ? a.Row.BodyOffset.CompareTo(b.Row.BodyOffset) : order;
-        });
-        return rows;
-    }
+        $"{animation.ArchivePath}|{animation.BodyArchivePath}|" +
+        $"{animation.BodyOffset}|{animation.Hash:X16}";
 
     private void RenderMeshList(BrowserState state)
     {
         _meshSkins.Visible = false;
         _textureHost.Visible = true;
         _textureToolbar.Visible = false;
+        if (TryRenderAllRows(state))
+        {
+            return;
+        }
+
         IReadOnlyList<AssetRow> rows = BuildMeshRows(state);
         string? keep = state.Mesh is null ? null : BrowserKeys.Mesh(state.Mesh);
         _textureList.SetRows(rows, keep);
@@ -2386,8 +2554,16 @@ internal sealed class BrowserForm : Form
             }
         }
 
-        _textureList.TopIndex = state.ListIndex;
-        _textureList.EnsureVisible(_textureList.SelectedIndex);
+        if (state.Mesh is null)
+        {
+            _textureList.TopIndex = state.ListIndex;
+            _textureList.EnsureVisible(_textureList.SelectedIndex);
+        }
+        else
+        {
+            _textureList.ScrollOffset = state.ListScroll;
+        }
+
         _resultsCount.Text = $"{rows.Count:N0}";
         _resultsBody.Text =
             $"{ScopeName(state.ArchivePath)} · {rows.Count:N0} meshes · hash order";
@@ -2401,78 +2577,30 @@ internal sealed class BrowserForm : Form
         }
     }
 
-    private IReadOnlyList<AssetRow> BuildSkinRows(BrowserState state)
-    {
-        List<AssetRow> rows = new();
-        bool allArchives = string.IsNullOrEmpty(state.ArchivePath);
-        string query = state.Query.Trim();
-        string needle = query.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
-            ? query[2..]
-            : query;
-        HashSet<string> seen = new(StringComparer.Ordinal);
-        foreach (AssetEntry entry in _assets)
-        {
-            if (entry.ClassHash != AssetClass.Skin)
-            {
-                continue;
-            }
-
-            if (!allArchives
-                && !entry.ArchivePath.Equals(state.ArchivePath, StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            if (!seen.Add(BrowserKeys.Skin(entry)))
-            {
-                continue;
-            }
-
-            if (needle.Length > 0
-                && !entry.NameHash.ToString("X16", CultureInfo.InvariantCulture)
-                    .Contains(needle, StringComparison.OrdinalIgnoreCase)
-                && !entry.ArchivePath.Contains(needle, StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            rows.Add(new AssetRow(
-                BrowserKeys.Skin(entry),
-                [
-                    $"0x{entry.NameHash:X16}",
-                    Path.GetFileName(entry.ArchivePath),
-                ],
-                entry));
-        }
-
-        rows.Sort((left, right) =>
-        {
-            AssetEntry a = (AssetEntry)left.Tag!;
-            AssetEntry b = (AssetEntry)right.Tag!;
-            int order = a.NameHash.CompareTo(b.NameHash);
-            if (order == 0)
-            {
-                order = string.Compare(
-                    a.ArchivePath, b.ArchivePath, StringComparison.OrdinalIgnoreCase);
-            }
-
-            return order == 0 ? a.Row.BodyOffset.CompareTo(b.Row.BodyOffset) : order;
-        });
-        return rows;
-    }
-
     private void RenderSkinList(BrowserState state)
     {
         _skinView.Visible = false;
         _textureHost.Visible = true;
         _textureToolbar.Visible = false;
+        if (TryRenderAllRows(state))
+        {
+            return;
+        }
+
         IReadOnlyList<AssetRow> rows = BuildSkinRows(state);
         string? keep = state.Skin is null ? null : BrowserKeys.Skin(state.Skin);
         _textureList.SetRows(rows, keep);
-        _textureList.TopIndex = state.ListIndex;
-        if (_textureList.SelectedIndex >= 0)
+        if (state.Skin is null)
         {
-            _textureList.EnsureVisible(_textureList.SelectedIndex);
+            _textureList.TopIndex = state.ListIndex;
+            if (_textureList.SelectedIndex >= 0)
+            {
+                _textureList.EnsureVisible(_textureList.SelectedIndex);
+            }
+        }
+        else
+        {
+            _textureList.ScrollOffset = state.ListScroll;
         }
 
         _resultsCount.Text = $"{rows.Count:N0}";
@@ -2500,68 +2628,9 @@ internal sealed class BrowserForm : Form
 
         SkinOccurrence skin = ToSkin(entry);
         _navigation.SetSkinListSelection(skin, _textureList.TopIndex);
+        _navigation.SetListScroll(_textureList.ScrollOffset);
         _navigation.OpenSkin(skin, 0);
         RenderState();
-    }
-
-    private IReadOnlyList<AssetRow> BuildSkeletonRows(BrowserState state)
-    {
-        List<AssetRow> rows = new();
-        if (_skeletonCatalog is null)
-        {
-            return rows;
-        }
-
-        bool allArchives = string.IsNullOrEmpty(state.ArchivePath);
-        string query = state.Query.Trim();
-        string needle = query.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
-            ? query[2..]
-            : query;
-        HashSet<string> seen = new(StringComparer.Ordinal);
-        foreach (SkeletonEntry entry in _skeletonCatalog.Entries)
-        {
-            if (!allArchives
-                && !entry.ArchivePath.Equals(state.ArchivePath, StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            if (!seen.Add(BrowserKeys.Skeleton(entry)))
-            {
-                continue;
-            }
-
-            if (needle.Length > 0
-                && !entry.NameHash.ToString("X16", CultureInfo.InvariantCulture)
-                    .Contains(needle, StringComparison.OrdinalIgnoreCase)
-                && !entry.ArchivePath.Contains(needle, StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            rows.Add(new AssetRow(
-                BrowserKeys.Skeleton(entry),
-                [
-                    $"0x{entry.NameHash:X16}",
-                    Path.GetFileName(entry.ArchivePath),
-                ],
-                entry));
-        }
-
-        rows.Sort((left, right) =>
-        {
-            SkeletonEntry a = (SkeletonEntry)left.Tag!;
-            SkeletonEntry b = (SkeletonEntry)right.Tag!;
-            int order = a.NameHash.CompareTo(b.NameHash);
-            if (order == 0)
-            {
-                order = string.Compare(
-                    a.ArchivePath, b.ArchivePath, StringComparison.OrdinalIgnoreCase);
-            }
-
-            return order == 0 ? a.Offset.CompareTo(b.Offset) : order;
-        });
-        return rows;
     }
 
     private void RenderSkeletonList(BrowserState state)
@@ -2580,13 +2649,25 @@ internal sealed class BrowserForm : Form
             return;
         }
 
+        if (TryRenderAllRows(state))
+        {
+            return;
+        }
+
         IReadOnlyList<AssetRow> rows = BuildSkeletonRows(state);
         string? keep = state.Skeleton is null ? null : BrowserKeys.Skeleton(state.Skeleton);
         _textureList.SetRows(rows, keep);
-        _textureList.TopIndex = state.ListIndex;
-        if (_textureList.SelectedIndex >= 0)
+        if (state.Skeleton is null)
         {
-            _textureList.EnsureVisible(_textureList.SelectedIndex);
+            _textureList.TopIndex = state.ListIndex;
+            if (_textureList.SelectedIndex >= 0)
+            {
+                _textureList.EnsureVisible(_textureList.SelectedIndex);
+            }
+        }
+        else
+        {
+            _textureList.ScrollOffset = state.ListScroll;
         }
 
         _resultsCount.Text = $"{rows.Count:N0}";
@@ -2612,6 +2693,7 @@ internal sealed class BrowserForm : Form
 
         SkeletonOccurrence skeleton = ToSkeleton(entry);
         _navigation.SetSkeletonListSelection(skeleton, _textureList.TopIndex);
+        _navigation.SetListScroll(_textureList.ScrollOffset);
         _navigation.OpenSkeleton(skeleton);
         RenderState();
     }
@@ -2638,10 +2720,21 @@ internal sealed class BrowserForm : Form
 
         if (state.ArchivePath.Length == 0)
         {
-            _textureList.SetRows(Array.Empty<AssetRow>(), null);
-            _resultsCount.Text = "";
-            _resultsBody.Text = "Select an archive to browse materials.";
-            UpdateOpenMaterialEnabled();
+            if (_materialCache.GetRows("") is not null)
+            {
+                _materialEntryWatch = null;
+                ApplyMaterialList(
+                    state, firstEntry: false, firstWatch: null,
+                    filterWatch: _materialFilterWatch);
+                return;
+            }
+
+            if (_materialListBuilding && _materialListArchive.Length == 0)
+            {
+                return;
+            }
+
+            StartAllMaterialList(state);
             return;
         }
 
@@ -2678,6 +2771,143 @@ internal sealed class BrowserForm : Form
         _materialEntryWatch = watch;
         int generation = _materialCache.Generation;
         _ = BuildMaterialListAsync(state, cancel, version, generation, watch);
+    }
+
+    private void StartAllMaterialList(BrowserState state)
+    {
+        _materialListCancel?.Cancel();
+        _materialListCancel?.Dispose();
+        CancellationTokenSource cancel = new();
+        _materialListCancel = cancel;
+        int version = ++_materialListVersion;
+        _materialListBuilding = true;
+        _materialListArchive = "";
+        _resultsCount.Text = "";
+        _resultsBody.Text = "All archives · decoding materials...";
+        _status.Text = "Decoding materials...";
+        BrowserTiming.Write("materials-all start");
+        Stopwatch watch = _materialEntryWatch ?? Stopwatch.StartNew();
+        _materialEntryWatch = watch;
+        int generation = _materialCache.Generation;
+        _ = BuildAllMaterialListAsync(cancel, version, generation, watch);
+    }
+
+    private async Task BuildAllMaterialListAsync(
+        CancellationTokenSource cancel,
+        int version,
+        int generation,
+        Stopwatch watch)
+    {
+        if (_materials is null)
+        {
+            return;
+        }
+
+        IReadOnlyList<MaterialEntry> entries = _materials.Entries;
+        try
+        {
+            (List<MaterialRow> All, List<(string Archive, MaterialListResult Result)> Results) work =
+                await Task.Run(() =>
+                {
+                    List<MaterialRow> all = new();
+                    List<(string, MaterialListResult)> results = new();
+                    foreach (IGrouping<string, MaterialEntry> group in entries
+                        .GroupBy(entry => entry.ArchivePath, StringComparer.OrdinalIgnoreCase)
+                        .OrderBy(group => group.Key, StringComparer.OrdinalIgnoreCase))
+                    {
+                        cancel.Token.ThrowIfCancellationRequested();
+                        IReadOnlyList<MaterialRow>? cached =
+                            _materialCache.GetRows(group.Key);
+                        if (cached is not null)
+                        {
+                            all.AddRange(cached);
+                            continue;
+                        }
+
+                        List<MaterialEntry> archive = group.ToList();
+                        using FileStream stream = new(
+                            group.Key, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                        MaterialListResult result = MaterialListBuilder.Build(
+                            archive,
+                            entry =>
+                            {
+                                MaterialData data = MaterialDecoder.Read(
+                                    stream, entry.ArchivePath, entry.Hit);
+                                return (data.Code, data.Slots.Count);
+                            },
+                            cancel.Token);
+                        results.Add((group.Key, result));
+                        all.AddRange(result.Rows);
+                    }
+
+                    all.Sort((left, right) =>
+                    {
+                        int order = left.Hash.CompareTo(right.Hash);
+                        if (order == 0)
+                        {
+                            order = string.Compare(
+                                left.Entry.ArchivePath,
+                                right.Entry.ArchivePath,
+                                StringComparison.OrdinalIgnoreCase);
+                        }
+
+                        return order == 0
+                            ? left.Entry.Offset.CompareTo(right.Entry.Offset)
+                            : order;
+                    });
+                    cancel.Token.ThrowIfCancellationRequested();
+                    return (all, results);
+                }, cancel.Token);
+            if (IsDisposed || cancel != _materialListCancel || version != _materialListVersion)
+            {
+                return;
+            }
+
+            foreach ((string archive, MaterialListResult result) in work.Results)
+            {
+                if (!_materialCache.TryStore(generation, archive, result))
+                {
+                    return;
+                }
+            }
+
+            if (!_materialCache.TryStoreAll(generation, work.All))
+            {
+                return;
+            }
+
+            _materialListBuilding = false;
+            BrowserTiming.Write(
+                $"materials-all decoded {watch.ElapsedMilliseconds}ms " +
+                $"rows={work.All.Count:N0} decodes={_materialCache.DecodeCount:N0}");
+            if (_navigation?.State.View != BrowserView.Materials
+                || _navigation.State.ArchivePath.Length != 0)
+            {
+                return;
+            }
+
+            ApplyMaterialList(
+                _navigation.State, firstEntry: true, firstWatch: watch, filterWatch: null);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex) when (ex is InvalidDataException or IOException
+            or UnauthorizedAccessException)
+        {
+            if (!IsDisposed && cancel == _materialListCancel && version == _materialListVersion)
+            {
+                _status.Text = ex.Message;
+                _resultsBody.Text = ex.Message;
+            }
+        }
+        finally
+        {
+            if (cancel == _materialListCancel)
+            {
+                _materialListBuilding = false;
+            }
+        }
     }
 
     private async Task BuildMaterialListAsync(
@@ -3002,6 +3232,7 @@ internal sealed class BrowserForm : Form
         }
 
         _navigation.SelectMesh(ToMesh(entry), _textureList.TopIndex);
+        _navigation.SetListScroll(_textureList.ScrollOffset);
         _ = RenderMeshInspectorAsync(_navigation.State);
         UpdateStatus();
     }

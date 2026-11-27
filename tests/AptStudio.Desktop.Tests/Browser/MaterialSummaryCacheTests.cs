@@ -55,6 +55,18 @@ public sealed class MaterialSummaryCacheTests
         Assert.Equal(3, cache.DecodeCount);
     }
 
+    [Fact]
+    public void EmptyPathReadsTheAllRowsCache()
+    {
+        MaterialSummaryCache cache = new();
+        int generation = cache.Generation;
+        Assert.Null(cache.GetRows(""));
+        Assert.True(cache.TryStoreAll(generation, [Result(0xDDDDDDDDDDDDDDDD, 1).Rows[0]]));
+
+        MaterialRow row = Assert.Single(cache.GetRows("")!);
+        Assert.Equal(0xDDDDDDDDDDDDDDDDUL, row.Hash);
+    }
+
     private static MaterialListResult Result(ulong hash, int decodes)
     {
         MaterialEntry entry = new(
