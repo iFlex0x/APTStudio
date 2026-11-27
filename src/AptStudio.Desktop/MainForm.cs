@@ -11,6 +11,7 @@ using AptStudio.Core.Materials;
 using AptStudio.Core.Meshes;
 using AptStudio.Core.Skins;
 using AptStudio.Core.Textures;
+using AptStudio.Desktop.Browser;
 
 namespace AptStudio.Desktop;
 
@@ -283,8 +284,10 @@ internal sealed class MainForm : Form
             Padding = new Padding(0, 7, 0, 7),
             BackColor = Theme.Surface,
         };
+        Button newBrowser = MakeButton("New browser (review)", Theme.Accent);
+        newBrowser.Click += (_, _) => new BrowserForm(_profile).Show(this);
         buttons.Controls.AddRange(
-            [_openButton, _rescanButton, _skeletonsButton, _exportButton, _cancelButton]);
+            [_openButton, newBrowser, _rescanButton, _skeletonsButton, _exportButton, _cancelButton]);
 
         _pathLabel.Dock = DockStyle.Fill;
         _pathLabel.AutoEllipsis = true;

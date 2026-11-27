@@ -116,7 +116,7 @@ internal sealed class TextureInspector : Panel
 
         ConfigureChannelButtons();
         _channels.AutoSize = true;
-        _channels.WrapContents = false;
+        _channels.WrapContents = true;
         _channels.Margin = new Padding(0, 3, 0, 0);
         _channels.Controls.Add(new Label
         {
