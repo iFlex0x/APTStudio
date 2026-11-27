@@ -15,7 +15,11 @@ internal sealed class SkinPartPreview : Panel
     private readonly Label _hash = new();
     private readonly Label _meta = new();
     private readonly Label _meta2 = new();
+    private readonly Button _openMesh = new();
     private IReadOnlyList<SkinPartDisplay> _parts = Array.Empty<SkinPartDisplay>();
+    private ulong _selectedMeshHash;
+
+    public event Action<ulong>? MeshRequested;
 
     public SkinPartPreview()
     {
@@ -41,7 +45,7 @@ internal sealed class SkinPartPreview : Panel
         {
             Dock = DockStyle.Fill,
             ColumnCount = 1,
-            RowCount = 4,
+            RowCount = 5,
             BackColor = Theme.Surface,
             Padding = new Padding(10, 6, 8, 4),
         };
@@ -50,14 +54,40 @@ internal sealed class SkinPartPreview : Panel
         details.RowStyles.Add(new RowStyle(SizeType.Absolute, 20));
         details.RowStyles.Add(new RowStyle(SizeType.Absolute, 20));
         details.RowStyles.Add(new RowStyle(SizeType.Absolute, 20));
+        details.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
         ConfigureDetail(_title, 9.5f, Theme.Text, true);
         ConfigureDetail(_hash, 8.5f, Theme.Text, false, mono: true);
         ConfigureDetail(_meta, 7.9f, Theme.Muted, false);
         ConfigureDetail(_meta2, 7.9f, Theme.Muted, false);
+
+        _openMesh.Text = "Open mesh";
+        _openMesh.Dock = DockStyle.Fill;
+        _openMesh.Height = 24;
+        _openMesh.Margin = new Padding(0, 4, 0, 0);
+        _openMesh.FlatStyle = FlatStyle.Flat;
+        _openMesh.BackColor = BrowserVisual.SurfaceRaised;
+        _openMesh.ForeColor = Theme.Text;
+        _openMesh.Font = BrowserVisual.RowSmall;
+        _openMesh.Padding = new Padding(8, 0, 8, 0);
+        _openMesh.UseVisualStyleBackColor = false;
+        _openMesh.FlatAppearance.BorderSize = 1;
+        _openMesh.FlatAppearance.BorderColor = BrowserVisual.BorderStrong;
+        _openMesh.FlatAppearance.MouseOverBackColor = BrowserVisual.SurfaceHover;
+        _openMesh.FlatAppearance.MouseDownBackColor = Theme.Selection;
+        _openMesh.Enabled = false;
+        _openMesh.Click += (_, _) =>
+        {
+            if (_selectedMeshHash != 0)
+            {
+                MeshRequested?.Invoke(_selectedMeshHash);
+            }
+        };
+
         details.Controls.Add(_title, 0, 0);
         details.Controls.Add(_hash, 0, 1);
         details.Controls.Add(_meta, 0, 2);
         details.Controls.Add(_meta2, 0, 3);
+        details.Controls.Add(_openMesh, 0, 4);
 
         Panel isolatedHost = new()
         {
@@ -113,6 +143,8 @@ internal sealed class SkinPartPreview : Panel
     {
         if (index < 0 || index >= _parts.Count)
         {
+            _selectedMeshHash = 0;
+            _openMesh.Enabled = false;
             _isolated.ShowMessage("Select a part.", false);
             _title.Text = "";
             _hash.Text = "";
@@ -122,6 +154,8 @@ internal sealed class SkinPartPreview : Panel
         }
 
         SkinPartDisplay part = _parts[index];
+        _selectedMeshHash = part.Row.MeshHash;
+        _openMesh.Enabled = part.Row.MeshHash != 0;
         _isolated.ShowMessage("No geometry for this part.", true);
         if (part.Geometry is { Positions.Length: > 0 } geometry)
         {
@@ -142,6 +176,8 @@ internal sealed class SkinPartPreview : Panel
     public void Reset()
     {
         _parts = Array.Empty<SkinPartDisplay>();
+        _selectedMeshHash = 0;
+        _openMesh.Enabled = false;
         _context.SetParts(Array.Empty<MeshGeometry?>(), -1);
         _isolated.ShowMessage("Select a part.", false);
         _title.Text = "";

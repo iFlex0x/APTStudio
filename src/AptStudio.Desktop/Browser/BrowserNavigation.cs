@@ -84,6 +84,26 @@ internal sealed class BrowserNavigation
         };
     }
 
+    public void OpenMeshFromSkin(MeshOccurrence mesh, int listIndex)
+    {
+        ArgumentNullException.ThrowIfNull(mesh);
+        _back.Push(State);
+        _forward.Clear();
+        State = State with
+        {
+            View = BrowserView.Meshes,
+            ArchivePath = mesh.ArchivePath,
+            Query = "",
+            Mesh = mesh,
+            MeshCamera = null,
+            MeshWireframe = false,
+            Skin = null,
+            SkinPart = 0,
+            Skeleton = null,
+            ListIndex = listIndex,
+        };
+    }
+
     public void SetMeshView(MeshCamera camera, bool wireframe)
     {
         State = State with { MeshCamera = camera, MeshWireframe = wireframe };

@@ -90,6 +90,7 @@ internal sealed class SkinPartView : Panel
         bindingStrip.Controls.Add(_openSkeleton);
 
         ConfigureParts();
+        _preview.MeshRequested += hash => MeshRequested?.Invoke(hash);
         _parts.CurrentCellChanged += (_, _) =>
         {
             if (_suppressPart)
@@ -149,6 +150,8 @@ internal sealed class SkinPartView : Panel
     public event Action<ulong>? SkeletonRequested;
 
     public event Action<int>? PartChanged;
+
+    public event Action<ulong>? MeshRequested;
 
     public int SelectedPart => _parts.CurrentCell?.RowIndex ?? -1;
 

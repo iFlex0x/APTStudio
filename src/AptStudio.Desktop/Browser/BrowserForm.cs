@@ -164,6 +164,7 @@ internal sealed class BrowserForm : Form
     private IReadOnlyList<ArchiveChoice> _archives = Array.Empty<ArchiveChoice>();
     private int _totalTextureCount;
     private string _lastArchive = "";
+    private string _typesArchive = "";
     private IReadOnlyDictionary<string, int> _animationCounts =
         new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
     private IReadOnlyDictionary<ulong, int> _animationOccurrences =
@@ -916,6 +917,7 @@ internal sealed class BrowserForm : Form
         _skeletonSkins.OpenRequested += (_, row) => OpenSkinFromSkeleton(row);
         _skeletonView.UsedByRequested += (_, _) => ShowSkeletonSkins();
         _skinView.SkeletonRequested += async root => await OpenSkeletonAsync(root);
+        _skinView.MeshRequested += hash => OpenMeshFromSkin(hash);
         _skinView.PartChanged += part =>
         {
             if (_navigation?.State.View == BrowserView.Skin)
@@ -1194,7 +1196,7 @@ internal sealed class BrowserForm : Form
                 null));
 
             _scope.SetArchives(_archives, selected);
-            _scope.SetTypes(BuildTypes(selected), "Textures");
+            SetTypesFor(selected, "Textures");
             _search.Enabled = true;
             _filterButton.Enabled = true;
             RenderState();
@@ -1305,6 +1307,12 @@ internal sealed class BrowserForm : Form
             entry.ArchivePath.Equals(archivePath, StringComparison.OrdinalIgnoreCase));
     }
 
+    private void SetTypesFor(string archivePath, string active)
+    {
+        _scope.SetTypes(BuildTypes(archivePath), active);
+        _typesArchive = archivePath;
+    }
+
     private void SwitchArchive(string archivePath)
     {
         if (_navigation is null
@@ -1365,7 +1373,7 @@ internal sealed class BrowserForm : Form
             archivePath,
             view,
             view == BrowserView.Placeholder ? state.PlaceholderName : "");
-        _scope.SetTypes(BuildTypes(archivePath), TypeName(_navigation.State));
+        SetTypesFor(archivePath, TypeName(_navigation.State));
         RenderState();
     }
 
@@ -1420,7 +1428,7 @@ internal sealed class BrowserForm : Form
             archive,
             view,
             view == BrowserView.Placeholder ? name : "");
-        _scope.SetTypes(BuildTypes(archive), TypeName(_navigation.State));
+        SetTypesFor(archive, TypeName(_navigation.State));
         RenderState();
     }
 
@@ -1665,7 +1673,14 @@ internal sealed class BrowserForm : Form
         }
 
         _scope.SelectArchive(state.ArchivePath);
-        _scope.SetActiveType(TypeName(state));
+        if (!state.ArchivePath.Equals(_typesArchive, StringComparison.OrdinalIgnoreCase))
+        {
+            SetTypesFor(state.ArchivePath, TypeName(state));
+        }
+        else
+        {
+            _scope.SetActiveType(TypeName(state));
+        }
         _scopeButton.Text = _navigation.IsChooserOpen ? "All archives" : ScopeChip(state);
         _back.Enabled = _navigation.CanBack || _meshSkinsOpen || _skeletonSkinsOpen;
         _forward.Enabled = _navigation.CanForward;
@@ -2921,8 +2936,8 @@ internal sealed class BrowserForm : Form
                 $"{catalog.Entries.Count:N0} materials · {catalog.Archives.Count:N0} archives";
             if (_navigation is not null)
             {
-                _scope.SetTypes(
-                    BuildTypes(_navigation.State.ArchivePath),
+                SetTypesFor(
+                    _navigation.State.ArchivePath,
                     TypeName(_navigation.State));
                 if (_navigation.State.View == BrowserView.Materials)
                 {
@@ -3233,6 +3248,26 @@ internal sealed class BrowserForm : Form
 
         _meshSkinsOpen = false;
         _navigation.OpenSkin(ToSkin(row.Row), part);
+        RenderState();
+    }
+
+    private void OpenMeshFromSkin(ulong hash)
+    {
+        if (_navigation?.State.View != BrowserView.Skin)
+        {
+            return;
+        }
+
+        if (!_meshRows.TryGetValue(hash, out AssetEntry? entry))
+        {
+            _status.Text = $"Mesh 0x{hash:X16} is not indexed.";
+            return;
+        }
+
+        _navigation.OpenMeshFromSkin(ToMesh(entry), 0);
+        SetTypesFor(
+            _navigation.State.ArchivePath,
+            TypeName(_navigation.State));
         RenderState();
     }
 
@@ -3673,8 +3708,8 @@ internal sealed class BrowserForm : Form
                 $"{catalog.Entries.Count:N0} skeletons · {catalog.UniqueNameCount:N0} names";
             if (_navigation is not null)
             {
-                _scope.SetTypes(
-                    BuildTypes(_navigation.State.ArchivePath),
+                SetTypesFor(
+                    _navigation.State.ArchivePath,
                     TypeName(_navigation.State));
                 if (_navigation.State.View == BrowserView.Skeletons)
                 {
@@ -3791,8 +3826,8 @@ internal sealed class BrowserForm : Form
                 $"{catalog.Previews:N0} previews skipped · {catalog.Failures.Count:N0} failed";
             if (_navigation is not null)
             {
-                _scope.SetTypes(
-                    BuildTypes(_navigation.State.ArchivePath),
+                SetTypesFor(
+                    _navigation.State.ArchivePath,
                     TypeName(_navigation.State));
                 if (_navigation.State.View == BrowserView.Audio)
                 {

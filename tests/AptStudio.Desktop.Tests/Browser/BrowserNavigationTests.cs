@@ -390,6 +390,61 @@ public sealed class BrowserNavigationTests
     }
 
     [Fact]
+    public void SkinPartMeshBackTwiceRestoresPartAndSourceMesh()
+    {
+        MeshOccurrence source = new(
+            0x2C9F3F3CB3EF2F04,
+            @"C:\game\DATAS\LEVELS\GENERIC_KISSING_COUPLE_01_HUG.DPC",
+            @"C:\game\DATAS\LEVELS\GENERIC_KISSING_COUPLE_01_HUG.DPC",
+            305905920);
+        MeshOccurrence torso = new(
+            0x38433BB867A98701,
+            @"C:\game\DATAS\LEVELS\GENERIC_KISSING_COUPLE_01_HUG.DPC",
+            @"C:\game\DATAS\LEVELS\GENERIC_KISSING_COUPLE_01_HUG.DPC",
+            306013440);
+        SkinOccurrence skin = new(
+            0x84316AA817823056,
+            @"C:\game\DATAS\LEVELS\GENERIC_KISSING_COUPLE_01_HUG.DPC",
+            @"C:\game\DATAS\LEVELS\GENERIC_KISSING_COUPLE_01_HUG.DPC",
+            61207488);
+        BrowserNavigation navigation = new(TextureState());
+        navigation.SelectMesh(source, 15);
+        MeshCamera camera = new(0.65f, 0.35f, 1.32f, new PointF(12f, -4f));
+        navigation.SetMeshView(camera, true);
+        navigation.SetQuery("2c9f3f3c");
+        navigation.OpenSkin(skin, 11);
+        navigation.SetSkinPart(10);
+
+        navigation.OpenMeshFromSkin(torso, 0);
+
+        Assert.Equal(BrowserView.Meshes, navigation.State.View);
+        Assert.Equal(torso, navigation.State.Mesh);
+        Assert.Equal(torso.ArchivePath, navigation.State.ArchivePath);
+        Assert.Equal("", navigation.State.Query);
+        Assert.Null(navigation.State.Skin);
+        Assert.True(navigation.CanBack);
+
+        navigation.Back();
+
+        Assert.Equal(BrowserView.Skin, navigation.State.View);
+        Assert.Equal(skin, navigation.State.Skin);
+        Assert.Equal(10, navigation.State.SkinPart);
+        Assert.Equal(source, navigation.State.Mesh);
+        Assert.Equal(camera, navigation.State.MeshCamera);
+        Assert.True(navigation.State.MeshWireframe);
+
+        navigation.Back();
+
+        Assert.Equal(BrowserView.Meshes, navigation.State.View);
+        Assert.Equal(source, navigation.State.Mesh);
+        Assert.Equal(camera, navigation.State.MeshCamera);
+        Assert.True(navigation.State.MeshWireframe);
+        Assert.Equal("2c9f3f3c", navigation.State.Query);
+        Assert.Equal(15, navigation.State.ListIndex);
+        Assert.False(navigation.CanBack);
+    }
+
+    [Fact]
     public void DirectSkeletonUsedBySkinBackTwiceRestoresSkeletonAndList()
     {
         SkeletonOccurrence skeleton = new(
