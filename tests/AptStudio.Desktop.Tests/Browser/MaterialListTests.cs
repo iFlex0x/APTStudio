@@ -1,3 +1,6 @@
+// Copyright (c) 2026 iFlex0x
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 using AptStudio.Core.Materials;
 using AptStudio.Desktop.Browser;
 

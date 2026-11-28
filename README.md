@@ -61,7 +61,7 @@ Run `aptstudio` without arguments for the full command list.
 
 ## License
 
-MIT, see [LICENSE](LICENSE).
+GPL-3.0-or-later, see [LICENSE](LICENSE).
 
 Format facts cross-checked against bff by widberg. Dependency credits are in
 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).

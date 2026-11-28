@@ -1,3 +1,6 @@
+// Copyright (c) 2026 iFlex0x
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 namespace AptStudio.Core.Materials;
 
 public sealed record MaterialSlotRole(string Authoring, string Binding);

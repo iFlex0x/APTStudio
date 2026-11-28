@@ -8,5 +8,6 @@
     <Authors>iFlex0x</Authors>
     <Product>APTStudio</Product>
     <Copyright>Copyright (c) 2026 iFlex0x</Copyright>
+    <PackageLicenseExpression>GPL-3.0-or-later</PackageLicenseExpression>
   </PropertyGroup>
 </Project>

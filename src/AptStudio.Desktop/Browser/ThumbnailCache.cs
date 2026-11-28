@@ -1,3 +1,6 @@
+// Copyright (c) 2026 iFlex0x
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 using System.Collections.Concurrent;
 using System.Drawing;
 using System.Drawing.Drawing2D;

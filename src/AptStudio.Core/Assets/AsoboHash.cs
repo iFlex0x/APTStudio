@@ -1,3 +1,6 @@
+// Copyright (c) 2026 iFlex0x
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 namespace AptStudio.Core.Assets;
 
 // CRC-64/ECMA-182, non-reflected, init 0. The game lowercases names before hashing.
