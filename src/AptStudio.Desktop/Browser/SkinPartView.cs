@@ -47,10 +47,12 @@ internal sealed class SkinPartView : Panel
         FlowLayoutPanel bindingStrip = new()
         {
             Dock = DockStyle.Fill,
-            AutoSize = false,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
             WrapContents = false,
             BackColor = Theme.Surface,
-            Padding = new Padding(8, 3, 8, 0),
+            Padding = new Padding(8, 4, 8, 4),
+            Margin = new Padding(0),
         };
         Label bindingLabel = new()
         {
@@ -145,7 +147,7 @@ internal sealed class SkinPartView : Panel
         };
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 44));
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 24));
         layout.Controls.Add(header, 0, 0);

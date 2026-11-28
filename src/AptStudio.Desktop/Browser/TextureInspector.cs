@@ -37,6 +37,11 @@ internal sealed class TextureInspector : Panel
     private bool _linked;
     private bool _suppress;
     private bool _busy;
+    private bool _exporting;
+    private bool _exportBlocked;
+    private bool _requestedFit = true;
+    private float _requestedZoom = 1f;
+    private PointF _requestedPan;
 
     public TextureInspector()
     {
@@ -74,6 +79,9 @@ internal sealed class TextureInspector : Panel
         {
             if (!_suppress)
             {
+                _requestedFit = _preview.IsFit;
+                _requestedZoom = _preview.Zoom;
+                _requestedPan = _preview.Origin;
                 ViewChanged?.Invoke(this, new TextureViewState(
                     _preview.Zoom, _preview.Origin, _preview.IsFit));
             }
@@ -93,8 +101,7 @@ internal sealed class TextureInspector : Panel
             if (_texture is not null && _occurrence is not null)
             {
                 MipChanged?.Invoke(this, _mipIndex);
-                _ = DecodeAsync(
-                    _texture, _mipIndex, _preview.IsFit, _preview.Zoom, _preview.Origin);
+                _ = DecodeAsync(_texture, _mipIndex);
             }
         };
 
@@ -138,15 +145,24 @@ internal sealed class TextureInspector : Panel
             Margin = new Padding(0, 6, 4, 0),
         });
         _channels.Controls.Add(_mip);
-        _channels.Controls.Add(new Label
+        FlowLayoutPanel channelGroup = new()
+        {
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            WrapContents = false,
+            Margin = new Padding(10, 0, 0, 0),
+            Padding = new Padding(0),
+        };
+        channelGroup.Controls.Add(new Label
         {
             Text = "Channel",
             Font = BrowserVisual.RowSmall,
             ForeColor = Theme.Muted,
             AutoSize = true,
-            Margin = new Padding(10, 6, 4, 0),
+            Margin = new Padding(0, 6, 4, 0),
         });
-        _channels.Controls.Add(_channelSegments);
+        channelGroup.Controls.Add(_channelSegments);
+        _channels.Controls.Add(channelGroup);
 
         BrowserButtons.Style(_fit, BrowserButtonRole.Ordinary, Theme.Surface);
         _fit.Text = "Fit";
@@ -181,6 +197,7 @@ internal sealed class TextureInspector : Panel
         BrowserButtons.Style(_export, BrowserButtonRole.Ordinary, Theme.Surface);
         _export.Text = "Export PNG";
         _export.AutoSize = true;
+        _export.AccessibleName = "Export PNG";
         _export.Click += (_, _) => ExportRequested?.Invoke(this, EventArgs.Empty);
 
         _actions.AutoSize = true;
@@ -248,13 +265,21 @@ internal sealed class TextureInspector : Panel
 
     public int CopyIndex => _copyIndex;
 
+    public bool CanExport =>
+        _occurrence is not null
+        && _texture is not null
+        && TextureDecoder.CanDecodeMip0(_texture.Head);
+
     public void ShowEmpty()
     {
         _generation.Begin();
         _occurrence = null;
         _texture = null;
         _copyList = Array.Empty<TextureOccurrence>();
+        _copyIndex = 0;
+        _mipIndex = 0;
         _usedBy.Enabled = false;
+        _usedBy.Text = "Used by";
         _reveal.Visible = false;
         _copies.Visible = false;
         _copiesLabel.Visible = false;
@@ -263,8 +288,26 @@ internal sealed class TextureInspector : Panel
         _subtitle.Text = "Select a texture to inspect it.";
         _context.Text = "";
         _context.Visible = false;
-        _preview.ShowMessage("Select a texture.", false);
+        _suppress = true;
+        try
+        {
+            _mip.Items.Clear();
+            _mip.SelectedIndex = -1;
+            _copies.Items.Clear();
+            _copies.SelectedIndex = -1;
+            _preview.ShowMessage("Select a texture.", false);
+        }
+        finally
+        {
+            _suppress = false;
+        }
+
+        BrowserVisual.DisposeChildren(_detailsPanel);
         _detailsPanel.Visible = false;
+        _details.Enabled = false;
+        _mip.Enabled = false;
+        SetImageControlsEnabled(false);
+        UpdateExportState();
     }
 
     public void SetTexture(
@@ -293,6 +336,12 @@ internal sealed class TextureInspector : Panel
         _mipIndex = Math.Clamp(mip, 0, Math.Max(0, occurrence.Head.MipCount - 1));
         _channel = channel;
         _linked = linked;
+        _requestedFit = fit;
+        _requestedZoom = zoom;
+        _requestedPan = pan;
+        _details.Enabled = true;
+        _mip.Enabled = TextureDecoder.CanDecodeMip0(texture);
+        UpdateExportState();
 
         _type.Text = "BITMAP_Z · TEXTURE";
         _hash.Text = $"0x{occurrence.Hash:X16}";
@@ -334,7 +383,7 @@ internal sealed class TextureInspector : Panel
         UpdateDetails(occurrence, copies);
         if (!sameTexture || previousMip != _mipIndex)
         {
-            _ = DecodeAsync(texture, _mipIndex, fit, zoom, pan);
+            _ = DecodeAsync(texture, _mipIndex);
         }
         else
         {
@@ -347,6 +396,33 @@ internal sealed class TextureInspector : Panel
         _busy = busy;
         _usedBy.Enabled = !busy && _occurrence is not null;
         _usedBy.Text = busy ? "Loading materials..." : "Used by";
+    }
+
+    public void SetExporting(bool exporting)
+    {
+        _exporting = exporting;
+        _export.Text = exporting ? "Exporting..." : "Export PNG";
+        UpdateExportState();
+    }
+
+    public void SetExportBlocked(bool blocked)
+    {
+        _exportBlocked = blocked;
+        UpdateExportState();
+    }
+
+    private void UpdateExportState()
+    {
+        bool busy = _exporting;
+        bool canExport = CanExport && !busy && !_exportBlocked;
+        _export.Enabled = canExport;
+        _export.AccessibleDescription = busy
+            ? "A PNG export is already being written."
+            : _exportBlocked
+                ? "Another export, audio task, or game scan is running."
+                : canExport
+                    ? "Export mip 0 as a PNG file."
+                    : "Mip 0 cannot be decoded for this texture.";
     }
 
     public void SetContext(string? text)
@@ -377,14 +453,10 @@ internal sealed class TextureInspector : Panel
         _channelSegments.SelectedChannel = _channel;
     }
 
-    private async Task DecodeAsync(
-        TextureEntry texture,
-        int mip,
-        bool fit,
-        float zoom,
-        PointF pan)
+    private async Task DecodeAsync(TextureEntry texture, int mip)
     {
         int token = _generation.Begin();
+        ShowLoading();
         try
         {
             (Bitmap Bitmap, int Width, int Height) result = await Task.Run(() =>
@@ -411,20 +483,59 @@ internal sealed class TextureInspector : Panel
                 _suppress = false;
             }
 
-            ApplyView(fit, zoom, pan, result.Width, result.Height);
+            // SetTexture can reapply parameters while this decode is pending; use the latest.
+            ApplyView(
+                _requestedFit, _requestedZoom, _requestedPan, result.Width, result.Height);
         }
         catch (Exception ex) when (ex is InvalidDataException or NotSupportedException
             or IOException or UnauthorizedAccessException)
         {
             if (!IsDisposed && _generation.IsCurrent(token))
             {
-                _preview.ShowMessage(ex.Message, true);
+                _suppress = true;
+                try
+                {
+                    _preview.ShowMessage(ex.Message, true);
+                }
+                finally
+                {
+                    _suppress = false;
+                }
+
+                SetImageControlsEnabled(false);
             }
         }
     }
 
+    private void ShowLoading()
+    {
+        _suppress = true;
+        try
+        {
+            _preview.ShowMessage("Loading texture...", false);
+        }
+        finally
+        {
+            _suppress = false;
+        }
+
+        SetImageControlsEnabled(false);
+    }
+
+    private void SetImageControlsEnabled(bool enabled)
+    {
+        _fit.Enabled = enabled;
+        _actual.Enabled = enabled;
+        _channelSegments.Enabled = enabled;
+    }
+
     private void ApplyView(bool fit, float zoom, PointF pan, int width = 0, int height = 0)
     {
+        if (!_preview.HasImage)
+        {
+            return;
+        }
+
         _suppress = true;
         try
         {
@@ -443,6 +554,10 @@ internal sealed class TextureInspector : Panel
             _suppress = false;
         }
 
+        SetImageControlsEnabled(true);
+        _requestedFit = _preview.IsFit;
+        _requestedZoom = _preview.Zoom;
+        _requestedPan = _preview.Origin;
         if (width > 0)
         {
             _subtitle.Text = _occurrence is null

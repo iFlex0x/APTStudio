@@ -13,6 +13,23 @@ public sealed class BrowserLayoutTests
         Assert.Equal(expected, BrowserLayout.ShouldCollapseSidebar(width));
     }
 
+    [Theory]
+    [InlineData(FormWindowState.Minimized, false, (int)BrowserResizeAction.Ignore)]
+    [InlineData(FormWindowState.Minimized, true, (int)BrowserResizeAction.Ignore)]
+    [InlineData(FormWindowState.Normal, false, (int)BrowserResizeAction.Apply)]
+    [InlineData(FormWindowState.Maximized, false, (int)BrowserResizeAction.Apply)]
+    [InlineData(FormWindowState.Normal, true, (int)BrowserResizeAction.Reapply)]
+    [InlineData(FormWindowState.Maximized, true, (int)BrowserResizeAction.Reapply)]
+    public void PlansResizeAroundMinimize(
+        FormWindowState state,
+        bool wasMinimized,
+        int expected)
+    {
+        Assert.Equal(
+            (BrowserResizeAction)expected,
+            BrowserLayout.PlanResize(state, wasMinimized));
+    }
+
     [Fact]
     public void ClampsSidebarAndInspectorToMinimums()
     {

@@ -17,6 +17,8 @@ internal sealed class AudioView : Panel
     private readonly System.Windows.Forms.Timer _timer = new() { Interval = 200 };
     private readonly AudioPlayer _player = new();
     private AudioEntry? _entry;
+    private bool _busy;
+    private bool _exportBlocked;
 
     public AudioView()
     {
@@ -141,8 +143,7 @@ internal sealed class AudioView : Panel
 
             _timer.Stop();
             _play.Text = "Play";
-            _play.Enabled = _entry is not null;
-            _export.Enabled = _entry is not null;
+            UpdateButtons();
             _status.ForeColor = Theme.Muted;
             _status.Text = "Finished";
         };
@@ -176,19 +177,25 @@ internal sealed class AudioView : Panel
         _source.Text =
             $"offset {entry.Offset:N0} | {Path.GetFileName(entry.PackPath)}"
             + (entry.BankId == 0 ? " | header sound table" : " | bank DIDX");
-        _play.Enabled = true;
+        _busy = false;
+        UpdateButtons();
         _play.Text = "Play";
-        _export.Enabled = true;
         _status.ForeColor = Theme.Muted;
         _status.Text = "Ready";
     }
 
     public void SetBusy(string text)
     {
-        _play.Enabled = false;
-        _export.Enabled = false;
+        _busy = true;
+        UpdateButtons();
         _status.ForeColor = Theme.Muted;
         _status.Text = text;
+    }
+
+    public void SetExportBlocked(bool blocked)
+    {
+        _exportBlocked = blocked;
+        UpdateButtons();
     }
 
     public void StartPlayback(byte[] ogg)
@@ -197,9 +204,9 @@ internal sealed class AudioView : Panel
         {
             SessionId++;
             _player.Play(ogg);
+            _busy = false;
+            UpdateButtons();
             _play.Text = "Stop";
-            _play.Enabled = true;
-            _export.Enabled = _entry is not null;
             _status.ForeColor = Theme.Muted;
             _status.Text = $"0:00 / {Time(Duration)}";
             _timer.Start();
@@ -217,8 +224,7 @@ internal sealed class AudioView : Panel
         _play.Text = "Play";
         if (_entry is not null)
         {
-            _play.Enabled = true;
-            _export.Enabled = true;
+            UpdateButtons();
             _status.ForeColor = Theme.Muted;
             _status.Text = "Ready";
         }
@@ -226,8 +232,8 @@ internal sealed class AudioView : Panel
 
     public void SetStatus(string text)
     {
-        _play.Enabled = _entry is not null;
-        _export.Enabled = _entry is not null;
+        _busy = false;
+        UpdateButtons();
         _status.ForeColor = Theme.Muted;
         _status.Text = text;
     }
@@ -237,8 +243,8 @@ internal sealed class AudioView : Panel
         _timer.Stop();
         _player.Stop();
         _play.Text = "Play";
-        _play.Enabled = _entry is not null;
-        _export.Enabled = _entry is not null;
+        _busy = false;
+        UpdateButtons();
         _status.Text = message;
         _status.ForeColor = Theme.Error;
     }
@@ -247,14 +253,14 @@ internal sealed class AudioView : Panel
     {
         StopPlayback();
         _entry = null;
+        _busy = false;
         _title.Text = "";
         _subtitle.Text = "";
         _details.Text = "";
         _source.Text = "";
         _status.Text = "";
         _status.ForeColor = Theme.Muted;
-        _play.Enabled = false;
-        _export.Enabled = false;
+        UpdateButtons();
     }
 
     public void SetDpiScale(float scale)
@@ -281,6 +287,13 @@ internal sealed class AudioView : Panel
         }
 
         base.Dispose(disposing);
+    }
+
+    private void UpdateButtons()
+    {
+        bool ready = _entry is not null && !_busy;
+        _play.Enabled = ready;
+        _export.Enabled = ready && !_exportBlocked;
     }
 
     private static string Time(double seconds)

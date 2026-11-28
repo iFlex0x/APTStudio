@@ -54,18 +54,30 @@ internal sealed class ChannelSegments : Control
     protected override void OnPaint(PaintEventArgs e)
     {
         using Pen edge = new(BrowserVisual.BorderStrong);
+        int[] widths = SegmentWidths();
         int x = 0;
-        foreach ((ChannelView view, string text, int width) in Segments)
+        Rectangle selectedBounds = Rectangle.Empty;
+        for (int index = 0; index < Segments.Length; index++)
         {
+            (ChannelView view, string text, _) = Segments[index];
+            int width = widths[index];
             bool selected = view == _selected;
-            using SolidBrush background = new(selected ? BrowserVisual.AccentDim : Theme.Surface);
-            e.Graphics.FillRectangle(background, x, 0, width, ClientSize.Height - 1);
+            if (selected)
+            {
+                selectedBounds = new Rectangle(x, 0, width, ClientSize.Height - 1);
+            }
+
+            Color background = selected && Enabled
+                ? BrowserVisual.AccentDim
+                : Theme.Surface;
+            using SolidBrush brush = new(background);
+            e.Graphics.FillRectangle(brush, x, 0, width, ClientSize.Height - 1);
             TextRenderer.DrawText(
                 e.Graphics,
                 text,
                 BrowserVisual.RowSmall,
                 new Rectangle(x, 0, width, ClientSize.Height - 1),
-                selected ? Theme.Accent : Theme.Muted,
+                Enabled ? selected ? Theme.Accent : Theme.Muted : BrowserVisual.Faint,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter);
             e.Graphics.DrawLine(edge, x, 0, x, ClientSize.Height - 1);
             x += width;
@@ -74,25 +86,86 @@ internal sealed class ChannelSegments : Control
         e.Graphics.DrawLine(edge, 0, 0, ClientSize.Width - 1, 0);
         e.Graphics.DrawLine(edge, 0, ClientSize.Height - 1, ClientSize.Width - 1, ClientSize.Height - 1);
         e.Graphics.DrawLine(edge, ClientSize.Width - 1, 0, ClientSize.Width - 1, ClientSize.Height - 1);
+        if (Enabled && Focused && selectedBounds.Width > 0)
+        {
+            using Pen focus = new(Theme.Accent);
+            e.Graphics.DrawRectangle(
+                focus,
+                selectedBounds.X + 1,
+                1,
+                selectedBounds.Width - 3,
+                ClientSize.Height - 3);
+        }
+
         base.OnPaint(e);
     }
 
     protected override void OnMouseDown(MouseEventArgs e)
     {
-        Focus();
-        int x = 0;
-        foreach ((ChannelView view, _, int width) in Segments)
+        if (!Enabled)
         {
-            if (e.X >= x && e.X < x + width)
+            base.OnMouseDown(e);
+            return;
+        }
+
+        Focus();
+        int[] widths = SegmentWidths();
+        int x = 0;
+        for (int index = 0; index < Segments.Length; index++)
+        {
+            if (e.X >= x && e.X < x + widths[index])
             {
-                Select(view);
+                Select(Segments[index].View);
                 break;
             }
 
-            x += width;
+            x += widths[index];
         }
 
         base.OnMouseDown(e);
+    }
+
+    private int[] SegmentWidths()
+    {
+        int[] widths = new int[Segments.Length];
+        int baseTotal = Segments.Sum(segment => segment.Width);
+        int total = ClientSize.Width;
+        if (total <= 0 || baseTotal <= 0)
+        {
+            return widths;
+        }
+
+        int accumulated = 0;
+        int previous = 0;
+        for (int index = 0; index < Segments.Length; index++)
+        {
+            accumulated += Segments[index].Width;
+            int boundary = index == Segments.Length - 1
+                ? total
+                : (int)Math.Round((double)accumulated * total / baseTotal);
+            widths[index] = Math.Max(0, boundary - previous);
+            previous = boundary;
+        }
+
+        return widths;
+    }
+
+    protected override void OnGotFocus(EventArgs e)
+    {
+        base.OnGotFocus(e);
+        Invalidate();
+    }
+
+    protected override void OnLostFocus(EventArgs e)
+    {
+        base.OnLostFocus(e);
+        Invalidate();
+    }
+
+    protected override bool IsInputKey(Keys keyData)
+    {
+        return (keyData & Keys.KeyCode) is Keys.Left or Keys.Right
+            || base.IsInputKey(keyData);
     }
 
     protected override void OnKeyDown(KeyEventArgs e)

@@ -6,6 +6,7 @@ using AptStudio.Core.Assets;
 using AptStudio.Core.Audio;
 using AptStudio.Core.Containers;
 using AptStudio.Core.Games;
+using AptStudio.Core.IO;
 using AptStudio.Core.Links;
 using AptStudio.Core.Materials;
 using AptStudio.Core.Meshes;
@@ -1187,25 +1188,7 @@ internal static class Program
             }
 
             byte[] ogg = WemConverter.ToOgg(wem);
-            string? directory = Path.GetDirectoryName(full);
-            if (!string.IsNullOrEmpty(directory))
-            {
-                Directory.CreateDirectory(directory);
-            }
-
-            string temp = full + "." + Guid.NewGuid().ToString("N") + ".tmp";
-            try
-            {
-                File.WriteAllBytes(temp, ogg);
-                File.Move(temp, full, overwrite: true);
-            }
-            finally
-            {
-                if (File.Exists(temp))
-                {
-                    File.Delete(temp);
-                }
-            }
+            AtomicFile.WriteAllBytes(full, ogg);
 
             Console.WriteLine(
                 $"converted {media.PackName} 0x{media.Id:X8} -> {full} ({N(ogg.Length)} bytes, {media.DurationSeconds:F2}s, {media.Info.Channels}ch {media.Info.SampleRate} Hz, {media.Info.Codec})");

@@ -444,6 +444,27 @@ internal sealed class AssetList : ScrollableControl
         return widths;
     }
 
+    internal static int MinimumWidth(IReadOnlyList<AssetColumn> columns, bool showThumbnails)
+    {
+        int x0 = RowPadding + (showThumbnails ? ThumbnailColumnWidth : 0);
+        int fixedWidth = 0;
+        bool flexible = false;
+        foreach (AssetColumn column in columns)
+        {
+            if (column.Flexible)
+            {
+                flexible = true;
+            }
+            else
+            {
+                fixedWidth += column.Width;
+            }
+        }
+
+        int gaps = Math.Max(0, columns.Count - 1) * CellGap;
+        return x0 + fixedWidth + gaps + (flexible ? 80 : 0) + RowPadding;
+    }
+
     protected override void OnPaint(PaintEventArgs e)
     {
         e.Graphics.Clear(Theme.Background);
@@ -587,6 +608,13 @@ internal sealed class AssetList : ScrollableControl
             ClientSize.Width - ScrollBarWidth + 2, y, ScrollBarWidth - 4, height);
     }
 
+    protected override bool IsInputKey(Keys keyData)
+    {
+        // Dialog-key preprocessing eats arrows before OnKeyDown can use them.
+        return (keyData & Keys.KeyCode) is Keys.Up or Keys.Down
+            || base.IsInputKey(keyData);
+    }
+
     protected override void OnKeyDown(KeyEventArgs e)
     {
         bool extend = e.Shift && _allowMultiSelect;
@@ -662,8 +690,8 @@ internal sealed class AssetList : ScrollableControl
             if (!thumb.Contains(e.Location))
             {
                 int span = Math.Max(1, ClientSize.Height - thumb.Height);
-                int target = (e.Y - thumb.Height / 2) * MaxScrollY / span;
-                ScrollTo(target);
+                long target = ((long)e.Y - thumb.Height / 2) * MaxScrollY / span;
+                ScrollTo((int)Math.Clamp(target, 0, MaxScrollY));
             }
 
             _draggingScroll = true;
@@ -704,7 +732,8 @@ internal sealed class AssetList : ScrollableControl
         {
             Rectangle thumb = ScrollThumb();
             int span = Math.Max(1, ClientSize.Height - thumb.Height);
-            ScrollTo(_dragStartScroll + (e.Y - _dragStartY) * MaxScrollY / span);
+            long delta = ((long)e.Y - _dragStartY) * MaxScrollY / span;
+            ScrollTo((int)Math.Clamp(_dragStartScroll + delta, 0, MaxScrollY));
         }
 
         base.OnMouseMove(e);
@@ -720,6 +749,16 @@ internal sealed class AssetList : ScrollableControl
         }
 
         base.OnMouseUp(e);
+    }
+
+    protected override void OnMouseCaptureChanged(EventArgs e)
+    {
+        if (!Capture)
+        {
+            _draggingScroll = false;
+        }
+
+        base.OnMouseCaptureChanged(e);
     }
 
     protected override void OnMouseDoubleClick(MouseEventArgs e)

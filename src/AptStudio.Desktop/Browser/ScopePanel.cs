@@ -370,13 +370,7 @@ internal sealed class ScopePanel : Panel
 
     private void OnArchiveMouseMove(object? sender, MouseEventArgs e)
     {
-        int index = _archives.IndexFromPoint(e.Location);
-        SetHover(index);
-        if (index >= 0 && index < _archives.Items.Count
-            && _archives.Items[index] is ArchiveChoice choice)
-        {
-            _tip.SetToolTip(_archives, choice.Name);
-        }
+        SetHover(_archives.IndexFromPoint(e.Location));
     }
 
     private void SetHover(int index)
@@ -386,8 +380,34 @@ internal sealed class ScopePanel : Panel
             return;
         }
 
+        int previous = _hoverIndex;
         _hoverIndex = index;
-        _archives.Invalidate();
+        InvalidateArchiveRow(previous);
+        InvalidateArchiveRow(index);
+
+        _tip.SetToolTip(
+            _archives,
+            index >= 0 && index < _archives.Items.Count
+                && _archives.Items[index] is ArchiveChoice choice
+                    ? choice.Name
+                    : string.Empty);
+    }
+
+    private void InvalidateArchiveRow(int index)
+    {
+        if (index < 0 || index >= _archives.Items.Count)
+        {
+            return;
+        }
+
+        Rectangle row = Rectangle.Intersect(
+            _archives.GetItemRectangle(index), _archives.ClientRectangle);
+        if (row.Width <= 0 || row.Height <= 0)
+        {
+            return;
+        }
+
+        _archives.Invalidate(row);
     }
 
     private string ArchiveLabel(string name, int width)

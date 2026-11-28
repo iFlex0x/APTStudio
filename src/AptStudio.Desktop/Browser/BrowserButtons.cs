@@ -58,6 +58,33 @@ internal static class BrowserButtons
         }
 
         button.EnabledChanged += (_, _) => Apply();
+        button.Paint -= PaintDisabledCaption;
+        button.Paint += PaintDisabledCaption;
         Apply();
+    }
+
+    private static void PaintDisabledCaption(object? sender, PaintEventArgs e)
+    {
+        if (sender is not Button button
+            || button.Enabled
+            || SystemInformation.HighContrast)
+        {
+            return;
+        }
+
+        Rectangle bounds = button.ClientRectangle;
+        using SolidBrush background = new(button.BackColor);
+        e.Graphics.FillRectangle(background, bounds);
+        TextRenderer.DrawText(
+            e.Graphics,
+            button.Text,
+            button.Font,
+            bounds,
+            BrowserVisual.Faint,
+            TextFormatFlags.HorizontalCenter
+            | TextFormatFlags.VerticalCenter
+            | TextFormatFlags.NoPrefix
+            | TextFormatFlags.EndEllipsis
+            | TextFormatFlags.SingleLine);
     }
 }

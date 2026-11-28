@@ -1,3 +1,4 @@
+using System.Reflection;
 using AptStudio.Core.Audio;
 
 namespace AptStudio.Desktop.Tests;
@@ -83,6 +84,67 @@ public sealed class AudioViewTests
         view.SetDpiScale(1.5f);
         view.SetAudio(Entry);
         view.SetDpiScale(2f);
+    }
+
+    [Fact]
+    public void ExportFollowsTheSharedWriteGateAcrossSelectionAndBusyStates()
+    {
+        using AudioView view = new();
+        view.CreateControl();
+        Button export = FindButton(view, "Export Ogg");
+        Button play = FindButton(view, "Play");
+
+        view.SetExportBlocked(true);
+        view.SetAudio(Entry);
+
+        Assert.False(export.Enabled);
+        Assert.True(play.Enabled);
+
+        view.SetBusy("Converting...");
+        view.SetExportBlocked(false);
+
+        Assert.False(export.Enabled);
+        Assert.False(play.Enabled);
+
+        view.SetStatus("Ready");
+
+        Assert.True(export.Enabled);
+        Assert.True(play.Enabled);
+
+        view.SetExportBlocked(true);
+        view.SetAudio(Entry);
+
+        Assert.False(export.Enabled);
+
+        view.SetExportBlocked(false);
+        view.SetStatus("Ready");
+
+        Assert.True(export.Enabled);
+    }
+
+    [Fact]
+    public void PlaybackCompletionKeepsExportBlocked()
+    {
+        using AudioView view = new();
+        view.CreateControl();
+        view.SetAudio(Entry);
+        Button export = FindButton(view, "Export Ogg");
+        view.SetExportBlocked(true);
+
+        System.Windows.Forms.Timer timer =
+            (System.Windows.Forms.Timer)typeof(AudioView)
+                .GetField("_timer", BindingFlags.NonPublic | BindingFlags.Instance)!
+                .GetValue(view)!;
+        MethodInfo tick = timer.GetType().GetMethod(
+            "OnTick", BindingFlags.NonPublic | BindingFlags.Instance)
+            ?? throw new InvalidOperationException("OnTick not found.");
+        tick.Invoke(timer, [EventArgs.Empty]);
+
+        Assert.False(export.Enabled);
+
+        view.SetExportBlocked(false);
+
+        Assert.True(export.Enabled);
     }
 
     private static Button FindButton(Control root, string text)

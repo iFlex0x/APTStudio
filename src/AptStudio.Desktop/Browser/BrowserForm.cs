@@ -5,6 +5,7 @@ using System.Runtime.InteropServices;
 using AptStudio.Core.Assets;
 using AptStudio.Core.Audio;
 using AptStudio.Core.Games;
+using AptStudio.Core.IO;
 using AptStudio.Core.Links;
 using AptStudio.Core.Materials;
 using AptStudio.Core.Meshes;
@@ -62,6 +63,8 @@ internal sealed class BrowserForm : Form, IMessageFilter
     private readonly Button _copyHash = new();
     private CancellationTokenSource? _exportCancel;
     private bool _exporting;
+    private bool _textureExporting;
+    private bool _closeAfterExport;
     private readonly Button _openSkin = new();
     private readonly Button _openSkeleton = new();
     private readonly Button _openMaterial = new();
@@ -110,66 +113,7 @@ internal sealed class BrowserForm : Form, IMessageFilter
     private readonly GameProfile? _initialProfile;
     private readonly bool _autoLoad;
     private readonly bool _saveSettings;
-    private static readonly AssetColumn[] TextureColumns =
-    [
-        new("Hash", 160, Mono: true),
-        new("Archive", 0, Flexible: true, Muted: true, MiddleEllipsis: true),
-        new("Size", 92, Right: true, Muted: true),
-        new("Mips", 48, Right: true, Muted: true),
-        new("Format", 56, Muted: true),
-        new("Storage", 64, Muted: true),
-    ];
-    private static readonly AssetColumn[] NarrowTextureColumns =
-    [
-        new("Hash", 150, Mono: true),
-        new("Archive", 0, Flexible: true, Muted: true, MiddleEllipsis: true),
-    ];
-    private static readonly AssetColumn[] AnimationColumns =
-    [
-        new("Hash", 140, Mono: true),
-        new("Archive", 0, Flexible: true, Muted: true, MiddleEllipsis: true),
-        new("Occurrences", 78, Right: true, Muted: true),
-    ];
-    private static readonly AssetColumn[] MeshColumns =
-    [
-        new("Hash", 160, Mono: true),
-        new("Archive", 0, Flexible: true, Muted: true, MiddleEllipsis: true),
-    ];
-    private static readonly AssetColumn[] SkinColumns =
-    [
-        new("Hash", 160, Mono: true),
-        new("Archive", 0, Flexible: true, Muted: true, MiddleEllipsis: true),
-    ];
-    private static readonly AssetColumn[] SkeletonColumns =
-    [
-        new("Hash", 160, Mono: true),
-        new("Archive", 0, Flexible: true, Muted: true, MiddleEllipsis: true),
-    ];
-    private static readonly AssetColumn[] MaterialColumns =
-    [
-        new("Hash", 160, Mono: true),
-        new("Code", 190),
-        new("Slots", 52, Right: true, Muted: true),
-        new("Archive", 0, Flexible: true, Muted: true, MiddleEllipsis: true),
-    ];
-    private static readonly AssetColumn[] AudioColumns =
-    [
-        new("Pack", 140, Muted: true, MiddleEllipsis: true),
-        new("Id", 92, Mono: true),
-        new("Name", 0, Flexible: true, MiddleEllipsis: true),
-        new("Language", 90, Muted: true),
-        new("Length", 72, Right: true, Muted: true),
-        new("Ch", 42, Right: true, Muted: true),
-        new("Rate", 64, Right: true, Muted: true),
-        new("Bank", 76, Right: true, Muted: true),
-    ];
-    private static readonly AssetColumn[] NarrowAudioColumns =
-    [
-        new("Pack", 92, Muted: true, MiddleEllipsis: true),
-        new("Id", 82, Mono: true),
-        new("Name", 0, Flexible: true, MiddleEllipsis: true),
-        new("Language", 64, Muted: true),
-    ];
+    private BrowserView _listView = BrowserView.Textures;
     private CancellationTokenSource? _loadCancel;
     private CancellationTokenSource? _allRowsCancel;
     private int _allRowsVersion;
@@ -199,6 +143,8 @@ internal sealed class BrowserForm : Form, IMessageFilter
     private int _inspectorWidth = 420;
     private bool _scopeOpen = true;
     private bool _lastNarrow;
+    private bool _wasMinimized;
+    private bool _applyingSplitterLayout;
     private bool _loading;
     private MaterialCatalog? _materials;
     private MaterialTextureIndex? _materialTextures;
@@ -327,27 +273,11 @@ internal sealed class BrowserForm : Form, IMessageFilter
             ApplySearch();
         };
         Resize += (_, _) => OnResize();
+        _outer.SplitterMoved += (_, _) => OnOuterSplitterMoved();
+        _inner.SplitterMoved += (_, _) => OnInnerSplitterMoved();
         _inner.Panel1.Resize += (_, _) => UpdateToolbarLayout();
         Shown += async (_, _) => await OnShownAsync();
-        FormClosing += (_, _) =>
-        {
-            _loadCancel?.Cancel();
-            _listCancel?.Cancel();
-            _allRowsCancel?.Cancel();
-            _materialCancel?.Cancel();
-            _materialCatalogCancel?.Cancel();
-            _materialListCancel?.Cancel();
-            _skinLinksCancel?.Cancel();
-            _skinSkeletonsCancel?.Cancel();
-            _skeletonCancel?.Cancel();
-            _meshCancel?.Cancel();
-            _skinCancel?.Cancel();
-            _skeletonDecodeCancel?.Cancel();
-            _audioCancel?.Cancel();
-            _audioListCancel?.Cancel();
-            _exportCancel?.Cancel();
-            SaveLayout();
-        };
+        FormClosing += OnFormClosing;
     }
 
     protected override void Dispose(bool disposing)
@@ -367,6 +297,43 @@ internal sealed class BrowserForm : Form, IMessageFilter
         }
 
         base.Dispose(disposing);
+    }
+
+    private void OnFormClosing(object? sender, FormClosingEventArgs e)
+    {
+        if (e.CloseReason == CloseReason.UserClosing && (_textureExporting || _exporting))
+        {
+            e.Cancel = true;
+            _closeAfterExport = true;
+            if (_exporting)
+            {
+                _exportCancel?.Cancel();
+                _status.Text = "Cancelling the export before closing...";
+            }
+            else
+            {
+                _status.Text = "Finishing the PNG export before closing...";
+            }
+
+            return;
+        }
+
+        _loadCancel?.Cancel();
+        _listCancel?.Cancel();
+        _allRowsCancel?.Cancel();
+        _materialCancel?.Cancel();
+        _materialCatalogCancel?.Cancel();
+        _materialListCancel?.Cancel();
+        _skinLinksCancel?.Cancel();
+        _skinSkeletonsCancel?.Cancel();
+        _skeletonCancel?.Cancel();
+        _meshCancel?.Cancel();
+        _skinCancel?.Cancel();
+        _skeletonDecodeCancel?.Cancel();
+        _audioCancel?.Cancel();
+        _audioListCancel?.Cancel();
+        _exportCancel?.Cancel();
+        SaveLayout();
     }
 
     private void BuildLayout()
@@ -455,6 +422,7 @@ internal sealed class BrowserForm : Form, IMessageFilter
         _back.AccessibleName = "Back";
         _forward.AccessibleName = "Forward";
         _back.Margin = new Padding(0, 0, 4, 0);
+        _forward.Margin = new Padding(0);
         _back.Enabled = false;
         _forward.Enabled = false;
         nav.Controls.Add(_back);
@@ -467,6 +435,7 @@ internal sealed class BrowserForm : Form, IMessageFilter
         _scopeButton.Height = 26;
         _scopeButton.AutoEllipsis = true;
         _scopeButton.Margin = new Padding(0, 0, 10, 0);
+        _scopeButton.Anchor = AnchorStyles.Left;
         _scopeButton.AccessibleName = "Toggle scope pane";
 
         _crumbs.Dock = DockStyle.Fill;
@@ -587,11 +556,12 @@ internal sealed class BrowserForm : Form, IMessageFilter
         _textureHost.BackColor = Theme.Background;
         _textureHost.Visible = false;
         _textureHeader.Dock = DockStyle.Top;
-        _textureHeader.Columns = TextureColumns;
+        _textureHeader.Columns = BrowserColumns.Textures;
         _textureHeader.ShowThumbnails = true;
         _textureList.Dock = DockStyle.Fill;
-        _textureList.Columns = TextureColumns;
+        _textureList.Columns = BrowserColumns.Textures;
         _textureList.ShowThumbnails = true;
+        _textureList.Resize += (_, _) => UpdateListColumns();
 
         _textureToolbar.Dock = DockStyle.Top;
         _textureToolbar.Height = 38;
@@ -728,6 +698,7 @@ internal sealed class BrowserForm : Form, IMessageFilter
         _status.ForeColor = BrowserVisual.Faint;
         _status.BackColor = Theme.Surface;
         _status.Padding = new Padding(14, 0, 14, 0);
+        _status.AutoEllipsis = true;
         _status.Text = "No game folder selected.";
         return _status;
     }
@@ -903,7 +874,7 @@ internal sealed class BrowserForm : Form, IMessageFilter
     {
         _textureInspector.UsedByRequested += async (_, _) => await OpenChooserAsync();
         _textureInspector.RevealRequested += (_, _) => RevealLinkedTexture();
-        _textureInspector.ExportRequested += (_, _) => ExportTexture();
+        _textureInspector.ExportRequested += (_, _) => _ = ExportTextureAsync();
         _textureInspector.MipChanged += (_, mip) => _navigation?.SetMip(mip);
         _textureInspector.ChannelChanged += (_, channel) => _navigation?.SetChannel(channel);
         _textureInspector.CopyChanged += (_, index) => OnCopyChanged(index);
@@ -1030,6 +1001,12 @@ internal sealed class BrowserForm : Form, IMessageFilter
             return false;
         }
 
+        if (_textureExporting)
+        {
+            _status.Text = "Wait for the PNG export to finish before changing games.";
+            return false;
+        }
+
         if (_audioBusy)
         {
             _status.Text = "Wait for audio to finish before changing games.";
@@ -1103,7 +1080,7 @@ internal sealed class BrowserForm : Form, IMessageFilter
                 OpenGameFolder();
                 break;
             case BrowserCommand.Export:
-                if (!_loading && !_exporting && !_audioBusy)
+                if (!_loading && !_exporting && !_textureExporting && !_audioBusy)
                 {
                     _ = ExportSelectedAsync();
                 }
@@ -1134,6 +1111,7 @@ internal sealed class BrowserForm : Form, IMessageFilter
         CancellationTokenSource cancel = new();
         _loadCancel = cancel;
         _loading = true;
+        UpdateExportGates();
         _status.Text = $"Scanning {Path.GetFileName(profile.Root)}...";
         Stopwatch watch = Stopwatch.StartNew();
         IProgress<CatalogProgress> progress = new Progress<CatalogProgress>(item =>
@@ -1183,6 +1161,11 @@ internal sealed class BrowserForm : Form, IMessageFilter
                 if (committed && !_listBuilding)
                 {
                     UpdateStatus();
+                }
+
+                if (!IsDisposed)
+                {
+                    UpdateExportGates();
                 }
             }
         }
@@ -2348,7 +2331,7 @@ internal sealed class BrowserForm : Form, IMessageFilter
         BrowserState current = _navigation.State;
         string? keep = current.Texture is null ? null : BrowserKeys.Texture(current.Texture);
         IReadOnlyCollection<string> selectedKeys = _textureList.SelectedKeys.ToArray();
-        _textureList.SetRows(rows, keep, selectedKeys);
+        SetListRows(rows, keep, selectedKeys);
         bool keepFound = keep is not null
             && _textureList.SelectedRow?.Key.Equals(keep, StringComparison.Ordinal) == true;
         if (!keepFound)
@@ -2400,13 +2383,22 @@ internal sealed class BrowserForm : Form, IMessageFilter
         }
     }
 
+    private void UpdateExportGates()
+    {
+        bool blocked = _exporting || _textureExporting || _loading || _audioBusy;
+        _textureInspector.SetExportBlocked(blocked);
+        _exportSelected.Enabled = !blocked && _profile is not null
+            && _textureList.SelectedKeys.Count > 0
+            && _textureList.SelectedRows.Any(row =>
+                row.Tag is AssetEntry entry && entry.IsPreviewable);
+        _audioView.SetExportBlocked(blocked);
+    }
+
     private void UpdateSelectionCount()
     {
         int count = _textureList.SelectedKeys.Count;
         _selectionCount.Text = SelectionCountText(count, CompactToolbar);
-        _exportSelected.Enabled = !_exporting && !_loading && count > 0
-            && _textureList.SelectedRows.Any(row =>
-                row.Tag is AssetEntry entry && entry.IsPreviewable);
+        UpdateExportGates();
     }
 
     private bool CompactToolbar =>
@@ -2428,23 +2420,12 @@ internal sealed class BrowserForm : Form, IMessageFilter
 
     private void SetListMode(BrowserView view)
     {
-        bool narrow = ClientSize.Width < BrowserLayout.CollapseWidth;
-        IReadOnlyList<AssetColumn> columns = view switch
-        {
-            BrowserView.Animations => AnimationColumns,
-            BrowserView.Meshes => MeshColumns,
-            BrowserView.Skins => SkinColumns,
-            BrowserView.Skeletons => SkeletonColumns,
-            BrowserView.Materials => MaterialColumns,
-            BrowserView.Audio => narrow ? NarrowAudioColumns : AudioColumns,
-            _ => narrow ? NarrowTextureColumns : TextureColumns,
-        };
+        _listView = view;
+        UpdateListColumns();
         bool textures = view == BrowserView.Textures;
         bool meshes = view == BrowserView.Meshes;
         bool audio = view == BrowserView.Audio;
         bool thumbnails = textures || meshes;
-        _textureHeader.Columns = columns;
-        _textureList.Columns = columns;
         _textureHeader.ShowThumbnails = thumbnails;
         _textureList.ShowThumbnails = thumbnails;
         _textureHeader.Height = thumbnails ? 28 : 24;
@@ -2464,6 +2445,14 @@ internal sealed class BrowserForm : Form, IMessageFilter
         }
 
         UpdateToolbarLayout();
+    }
+
+    private void UpdateListColumns()
+    {
+        IReadOnlyList<AssetColumn> columns =
+            BrowserColumns.For(_listView, _textureList.ClientSize.Width);
+        _textureHeader.Columns = columns;
+        _textureList.Columns = columns;
     }
 
     private void SyncSortControls(BrowserState state)
@@ -2516,7 +2505,7 @@ internal sealed class BrowserForm : Form, IMessageFilter
 
         IReadOnlyList<AssetRow> rows = BuildAnimationRows(state);
         string? keep = state.Animation is null ? null : AnimationKey(state.Animation);
-        _textureList.SetRows(rows, keep);
+        SetListRows(rows, keep);
         bool keepFound = keep is not null
             && _textureList.SelectedRow?.Key.Equals(keep, StringComparison.Ordinal) == true;
         if (!keepFound)
@@ -2685,7 +2674,7 @@ internal sealed class BrowserForm : Form, IMessageFilter
             BrowserView.Skins => state.Skin is null ? null : BrowserKeys.Skin(state.Skin),
             _ => state.Skeleton is null ? null : BrowserKeys.Skeleton(state.Skeleton),
         };
-        _textureList.SetRows(rows, keep);
+        SetListRows(rows, keep);
         bool keepFound = keep is not null
             && _textureList.SelectedRow?.Key.Equals(keep, StringComparison.Ordinal) == true;
         if (!keepFound)
@@ -2908,7 +2897,7 @@ internal sealed class BrowserForm : Form, IMessageFilter
 
         IReadOnlyList<AssetRow> rows = BuildMeshRows(state);
         string? keep = state.Mesh is null ? null : BrowserKeys.Mesh(state.Mesh);
-        _textureList.SetRows(rows, keep);
+        SetListRows(rows, keep);
         bool keepFound = keep is not null
             && _textureList.SelectedRow?.Key.Equals(keep, StringComparison.Ordinal) == true;
         if (!keepFound)
@@ -2955,7 +2944,7 @@ internal sealed class BrowserForm : Form, IMessageFilter
 
         IReadOnlyList<AssetRow> rows = BuildSkinRows(state);
         string? keep = state.Skin is null ? null : BrowserKeys.Skin(state.Skin);
-        _textureList.SetRows(rows, keep);
+        SetListRows(rows, keep);
         if (state.Skin is null)
         {
             _textureList.TopIndex = state.ListIndex;
@@ -3006,7 +2995,7 @@ internal sealed class BrowserForm : Form, IMessageFilter
         _textureToolbar.Visible = false;
         if (_skeletonCatalog is null)
         {
-            _textureList.SetRows(Array.Empty<AssetRow>(), null);
+            SetListRows(Array.Empty<AssetRow>(), null);
             _resultsCount.Text = "";
             _resultsBody.Text = "Skel_Z objects · scanning...";
             _status.Text = "Indexing skeletons...";
@@ -3022,7 +3011,7 @@ internal sealed class BrowserForm : Form, IMessageFilter
 
         IReadOnlyList<AssetRow> rows = BuildSkeletonRows(state);
         string? keep = state.Skeleton is null ? null : BrowserKeys.Skeleton(state.Skeleton);
-        _textureList.SetRows(rows, keep);
+        SetListRows(rows, keep);
         if (state.Skeleton is null)
         {
             _textureList.TopIndex = state.ListIndex;
@@ -3075,7 +3064,7 @@ internal sealed class BrowserForm : Form, IMessageFilter
         _textureToolbar.Visible = false;
         if (_materials is null)
         {
-            _textureList.SetRows(Array.Empty<AssetRow>(), null);
+            SetListRows(Array.Empty<AssetRow>(), null);
             _resultsCount.Text = "";
             _resultsBody.Text = "Material_Z objects · scanning...";
             _status.Text = "Scanning materials...";
@@ -3349,7 +3338,7 @@ internal sealed class BrowserForm : Form, IMessageFilter
         }
 
         string? keep = state.Material is null ? null : BrowserKeys.Material(state.Material);
-        _textureList.SetRows(assetRows, keep);
+        SetListRows(assetRows, keep);
         if (state.Material is not null)
         {
             _textureList.ScrollOffset = state.ListScroll;
@@ -4595,7 +4584,7 @@ internal sealed class BrowserForm : Form, IMessageFilter
 
         BrowserState current = _navigation.State;
         string? keep = current.Audio is null ? null : BrowserKeys.Audio(current.Audio);
-        _textureList.SetRows(rows, keep);
+        SetListRows(rows, keep);
         bool keepFound = keep is not null
             && _textureList.SelectedRow?.Key.Equals(keep, StringComparison.Ordinal) == true;
         if (current.Audio is not null && !keepFound)
@@ -4663,6 +4652,7 @@ internal sealed class BrowserForm : Form, IMessageFilter
         string key = BrowserKeys.Audio(media);
         int generation = _audioGeneration;
         _audioBusy = true;
+        UpdateExportGates();
         _audioView.SetBusy("Converting...");
         try
         {
@@ -4707,6 +4697,10 @@ internal sealed class BrowserForm : Form, IMessageFilter
             if (generation == _audioGeneration)
             {
                 _audioBusy = false;
+                if (!IsDisposed)
+                {
+                    UpdateExportGates();
+                }
             }
         }
     }
@@ -4714,7 +4708,7 @@ internal sealed class BrowserForm : Form, IMessageFilter
     private async Task ExportAudioAsync()
     {
         if (_navigation?.State.Audio is not { } media || _audioBusy
-            || _loading || _exporting || _profile is not { } profile)
+            || _loading || _exporting || _textureExporting || _profile is not { } profile)
         {
             return;
         }
@@ -4736,67 +4730,67 @@ internal sealed class BrowserForm : Form, IMessageFilter
             return;
         }
 
-        string full = Path.GetFullPath(dialog.FileName);
-        if (GameFolderGuard.IsInside(profile.Root, Path.GetDirectoryName(full)!))
-        {
-            _status.Text = "Refusing to write inside the game folder.";
-            return;
-        }
-
-        _audioBusy = true;
-        _audioView.SetBusy("Exporting...");
+        string path = dialog.FileName;
         try
         {
-            byte[] ogg = _audioOgg is not null && _audioOggKey == key
-                ? _audioOgg
-                : await Task.Run(() => ConvertAudio(media));
-            if (IsDisposed || generation != _audioGeneration)
+            string full = Path.GetFullPath(path);
+            string folder = Path.GetDirectoryName(full)
+                ?? throw new IOException("The selected path has no folder.");
+            if (GameFolderGuard.IsInside(profile.Root, folder))
             {
+                _status.Text = "Refusing to write inside the game folder.";
+                ShowExportFailure(
+                    ExportFailure.AudioTitle,
+                    ExportFailure.DescribeAudio(
+                        media,
+                        path,
+                        "The game folder is read-only for APTStudio. Choose a folder outside it."));
                 return;
             }
 
-            string? directory = Path.GetDirectoryName(full);
-            if (!string.IsNullOrEmpty(directory))
-            {
-                Directory.CreateDirectory(directory);
-            }
-
-            string temp = full + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            _audioBusy = true;
+            UpdateExportGates();
+            _audioView.SetBusy("Exporting...");
             try
             {
-                File.WriteAllBytes(temp, ogg);
-                File.Move(temp, full, overwrite: true);
+                byte[] ogg = _audioOgg is not null && _audioOggKey == key
+                    ? _audioOgg
+                    : await Task.Run(() => ConvertAudio(media));
+                if (IsDisposed || generation != _audioGeneration)
+                {
+                    return;
+                }
+
+                AtomicFile.WriteAllBytes(full, ogg);
+                if (generation != _audioGeneration)
+                {
+                    return;
+                }
+
+                _status.Text = $"Exported {Path.GetFileName(full)}";
+                _audioView.SetStatus($"Exported {Path.GetFileName(full)}");
             }
             finally
             {
-                if (File.Exists(temp))
+                if (generation == _audioGeneration)
                 {
-                    File.Delete(temp);
+                    _audioBusy = false;
+                    if (!IsDisposed)
+                    {
+                        UpdateExportGates();
+                    }
                 }
             }
-
-            if (generation != _audioGeneration)
-            {
-                return;
-            }
-
-            _status.Text = $"Exported {Path.GetFileName(full)}";
-            _audioView.SetStatus($"Exported {Path.GetFileName(full)}");
         }
-        catch (Exception ex) when (ex is InvalidDataException or IOException
-            or UnauthorizedAccessException)
+        catch (Exception ex) when (ExportFailure.IsExpected(ex))
         {
             if (!IsDisposed && generation == _audioGeneration)
             {
-                _status.Text = ex.Message;
+                _status.Text = $"Export failed: {ex.Message}";
                 _audioView.ShowError(ex.Message);
-            }
-        }
-        finally
-        {
-            if (generation == _audioGeneration)
-            {
-                _audioBusy = false;
+                ShowExportFailure(
+                    ExportFailure.AudioTitle,
+                    ExportFailure.DescribeAudio(media, path, ex.Message));
             }
         }
     }
@@ -5031,24 +5025,41 @@ internal sealed class BrowserForm : Form, IMessageFilter
         }
     }
 
+    private void SetListRows(
+        IReadOnlyList<AssetRow> rows,
+        string? keep,
+        IReadOnlyCollection<string>? keepKeys = null)
+    {
+        _textureList.SetRows(rows, keep, keepKeys);
+        UpdateCopyHashEnabled();
+    }
+
     private void UpdateCopyHashEnabled() =>
         _copyHash.Enabled = BrowserKeys.HashText(_textureList.SelectedRow?.Tag) is not null;
 
     private async Task ExportSelectedAsync()
     {
-        if (_profile is not { } profile || _exporting || _loading || _audioBusy)
+        if (_profile is not { } profile
+            || _exporting
+            || _textureExporting
+            || _loading
+            || _audioBusy)
         {
             return;
         }
 
-        List<AssetEntry> entries = _textureList.SelectedRows
+        List<AssetEntry> selected = _textureList.SelectedRows
             .Select(row => row.Tag)
             .OfType<AssetEntry>()
-            .Where(entry => entry.IsBitmap && entry.IsPreviewable && entry.Texture is not null)
+            .Where(entry => entry.IsBitmap && entry.Texture is not null)
             .ToList();
+        int unsupported = selected.Count(entry => !entry.IsPreviewable);
+        List<AssetEntry> entries = selected.Where(entry => entry.IsPreviewable).ToList();
         if (entries.Count == 0)
         {
-            _status.Text = "No previewable textures selected.";
+            _status.Text = unsupported == 0
+                ? "No previewable textures selected."
+                : $"{unsupported:N0} selected textures cannot be exported to PNG.";
             return;
         }
 
@@ -5069,21 +5080,42 @@ internal sealed class BrowserForm : Form, IMessageFilter
             return;
         }
 
-        if (GameFolderGuard.IsInside(profile.Root, dialog.SelectedPath))
+        string folder;
+        try
         {
-            _status.Text = "Refusing to write inside the game folder.";
+            folder = Path.GetFullPath(dialog.SelectedPath);
+        }
+        catch (Exception ex) when (ExportFailure.IsExpected(ex))
+        {
+            _status.Text = $"Export failed: {ex.Message}";
+            ShowExportFailure(
+                ExportFailure.BatchTitle,
+                ExportFailure.DescribeFolder(dialog.SelectedPath, ex.Message));
             return;
         }
 
-        string folder = dialog.SelectedPath;
+        if (GameFolderGuard.IsInside(profile.Root, folder))
+        {
+            const string reason =
+                "The game folder is read-only for APTStudio. Choose a folder outside it.";
+            _status.Text = "Refusing to write inside the game folder. Choose a folder outside it.";
+            ShowExportFailure(
+                ExportFailure.BatchTitle,
+                ExportFailure.DescribeFolder(folder, reason));
+            return;
+        }
+
         _exporting = true;
-        _exportSelected.Enabled = false;
+        UpdateExportGates();
         _cancelExport.Visible = true;
         _cancelExport.Enabled = true;
         CancellationTokenSource cancel = new();
         _exportCancel = cancel;
-        int completed = 0;
-        int skipped = 0;
+        CancellationToken token = cancel.Token;
+        int attempted = 0;
+        int exported = 0;
+        int failed = 0;
+        BatchExportFailure? firstFailure = null;
         _status.Text = $"Exporting 0/{entries.Count:N0} textures...";
         IProgress<int> progress = new Progress<int>(value =>
         {
@@ -5100,35 +5132,51 @@ internal sealed class BrowserForm : Form, IMessageFilter
                 HashSet<string> used = new(StringComparer.OrdinalIgnoreCase);
                 foreach (AssetEntry entry in entries)
                 {
-                    cancel.Token.ThrowIfCancellationRequested();
+                    token.ThrowIfCancellationRequested();
+                    string path = "";
                     try
                     {
                         string name = ExportNames.Unique(
                             folder, entry.ArchivePath, entry.NameHash, used);
-                        TextureExport.ExportPng(entry.Texture!, Path.Combine(folder, name));
+                        path = Path.Combine(folder, name);
+                        TextureExport.WritePng(entry.Texture!, path);
+                        exported++;
                     }
-                    catch (Exception ex) when (ex is InvalidDataException or NotSupportedException
-                        or IOException or UnauthorizedAccessException)
+                    catch (Exception ex) when (ExportFailure.IsExpected(ex))
                     {
-                        skipped++;
+                        failed++;
+                        firstFailure ??= new BatchExportFailure(
+                            Path.GetFileName(path), path, ex.Message);
                     }
 
-                    completed++;
-                    progress.Report(completed);
+                    attempted++;
+                    progress.Report(attempted);
                 }
-            }, cancel.Token);
+            }, token);
 
+            // Stop queued progress reports before the outcome, so they cannot overwrite it.
+            _exporting = false;
             if (!IsDisposed)
             {
-                _status.Text =
-                    $"Exported {completed - skipped:N0}, skipped {skipped:N0}.";
+                _status.Text = BatchStatus(exported, unsupported, failed);
+                if (firstFailure is { } failure)
+                {
+                    ShowExportFailure(
+                        ExportFailure.BatchTitle,
+                        ExportFailure.DescribeBatch(
+                            folder, selected.Count, exported, unsupported, failed, failure));
+                }
             }
         }
         catch (OperationCanceledException)
         {
+            _exporting = false;
             if (!IsDisposed)
             {
-                _status.Text = $"Export cancelled after {completed:N0} of {entries.Count:N0}.";
+                _status.Text = attempted == 0
+                    ? "Export cancelled."
+                    : $"Export cancelled after {attempted:N0} of {entries.Count:N0} textures. " +
+                        BatchStatus(exported, unsupported, failed);
             }
         }
         finally
@@ -5144,16 +5192,39 @@ internal sealed class BrowserForm : Form, IMessageFilter
             {
                 _cancelExport.Visible = false;
                 UpdateSelectionCount();
+                if (_closeAfterExport)
+                {
+                    _closeAfterExport = false;
+                    Close();
+                }
             }
         }
     }
 
-    private void ExportTexture()
+    private static string BatchStatus(int exported, int unsupported, int failed)
+    {
+        string text = $"Exported {exported:N0}";
+        if (unsupported > 0)
+        {
+            text += $", skipped {unsupported:N0} unsupported";
+        }
+
+        if (failed > 0)
+        {
+            text += $", {failed:N0} failed";
+        }
+
+        return text + ".";
+    }
+
+    private async Task ExportTextureAsync()
     {
         if (_textureInspector.Texture is not { } texture
             || _textureInspector.Occurrence is not { } occurrence
+            || !_textureInspector.CanExport
             || _profile is not { } profile
             || _exporting
+            || _textureExporting
             || _loading
             || _audioBusy)
         {
@@ -5172,23 +5243,86 @@ internal sealed class BrowserForm : Form, IMessageFilter
             return;
         }
 
-        string? folder = Path.GetDirectoryName(dialog.FileName);
-        if (folder is null || GameFolderGuard.IsInside(profile.Root, folder))
+        string path = dialog.FileName;
+        string full;
+        try
         {
-            _status.Text = "Refusing to write inside the game folder.";
+            full = Path.GetFullPath(path);
+            string folder = Path.GetDirectoryName(full)
+                ?? throw new IOException("The selected path has no folder.");
+            if (!ReferenceEquals(_profile, profile))
+            {
+                _status.Text = "The game changed. Export cancelled.";
+                return;
+            }
+
+            if (GameFolderGuard.IsInside(profile.Root, folder))
+            {
+                _status.Text = "Refusing to write inside the game folder.";
+                ShowExportFailure(
+                    ExportFailure.TextureTitle,
+                    ExportFailure.DescribeTexture(
+                        occurrence,
+                        path,
+                        "The game folder is read-only for APTStudio. Choose a folder outside it."));
+                return;
+            }
+        }
+        catch (Exception ex) when (ExportFailure.IsExpected(ex))
+        {
+            _status.Text = $"Export failed: {ex.Message}";
+            ShowExportFailure(
+                ExportFailure.TextureTitle,
+                ExportFailure.DescribeTexture(occurrence, path, ex.Message));
             return;
         }
 
+        _textureExporting = true;
+        _textureInspector.SetExporting(true);
+        UpdateSelectionCount();
+        _status.Text = $"Exporting {Path.GetFileName(full)}...";
         try
         {
-            TextureExport.ExportPng(texture, dialog.FileName);
-            _status.Text = $"Exported {Path.GetFileName(dialog.FileName)}";
+            await Task.Run(() => TextureExport.WritePng(texture, full));
+            if (!IsDisposed)
+            {
+                _status.Text = $"Exported {Path.GetFileName(full)}";
+            }
         }
-        catch (Exception ex) when (ex is InvalidDataException or NotSupportedException
-            or IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (ExportFailure.IsExpected(ex))
         {
-            _status.Text = ex.Message;
+            if (!IsDisposed)
+            {
+                _status.Text = $"Export failed: {ex.Message}";
+                ShowExportFailure(
+                    ExportFailure.TextureTitle,
+                    ExportFailure.DescribeTexture(occurrence, full, ex.Message));
+            }
         }
+        finally
+        {
+            _textureExporting = false;
+            if (!IsDisposed)
+            {
+                _textureInspector.SetExporting(false);
+                UpdateSelectionCount();
+                if (_closeAfterExport)
+                {
+                    _closeAfterExport = false;
+                    Close();
+                }
+            }
+        }
+    }
+
+    private void ShowExportFailure(string title, string message)
+    {
+        MessageBox.Show(
+            this,
+            message,
+            title,
+            MessageBoxButtons.OK,
+            MessageBoxIcon.Error);
     }
 
     private async Task OpenChooserAsync()
@@ -5856,6 +5990,15 @@ internal sealed class BrowserForm : Form, IMessageFilter
 
     private void OnResize()
     {
+        BrowserResizeAction action = BrowserLayout.PlanResize(WindowState, _wasMinimized);
+        if (action == BrowserResizeAction.Ignore)
+        {
+            _wasMinimized = true;
+            return;
+        }
+
+        _wasMinimized = false;
+
         bool wasNarrow = _lastNarrow;
         bool narrow = BrowserLayout.ShouldCollapseSidebar(ClientSize.Width);
         if (narrow && !_lastNarrow)
@@ -5874,6 +6017,48 @@ internal sealed class BrowserForm : Form, IMessageFilter
         {
             RenderState();
         }
+
+        if (action == BrowserResizeAction.Reapply)
+        {
+            if (IsHandleCreated)
+            {
+                BeginInvoke((Action)ReapplyLayoutAfterRestore);
+            }
+        }
+    }
+
+    private void ReapplyLayoutAfterRestore()
+    {
+        if (IsDisposed || Disposing)
+        {
+            return;
+        }
+
+        ApplyScopeVisibility();
+        ApplySplitterLayout();
+        UpdateToolbarLayout();
+    }
+
+    private void OnOuterSplitterMoved()
+    {
+        if (_applyingSplitterLayout || _outer.Panel1Collapsed
+            || WindowState == FormWindowState.Minimized)
+        {
+            return;
+        }
+
+        _sidebarWidth = _outer.SplitterDistance;
+    }
+
+    private void OnInnerSplitterMoved()
+    {
+        if (_applyingSplitterLayout || _inner.Panel2Collapsed
+            || WindowState == FormWindowState.Minimized)
+        {
+            return;
+        }
+
+        _inspectorWidth = _inner.Panel2.Width;
     }
 
     private void ToggleScope()
@@ -5896,25 +6081,36 @@ internal sealed class BrowserForm : Form, IMessageFilter
 
     private void ApplySplitterLayout()
     {
-        _outer.Panel1MinSize = BrowserLayout.SidebarMinimum;
-        _outer.Panel2MinSize = BrowserLayout.ResultsMinimum;
-        _inner.Panel1MinSize = BrowserLayout.ResultsMinimum;
-        _inner.Panel2MinSize = BrowserLayout.InspectorMinimum;
-
-        if (!_outer.Panel1Collapsed)
+        _applyingSplitterLayout = true;
+        try
         {
-            int width = BrowserLayout.ClampSidebar(_sidebarWidth, ClientSize.Width);
-            int max = Math.Max(_outer.Panel1MinSize,
-                _outer.Width - _outer.Panel2MinSize - _outer.SplitterWidth);
-            _outer.SplitterDistance = Math.Clamp(width, _outer.Panel1MinSize, max);
-        }
+            _outer.Panel1MinSize = BrowserLayout.SidebarMinimum;
+            _outer.Panel2MinSize = BrowserLayout.ResultsMinimum;
+            _inner.Panel1MinSize = BrowserLayout.ResultsMinimum;
+            _inner.Panel2MinSize = BrowserLayout.InspectorMinimum;
 
-        int inspector = BrowserLayout.ClampInspector(_inspectorWidth, ClientSize.Width);
-        int distance = _inner.Width - inspector - _inner.SplitterWidth;
-        int min = _inner.Panel1MinSize;
-        int maxDistance = Math.Max(min,
-            _inner.Width - _inner.Panel2MinSize - _inner.SplitterWidth);
-        _inner.SplitterDistance = Math.Clamp(distance, min, maxDistance);
+            if (!_outer.Panel1Collapsed)
+            {
+                int width = BrowserLayout.ClampSidebar(_sidebarWidth, ClientSize.Width);
+                int max = Math.Max(_outer.Panel1MinSize,
+                    _outer.Width - _outer.Panel2MinSize - _outer.SplitterWidth);
+                _outer.SplitterDistance = Math.Clamp(width, _outer.Panel1MinSize, max);
+            }
+
+            if (!_inner.Panel2Collapsed)
+            {
+                int inspector = BrowserLayout.ClampInspector(_inspectorWidth, ClientSize.Width);
+                int distance = _inner.Width - inspector - _inner.SplitterWidth;
+                int min = _inner.Panel1MinSize;
+                int maxDistance = Math.Max(min,
+                    _inner.Width - _inner.Panel2MinSize - _inner.SplitterWidth);
+                _inner.SplitterDistance = Math.Clamp(distance, min, maxDistance);
+            }
+        }
+        finally
+        {
+            _applyingSplitterLayout = false;
+        }
     }
 
     private void SaveLayout()

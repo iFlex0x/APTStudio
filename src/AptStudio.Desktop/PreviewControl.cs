@@ -187,15 +187,17 @@ internal sealed class PreviewControl : Control
             return;
         }
 
-        _origin = new PointF(
+        PointF next = new(
             _panOrigin.X + e.X - _panStart.X,
             _panOrigin.Y + e.Y - _panStart.Y);
-        if (_fit)
+        if (next == _origin)
         {
-            _fit = false;
-            ZoomChanged?.Invoke(this, EventArgs.Empty);
+            return;
         }
 
+        _origin = next;
+        _fit = false;
+        ZoomChanged?.Invoke(this, EventArgs.Empty);
         Invalidate();
     }
 
@@ -208,6 +210,18 @@ internal sealed class PreviewControl : Control
             Capture = false;
             Cursor = Cursors.Default;
         }
+    }
+
+    protected override void OnMouseCaptureChanged(EventArgs e)
+    {
+        // Another control can take capture before this control sees mouse-up.
+        if (!Capture && _panning)
+        {
+            _panning = false;
+            Cursor = Cursors.Default;
+        }
+
+        base.OnMouseCaptureChanged(e);
     }
 
     protected override void OnMouseWheel(MouseEventArgs e)
